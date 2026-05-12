@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <RootNamespace>JobOrchestrator.InMemory</RootNamespace>
+    <AssemblyName>JobOrchestrator.InMemory</AssemblyName>
+    <Description>In-memory backend для IJobStateStore (дефолтный, не персистирует данные между рестартами).</Description>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.5" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\JobOrchestrator\JobOrchestrator.csproj" />
+  </ItemGroup>
+</Project>

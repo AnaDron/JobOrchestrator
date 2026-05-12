@@ -1,0 +1,231 @@
+using System.Threading.Channels;
+using Microsoft.Extensions.Logging;
+
+namespace JobOrchestrator.Internal;
+
+/// <summary>
+/// Single-threaded consumer событий оркестратора. Все state-transitions инстансов происходят здесь;
+/// итерации запускаются на ThreadPool через <see cref="StageRunner"/>.
+/// </summary>
+internal sealed class EventLoop : IAsyncDisposable {
+	private readonly StageRegistry _registry;
+	private readonly JobManager _jobs;
+	private readonly KeyspaceRegistry _keyspace;
+	private readonly InstanceCreator _creator;
+	private readonly StageRunner _runner;
+	private readonly Channel<OrchestratorEvent> _channel;
+	private readonly IJobStateStore _stateStore;
+	private readonly ILogger<EventLoop> _logger;
+	private readonly TimeProvider _timeProvider;
+	private readonly Dictionary<Job, JobTimer> _timers = [];
+
+	public EventLoop(
+		StageRegistry registry,
+		JobManager jobs,
+		KeyspaceRegistry keyspace,
+		InstanceCreator creator,
+		StageRunner runner,
+		Channel<OrchestratorEvent> channel,
+		IJobStateStore stateStore,
+		ILogger<EventLoop> logger,
+		TimeProvider? timeProvider = null
+	) {
+		_registry = registry;
+		_jobs = jobs;
+		_keyspace = keyspace;
+		_creator = creator;
+		_runner = runner;
+		_channel = channel;
+		_stateStore = stateStore;
+		_logger = logger;
+		_timeProvider = timeProvider ?? TimeProvider.System;
+	}
+
+	public async Task RunAsync(CancellationToken stoppingToken) {
+		_logger.LogInformation("JobOrchestrator starting, stages={StageCount}", _registry.AllStages.Count);
+		BootstrapInitialInstances();
+		try {
+			await foreach (var evt in _channel.Reader.ReadAllAsync(stoppingToken).ConfigureAwait(false)) {
+				try {
+					await HandleEventAsync(evt, stoppingToken).ConfigureAwait(false);
+				} catch (Exception ex) {
+					_logger.LogCritical(ex, "Сбой обработчика события {EventType}", evt.GetType().Name);
+				}
+			}
+		} catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) {
+			// Нормальный shutdown.
+		}
+		_logger.LogInformation("JobOrchestrator stopped.");
+	}
+
+	private void BootstrapInitialInstances() {
+		foreach (var stage in _registry.AllStages) {
+			if (stage.Dependencies.Count == 0) {
+				CreateAndStart(stage);
+			}
+		}
+	}
+
+	private async Task HandleEventAsync(OrchestratorEvent evt, CancellationToken ct) {
+		switch (evt) {
+			case TimerTickedEvent tt: HandleTimerTick(tt.Job, ct); break;
+			case ManualTriggerRequestedEvent mtr: HandleManualTrigger(mtr, ct); break;
+			case KeyAddedEvent ka: HandleKeyAdded(ka.StageName, ka.Key); break;
+			case KeyRemovedEvent kr: await HandleKeyRemovedAsync(kr.StageName, kr.Key, ct).ConfigureAwait(false); break;
+			case StageCompletedEvent sc: HandleStageCompleted(sc.Job); break;
+			case StageFailedEvent sf: HandleStageFailed(sf.Job, sf.Exception); break;
+			default:
+				_logger.LogWarning("Неизвестный тип события: {EventType}", evt.GetType().Name);
+				break;
+		}
+	}
+
+	private void HandleTimerTick(Job job, CancellationToken ct) {
+		// Инстанс мог быть удалён до срабатывания timer'а — проверим существование.
+		if (!_timers.ContainsKey(job)) return;
+		var now = _timeProvider.GetUtcNow();
+		var decision = TriggerAcceptance.TryAccept(job, TriggerSource.Auto, now);
+		if (decision == TriggerResult.Started) {
+			BeginIteration(job, TriggerSource.Auto, ct);
+		}
+		// WaitingRetry/AlreadyRunning — ничего; timer перепланируется в StageCompleted/Failed handler-е.
+	}
+
+	private void HandleManualTrigger(ManualTriggerRequestedEvent evt, CancellationToken ct) {
+		var job = _jobs.Find(evt.StageName, evt.DependencyKeys);
+		if (job is null) {
+			evt.Tcs.TrySetResult(TriggerResult.NotFound);
+			return;
+		}
+		var now = _timeProvider.GetUtcNow();
+		var decision = TriggerAcceptance.TryAccept(job, TriggerSource.Manual, now);
+		evt.Tcs.TrySetResult(decision);
+		if (decision == TriggerResult.Started) {
+			BeginIteration(job, TriggerSource.Manual, ct);
+		}
+	}
+
+	private void BeginIteration(Job job, TriggerSource trigger, CancellationToken ct) {
+		job.State = JobLifecycleState.Running;
+		// Fire-and-forget на ThreadPool: StageRunner внутри публикует StageCompleted/Failed в Channel.
+		_ = Task.Run(async () => await _runner.RunIterationAsync(job, trigger, ct).ConfigureAwait(false), ct);
+	}
+
+	private void HandleKeyAdded(string stageName, string key) {
+		if (!_keyspace.Add(stageName, key)) return;
+		// Каждая стадия с DependsOnInstance(stageName) может получить новый инстанс.
+		foreach (var dependent in _registry.StagesDependingOnInstance(stageName)) {
+			CreateAndStart(dependent);
+		}
+	}
+
+	private async Task HandleKeyRemovedAsync(string stageName, string key, CancellationToken ct) {
+		if (!_keyspace.Remove(stageName, key)) return;
+
+		// Транзитивное замыкание стадий, чьи инстансы могут содержать {stageName: key}.
+		var affectedStages = _registry.StagesAffectedByKeyRemoval(stageName);
+		HashSet<string> affectedStageNames = new(affectedStages.Select(s => s.Name), StringComparer.Ordinal);
+
+		List<Job> affectedJobs = [];
+		foreach (var stage in affectedStages) {
+			foreach (var inst in _jobs.InstancesOf(stage.Name)) {
+				if (inst.DependencyKeys.TryGetValue(stageName, out var v) && string.Equals(v, key, StringComparison.Ordinal)) {
+					affectedJobs.Add(inst);
+				}
+			}
+		}
+		if (affectedJobs.Count == 0) return;
+
+		// Топологически обратный порядок (листья перед корнями).
+		var sortedStages = _registry.TopologicalSortReverse(affectedStages);
+		Dictionary<string, int> stageOrderIndex = new(StringComparer.Ordinal);
+		for (int i = 0; i < sortedStages.Count; i++) {
+			stageOrderIndex[sortedStages[i].Name] = i;
+		}
+		affectedJobs.Sort((a, b) => stageOrderIndex[a.Stage.Name].CompareTo(stageOrderIndex[b.Stage.Name]));
+
+		foreach (var job in affectedJobs) {
+			if (job.State == JobLifecycleState.Running && job.RunCts is { } cts) {
+				try { cts.Cancel(); } catch (ObjectDisposedException) { /* race на завершение */ }
+			}
+			if (_timers.TryGetValue(job, out var timer)) {
+				timer.Dispose();
+				_timers.Remove(job);
+			}
+			_jobs.Remove(job);
+			string scope = $"{job.Stage.Name}:{job.EncodedKey}";
+			try {
+				await _stateStore.RemoveScopeAsync(scope, ct).ConfigureAwait(false);
+			} catch (Exception ex) {
+				_logger.LogWarning(ex, "RemoveScopeAsync для {Instance} завершился с ошибкой.", job.FullyQualifiedName);
+			}
+		}
+	}
+
+	private void HandleStageCompleted(Job job) {
+		bool wasFirstSuccess = !job.LastSuccess.HasValue;
+		var now = _timeProvider.GetUtcNow();
+		job.LastAttempt = now;
+		job.LastSuccess = now;       // монотонно: не сбрасывается на последующих неуспехах
+		job.ConsecutiveFailures = 0;
+		job.LastError = null;
+		job.State = JobLifecycleState.Idle;
+		ScheduleNextTick(job, job.Stage.Interval);
+
+		if (wasFirstSuccess) {
+			// Каскад: возможно теперь разрешаются зависимости других стадий.
+			foreach (var dependent in EnumerateDirectDependents(job.Stage.Name)) {
+				CreateAndStart(dependent);
+			}
+		}
+	}
+
+	private void HandleStageFailed(Job job, Exception ex) {
+		var now = _timeProvider.GetUtcNow();
+		job.LastAttempt = now;
+		job.ConsecutiveFailures++;
+		job.LastError = ex.Message;
+		// LastSuccess НЕ меняется — монотонная метка.
+		job.State = JobLifecycleState.Idle;
+
+		var retryDelay = job.Stage.RetryPolicy.ComputeDelay(job.ConsecutiveFailures);
+		var nextDelay = retryDelay > TimeSpan.Zero ? retryDelay : job.Stage.Interval;
+		ScheduleNextTick(job, nextDelay);
+	}
+
+	private void ScheduleNextTick(Job job, TimeSpan delay) {
+		job.NextTickAtMs = Environment.TickCount64 + (long)delay.TotalMilliseconds;
+		if (_timers.TryGetValue(job, out var timer)) {
+			timer.ScheduleAt(job.NextTickAtMs);
+		}
+	}
+
+	private void CreateAndStart(StageDescriptor stage) {
+		var created = _creator.EvaluateAndCreate(stage);
+		foreach (var job in created) {
+			StartTimerAndScheduleImmediate(job);
+		}
+	}
+
+	private void StartTimerAndScheduleImmediate(Job job) {
+		var timer = new JobTimer(job, _channel.Writer);
+		_timers[job] = timer;
+		timer.ScheduleAt(Environment.TickCount64);
+	}
+
+	private IEnumerable<StageDescriptor> EnumerateDirectDependents(string stageName) {
+		HashSet<string> seen = new(StringComparer.Ordinal);
+		foreach (var s in _registry.StagesDependingOn(stageName)) {
+			if (seen.Add(s.Name)) yield return s;
+		}
+		foreach (var s in _registry.StagesDependingOnInstance(stageName)) {
+			if (seen.Add(s.Name)) yield return s;
+		}
+	}
+
+	public ValueTask DisposeAsync() {
+		foreach (var timer in _timers.Values) timer.Dispose();
+		_timers.Clear();
+		return ValueTask.CompletedTask;
+	}
+}
