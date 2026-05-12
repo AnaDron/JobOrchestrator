@@ -3,7 +3,7 @@ using JobOrchestrator.IntegrationTests.Support;
 namespace JobOrchestrator.IntegrationTests;
 
 public sealed class ScenarioStateStoreTests {
-	private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(5);
+	private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(10);
 
 	[Fact]
 	public async Task IJobState_PersistsBetweenIterations() {

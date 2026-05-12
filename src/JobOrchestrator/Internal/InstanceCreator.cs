@@ -12,14 +12,14 @@ namespace JobOrchestrator.Internal;
 /// Insertion order ключей в результирующем словаре соответствует порядку зависимостей в Fluent API,
 /// что обеспечивает стабильный FullyQualifiedName.
 /// </summary>
-internal sealed class InstanceCreator(JobManager jobs, KeyspaceRegistry keyspace) {
-	public List<Job> EvaluateAndCreate(StageDescriptor stage) {
-		List<Job> created = [];
+internal sealed class InstanceCreator(InstanceManager instances, KeyspaceRegistry keyspace) {
+	public List<StageInstance> EvaluateAndCreate(StageDescriptor stage) {
+		List<StageInstance> created = [];
 
 		if (stage.Dependencies.Count == 0) {
 			// Безключевая стадия → один инстанс с пустыми DependencyKeys.
 			var empty = new Dictionary<string, string>(StringComparer.Ordinal);
-			if (!jobs.Exists(stage.Name, empty)) {
+			if (!instances.Exists(stage.Name, empty)) {
 				created.Add(MaterializeInstance(stage, empty));
 			}
 			return created;
@@ -39,8 +39,8 @@ internal sealed class InstanceCreator(JobManager jobs, KeyspaceRegistry keyspace
 		foreach (var combo in CartesianProduct(dimensions)) {
 			var merged = TryMergeOrdered(combo);
 			if (merged is null) continue;
-			if (jobs.Exists(stage.Name, merged)) continue;
-			if (!DependencyResolver.AllDependenciesResolved(stage, merged, jobs, keyspace)) continue;
+			if (instances.Exists(stage.Name, merged)) continue;
+			if (!DependencyResolver.AllDependenciesResolved(stage, merged, instances, keyspace)) continue;
 			created.Add(MaterializeInstance(stage, merged));
 		}
 		return created;
@@ -52,7 +52,7 @@ internal sealed class InstanceCreator(JobManager jobs, KeyspaceRegistry keyspace
 				.Select(k => (IReadOnlyDictionary<string, string>)new Dictionary<string, string>(StringComparer.Ordinal) { [dep.TargetStageName] = k })
 				.ToList();
 		}
-		return jobs.InstancesOf(dep.TargetStageName)
+		return instances.InstancesOf(dep.TargetStageName)
 			.Where(inst => inst.LastSuccess.HasValue)
 			.Select(inst => inst.DependencyKeys)
 			.ToList();
@@ -76,18 +76,18 @@ internal sealed class InstanceCreator(JobManager jobs, KeyspaceRegistry keyspace
 		return result;
 	}
 
-	private Job MaterializeInstance(StageDescriptor stage, IReadOnlyDictionary<string, string> keys) {
+	private StageInstance MaterializeInstance(StageDescriptor stage, IReadOnlyDictionary<string, string> keys) {
 		var fqn = DependencyKey.FormatFullyQualifiedName(stage.Name, keys);
 		var encoded = DependencyKey.Encode(keys);
-		var job = new Job {
+		var instance = new StageInstance {
 			Stage = stage,
 			DependencyKeys = keys,
 			FullyQualifiedName = fqn,
 			EncodedKey = encoded,
 			NextTickAtMs = Environment.TickCount64,    // готов к немедленному запуску
 		};
-		jobs.Add(job);
-		return job;
+		instances.Add(instance);
+		return instance;
 	}
 
 	private static IEnumerable<IReadOnlyList<IReadOnlyDictionary<string, string>>> CartesianProduct(

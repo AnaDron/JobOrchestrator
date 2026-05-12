@@ -14,8 +14,8 @@ internal static class DependencyResolver {
 	/// target присутствуют в candidate с теми же значениями). Для безключевой target — единственный
 	/// инстанс с пустыми DependencyKeys.
 	/// </summary>
-	public static Job? FindPairedInstance(JobManager jobs, string targetStageName, IReadOnlyDictionary<string, string> candidateKeys) =>
-		jobs.InstancesOf(targetStageName)
+	public static StageInstance? FindPairedInstance(InstanceManager instances, string targetStageName, IReadOnlyDictionary<string, string> candidateKeys) =>
+		instances.InstancesOf(targetStageName)
 			.FirstOrDefault(inst => inst.DependencyKeys.All(kv =>
 				candidateKeys.TryGetValue(kv.Key, out var v) && string.Equals(v, kv.Value, StringComparison.Ordinal)));
 
@@ -30,13 +30,13 @@ internal static class DependencyResolver {
 	public static bool AllDependenciesResolved(
 		StageDescriptor stage,
 		IReadOnlyDictionary<string, string> keys,
-		JobManager jobs,
+		InstanceManager instances,
 		KeyspaceRegistry keyspace
 	) => stage.Dependencies.All(dep => {
 		if (dep.Mode == DependencyMode.Instance &&
 			(!keys.TryGetValue(dep.TargetStageName, out var k) || !keyspace.Contains(dep.TargetStageName, k)))
 			return false;
-		var paired = FindPairedInstance(jobs, dep.TargetStageName, keys);
+		var paired = FindPairedInstance(instances, dep.TargetStageName, keys);
 		return paired is { LastSuccess: not null };
 	});
 }

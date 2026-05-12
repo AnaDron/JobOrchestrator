@@ -9,7 +9,7 @@ namespace JobOrchestrator.Internal;
 /// </summary>
 internal sealed class EventLoop(
 	StageRegistry registry,
-	JobManager jobs,
+	InstanceManager instances,
 	KeyspaceRegistry keyspace,
 	InstanceCreator creator,
 	StageRunner runner,
@@ -19,7 +19,7 @@ internal sealed class EventLoop(
 	TimeProvider? timeProvider = null
 ) : IAsyncDisposable {
 	private readonly TimeProvider _timeProvider = timeProvider ?? TimeProvider.System;
-	private readonly Dictionary<Job, JobTimer> _timers = [];
+	private readonly Dictionary<StageInstance, InstanceTimer> _timers = [];
 
 	public async Task RunAsync(CancellationToken stoppingToken) {
 		logger.LogInformation("JobOrchestrator starting, stages={StageCount}", registry.AllStages.Count);
@@ -45,45 +45,45 @@ internal sealed class EventLoop(
 
 	private async Task HandleEventAsync(OrchestratorEvent evt, CancellationToken ct) {
 		switch (evt) {
-			case TimerTickedEvent tt: HandleTimerTick(tt.Job, ct); break;
+			case TimerTickedEvent tt: HandleTimerTick(tt.Instance, ct); break;
 			case ManualTriggerRequestedEvent mtr: HandleManualTrigger(mtr, ct); break;
 			case KeyAddedEvent ka: HandleKeyAdded(ka.StageName, ka.Key); break;
 			case KeyRemovedEvent kr: await HandleKeyRemovedAsync(kr.StageName, kr.Key, ct).ConfigureAwait(false); break;
-			case StageCompletedEvent sc: HandleStageCompleted(sc.Job); break;
-			case StageFailedEvent sf: HandleStageFailed(sf.Job, sf.Exception); break;
+			case StageCompletedEvent sc: HandleStageCompleted(sc.Instance); break;
+			case StageFailedEvent sf: HandleStageFailed(sf.Instance, sf.Exception); break;
 			default:
 				logger.LogWarning("Неизвестный тип события: {EventType}", evt.GetType().Name);
 				break;
 		}
 	}
 
-	private void HandleTimerTick(Job job, CancellationToken ct) {
+	private void HandleTimerTick(StageInstance instance, CancellationToken ct) {
 		// Инстанс мог быть удалён до срабатывания timer'а — проверим существование.
-		if (!_timers.ContainsKey(job)) return;
+		if (!_timers.ContainsKey(instance)) return;
 		var now = _timeProvider.GetUtcNow();
-		var decision = TriggerAcceptance.TryAccept(job, TriggerSource.Auto, now);
+		var decision = TriggerAcceptance.TryAccept(instance, TriggerSource.Auto, now);
 		if (decision == TriggerResult.Started)
-			BeginIteration(job, TriggerSource.Auto, ct);
+			BeginIteration(instance, TriggerSource.Auto, ct);
 		// WaitingRetry/AlreadyRunning — ничего; timer перепланируется в StageCompleted/Failed handler-е.
 	}
 
 	private void HandleManualTrigger(ManualTriggerRequestedEvent evt, CancellationToken ct) {
-		var job = jobs.Find(evt.StageName, evt.DependencyKeys);
-		if (job is null) {
+		var instance = instances.Find(evt.StageName, evt.DependencyKeys);
+		if (instance is null) {
 			evt.Tcs.TrySetResult(TriggerResult.NotFound);
 			return;
 		}
 		var now = _timeProvider.GetUtcNow();
-		var decision = TriggerAcceptance.TryAccept(job, TriggerSource.Manual, now);
+		var decision = TriggerAcceptance.TryAccept(instance, TriggerSource.Manual, now);
 		evt.Tcs.TrySetResult(decision);
 		if (decision == TriggerResult.Started)
-			BeginIteration(job, TriggerSource.Manual, ct);
+			BeginIteration(instance, TriggerSource.Manual, ct);
 	}
 
-	private void BeginIteration(Job job, TriggerSource trigger, CancellationToken ct) {
-		job.State = JobLifecycleState.Running;
+	private void BeginIteration(StageInstance instance, TriggerSource trigger, CancellationToken ct) {
+		instance.State = InstanceLifecycleState.Running;
 		// Fire-and-forget на ThreadPool: StageRunner внутри публикует StageCompleted/Failed в Channel.
-		_ = Task.Run(() => runner.RunIterationAsync(job, trigger, ct), ct);
+		_ = Task.Run(() => runner.RunIterationAsync(instance, trigger, ct), ct);
 	}
 
 	private void HandleKeyAdded(string stageName, string key) {
@@ -99,81 +99,81 @@ internal sealed class EventLoop(
 		// Транзитивное замыкание стадий, чьи инстансы могут содержать {stageName: key}.
 		var affectedStages = registry.StagesAffectedByKeyRemoval(stageName);
 
-		var affectedJobs = affectedStages
-			.SelectMany(s => jobs.InstancesOf(s.Name))
+		var affected = affectedStages
+			.SelectMany(s => instances.InstancesOf(s.Name))
 			.Where(inst => inst.DependencyKeys.TryGetValue(stageName, out var v) && string.Equals(v, key, StringComparison.Ordinal))
 			.ToList();
-		if (affectedJobs.Count == 0) return;
+		if (affected.Count == 0) return;
 
 		// Топологически обратный порядок (листья перед корнями).
 		var sortedStages = registry.TopologicalSortReverse(affectedStages);
 		var stageOrderIndex = sortedStages
 			.Select((s, i) => (s.Name, Index: i))
 			.ToDictionary(t => t.Name, t => t.Index, StringComparer.Ordinal);
-		affectedJobs.Sort((a, b) => stageOrderIndex[a.Stage.Name].CompareTo(stageOrderIndex[b.Stage.Name]));
+		affected.Sort((a, b) => stageOrderIndex[a.Stage.Name].CompareTo(stageOrderIndex[b.Stage.Name]));
 
-		foreach (var job in affectedJobs) {
-			if (job.State == JobLifecycleState.Running && job.RunCts is { } cts) {
+		foreach (var instance in affected) {
+			if (instance.State == InstanceLifecycleState.Running && instance.RunCts is { } cts) {
 				try { cts.Cancel(); } catch (ObjectDisposedException) { /* race на завершение */ }
 			}
-			if (_timers.TryGetValue(job, out var timer)) {
+			if (_timers.TryGetValue(instance, out var timer)) {
 				timer.Dispose();
-				_timers.Remove(job);
+				_timers.Remove(instance);
 			}
-			jobs.Remove(job);
+			instances.Remove(instance);
 			try {
-				await stateStore.RemoveScopeAsync(job.StateScope, ct).ConfigureAwait(false);
+				await stateStore.RemoveScopeAsync(instance.StateScope, ct).ConfigureAwait(false);
 			} catch (Exception ex) {
-				logger.LogWarning(ex, "RemoveScopeAsync для {Instance} завершился с ошибкой.", job.FullyQualifiedName);
+				logger.LogWarning(ex, "RemoveScopeAsync для {Instance} завершился с ошибкой.", instance.FullyQualifiedName);
 			}
 		}
 	}
 
-	private void HandleStageCompleted(Job job) {
-		bool wasFirstSuccess = !job.LastSuccess.HasValue;
+	private void HandleStageCompleted(StageInstance instance) {
+		bool wasFirstSuccess = !instance.LastSuccess.HasValue;
 		var now = _timeProvider.GetUtcNow();
-		job.LastAttempt = now;
-		job.LastSuccess = now;       // монотонно: не сбрасывается на последующих неуспехах
-		job.ConsecutiveFailures = 0;
-		job.LastError = null;
-		job.State = JobLifecycleState.Idle;
-		ScheduleNextTick(job, job.Stage.Interval);
+		instance.LastAttempt = now;
+		instance.LastSuccess = now;       // монотонно: не сбрасывается на последующих неуспехах
+		instance.ConsecutiveFailures = 0;
+		instance.LastError = null;
+		instance.State = InstanceLifecycleState.Idle;
+		ScheduleNextTick(instance, instance.Stage.Interval);
 
 		if (wasFirstSuccess) {
 			// Каскад: возможно теперь разрешаются зависимости других стадий.
-			foreach (var dependent in EnumerateDirectDependents(job.Stage.Name))
+			foreach (var dependent in EnumerateDirectDependents(instance.Stage.Name))
 				CreateAndStart(dependent);
 		}
 	}
 
-	private void HandleStageFailed(Job job, Exception ex) {
+	private void HandleStageFailed(StageInstance instance, Exception ex) {
 		var now = _timeProvider.GetUtcNow();
-		job.LastAttempt = now;
-		job.ConsecutiveFailures++;
-		job.LastError = ex.Message;
+		instance.LastAttempt = now;
+		instance.ConsecutiveFailures++;
+		instance.LastError = ex.Message;
 		// LastSuccess НЕ меняется — монотонная метка.
-		job.State = JobLifecycleState.Idle;
+		instance.State = InstanceLifecycleState.Idle;
 
-		var retryDelay = job.Stage.RetryPolicy.ComputeDelay(job.ConsecutiveFailures);
-		var nextDelay = retryDelay > TimeSpan.Zero ? retryDelay : job.Stage.Interval;
-		ScheduleNextTick(job, nextDelay);
+		var retryDelay = instance.Stage.RetryPolicy.ComputeDelay(instance.ConsecutiveFailures);
+		var nextDelay = retryDelay > TimeSpan.Zero ? retryDelay : instance.Stage.Interval;
+		ScheduleNextTick(instance, nextDelay);
 	}
 
-	private void ScheduleNextTick(Job job, TimeSpan delay) {
-		job.NextTickAtMs = Environment.TickCount64 + (long)delay.TotalMilliseconds;
-		if (_timers.TryGetValue(job, out var timer))
-			timer.ScheduleAt(job.NextTickAtMs);
+	private void ScheduleNextTick(StageInstance instance, TimeSpan delay) {
+		instance.NextTickAtMs = Environment.TickCount64 + (long)delay.TotalMilliseconds;
+		if (_timers.TryGetValue(instance, out var timer))
+			timer.ScheduleAt(instance.NextTickAtMs);
 	}
 
 	private void CreateAndStart(StageDescriptor stage) {
 		var created = creator.EvaluateAndCreate(stage);
-		foreach (var job in created)
-			StartTimerAndScheduleImmediate(job);
+		foreach (var instance in created)
+			StartTimerAndScheduleImmediate(instance);
 	}
 
-	private void StartTimerAndScheduleImmediate(Job job) {
-		var timer = new JobTimer(job, channel.Writer);
-		_timers[job] = timer;
+	private void StartTimerAndScheduleImmediate(StageInstance instance) {
+		var timer = new InstanceTimer(instance, channel.Writer);
+		_timers[instance] = timer;
 		timer.ScheduleAt(Environment.TickCount64);
 	}
 

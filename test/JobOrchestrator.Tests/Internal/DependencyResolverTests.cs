@@ -14,9 +14,9 @@ public sealed class DependencyResolverTests {
 		Dependencies = deps,
 	};
 
-	private static Job MakeJob(StageDescriptor stage, Dictionary<string, string>? keys = null) {
+	private static StageInstance MakeInstance(StageDescriptor stage, Dictionary<string, string>? keys = null) {
 		keys ??= new Dictionary<string, string>(StringComparer.Ordinal);
-		return new Job {
+		return new StageInstance {
 			Stage = stage,
 			DependencyKeys = keys,
 			FullyQualifiedName = DependencyKey.FormatFullyQualifiedName(stage.Name, keys),
@@ -47,12 +47,12 @@ public sealed class DependencyResolverTests {
 
 	[Fact]
 	public void FindPairedInstance_KeyMatch_ReturnsInstance() {
-		var jobs = new JobManager();
+		var instances = new InstanceManager();
 		var stage = MakeStage("shops");
-		var inst = MakeJob(stage, new Dictionary<string, string> { ["shops"] = "u1" });
-		jobs.Add(inst);
+		var inst = MakeInstance(stage, new Dictionary<string, string> { ["shops"] = "u1" });
+		instances.Add(inst);
 
-		var found = DependencyResolver.FindPairedInstance(jobs, "shops", new Dictionary<string, string> { ["shops"] = "u1" });
+		var found = DependencyResolver.FindPairedInstance(instances, "shops", new Dictionary<string, string> { ["shops"] = "u1" });
 		found.Should().BeSameAs(inst);
 	}
 
@@ -60,36 +60,36 @@ public sealed class DependencyResolverTests {
 	public void FindPairedInstance_KeylessParent_FoundByEmptyKeys() {
 		// Безключевая родительская стадия — её единственный инстанс с пустыми DependencyKeys
 		// "парный" к любому candidate, потому что projection ⊆ candidate.
-		var jobs = new JobManager();
+		var instances = new InstanceManager();
 		var stage = MakeStage("shops");
-		var inst = MakeJob(stage);
-		jobs.Add(inst);
+		var inst = MakeInstance(stage);
+		instances.Add(inst);
 
-		var found = DependencyResolver.FindPairedInstance(jobs, "shops", new Dictionary<string, string> { ["shops"] = "u1" });
+		var found = DependencyResolver.FindPairedInstance(instances, "shops", new Dictionary<string, string> { ["shops"] = "u1" });
 		found.Should().BeSameAs(inst);
 	}
 
 	[Fact]
 	public void AllDependenciesResolved_NoDeps_True() {
 		var stage = MakeStage("shops");
-		var jobs = new JobManager();
+		var instances = new InstanceManager();
 		var keyspace = new KeyspaceRegistry();
-		DependencyResolver.AllDependenciesResolved(stage, new Dictionary<string, string>(), jobs, keyspace).Should().BeTrue();
+		DependencyResolver.AllDependenciesResolved(stage, new Dictionary<string, string>(), instances, keyspace).Should().BeTrue();
 	}
 
 	[Fact]
 	public void AllDependenciesResolved_InstanceDep_KeyspaceMissingKey_False() {
 		var shops = MakeStage("shops");
 		var pg = MakeStage("productGroups", new StageDependency("shops", DependencyMode.Instance));
-		var jobs = new JobManager();
+		var instances = new InstanceManager();
 		var keyspace = new KeyspaceRegistry();
-		var shopsInst = MakeJob(shops);
+		var shopsInst = MakeInstance(shops);
 		shopsInst.LastSuccess = DateTimeOffset.UtcNow;
-		jobs.Add(shopsInst);
+		instances.Add(shopsInst);
 		// keyspace shops пуст — DependsOnInstance не разрешается.
 
 		var resolved = DependencyResolver.AllDependenciesResolved(
-			pg, new Dictionary<string, string> { ["shops"] = "u1" }, jobs, keyspace);
+			pg, new Dictionary<string, string> { ["shops"] = "u1" }, instances, keyspace);
 		resolved.Should().BeFalse();
 	}
 
@@ -97,15 +97,15 @@ public sealed class DependencyResolverTests {
 	public void AllDependenciesResolved_InstanceDep_AllOk_True() {
 		var shops = MakeStage("shops");
 		var pg = MakeStage("productGroups", new StageDependency("shops", DependencyMode.Instance));
-		var jobs = new JobManager();
+		var instances = new InstanceManager();
 		var keyspace = new KeyspaceRegistry();
-		var shopsInst = MakeJob(shops);
+		var shopsInst = MakeInstance(shops);
 		shopsInst.LastSuccess = DateTimeOffset.UtcNow;
-		jobs.Add(shopsInst);
+		instances.Add(shopsInst);
 		keyspace.Add("shops", "u1");
 
 		var resolved = DependencyResolver.AllDependenciesResolved(
-			pg, new Dictionary<string, string> { ["shops"] = "u1" }, jobs, keyspace);
+			pg, new Dictionary<string, string> { ["shops"] = "u1" }, instances, keyspace);
 		resolved.Should().BeTrue();
 	}
 
@@ -113,15 +113,15 @@ public sealed class DependencyResolverTests {
 	public void AllDependenciesResolved_InstanceDep_ParentNeverSucceeded_False() {
 		var shops = MakeStage("shops");
 		var pg = MakeStage("productGroups", new StageDependency("shops", DependencyMode.Instance));
-		var jobs = new JobManager();
+		var instances = new InstanceManager();
 		var keyspace = new KeyspaceRegistry();
-		var shopsInst = MakeJob(shops);
+		var shopsInst = MakeInstance(shops);
 		// LastSuccess = null — родитель ни разу не был успешен.
-		jobs.Add(shopsInst);
+		instances.Add(shopsInst);
 		keyspace.Add("shops", "u1");
 
 		var resolved = DependencyResolver.AllDependenciesResolved(
-			pg, new Dictionary<string, string> { ["shops"] = "u1" }, jobs, keyspace);
+			pg, new Dictionary<string, string> { ["shops"] = "u1" }, instances, keyspace);
 		resolved.Should().BeFalse();
 	}
 
@@ -129,11 +129,11 @@ public sealed class DependencyResolverTests {
 	public void AllDependenciesResolved_WholeDep_NoParentInstance_False() {
 		var x = MakeStage("x");
 		var y = MakeStage("y", new StageDependency("x", DependencyMode.Whole));
-		var jobs = new JobManager();
+		var instances = new InstanceManager();
 		var keyspace = new KeyspaceRegistry();
 		// Нет инстансов x.
 
-		var resolved = DependencyResolver.AllDependenciesResolved(y, new Dictionary<string, string>(), jobs, keyspace);
+		var resolved = DependencyResolver.AllDependenciesResolved(y, new Dictionary<string, string>(), instances, keyspace);
 		resolved.Should().BeFalse();
 	}
 
@@ -141,13 +141,13 @@ public sealed class DependencyResolverTests {
 	public void AllDependenciesResolved_WholeDep_ParentSucceededOnce_True() {
 		var x = MakeStage("x");
 		var y = MakeStage("y", new StageDependency("x", DependencyMode.Whole));
-		var jobs = new JobManager();
+		var instances = new InstanceManager();
 		var keyspace = new KeyspaceRegistry();
-		var xInst = MakeJob(x);
+		var xInst = MakeInstance(x);
 		xInst.LastSuccess = DateTimeOffset.UtcNow;
-		jobs.Add(xInst);
+		instances.Add(xInst);
 
-		var resolved = DependencyResolver.AllDependenciesResolved(y, new Dictionary<string, string>(), jobs, keyspace);
+		var resolved = DependencyResolver.AllDependenciesResolved(y, new Dictionary<string, string>(), instances, keyspace);
 		resolved.Should().BeTrue();
 	}
 
@@ -157,15 +157,15 @@ public sealed class DependencyResolverTests {
 		// потом ушёл в серию неуспехов — зависимая стадия должна продолжать резолвиться.
 		var x = MakeStage("x");
 		var y = MakeStage("y", new StageDependency("x", DependencyMode.Whole));
-		var jobs = new JobManager();
+		var instances = new InstanceManager();
 		var keyspace = new KeyspaceRegistry();
-		var xInst = MakeJob(x);
+		var xInst = MakeInstance(x);
 		xInst.LastSuccess = DateTimeOffset.UtcNow.AddMinutes(-30);  // успех 30 минут назад
 		xInst.ConsecutiveFailures = 5;                                // и потом 5 неуспехов
 		xInst.LastError = "boom";
-		jobs.Add(xInst);
+		instances.Add(xInst);
 
-		var resolved = DependencyResolver.AllDependenciesResolved(y, new Dictionary<string, string>(), jobs, keyspace);
+		var resolved = DependencyResolver.AllDependenciesResolved(y, new Dictionary<string, string>(), instances, keyspace);
 		resolved.Should().BeTrue();  // монотонная LastSuccess != null → разрешено
 	}
 }

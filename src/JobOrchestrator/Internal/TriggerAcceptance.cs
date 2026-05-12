@@ -13,18 +13,18 @@ namespace JobOrchestrator.Internal;
 /// </summary>
 internal static class TriggerAcceptance {
 	public static TriggerResult TryAccept(
-		Job job,
+		StageInstance instance,
 		TriggerSource source,
 		DateTimeOffset now
 	) {
-		if (job.State == JobLifecycleState.Running) {
+		if (instance.State == InstanceLifecycleState.Running) {
 			return TriggerResult.AlreadyRunning;
 		}
 
 		if (source == TriggerSource.Auto) {
-			if (job.ConsecutiveFailures > 0 && job.LastAttempt.HasValue) {
-				var retryDelay = job.Stage.RetryPolicy.ComputeDelay(job.ConsecutiveFailures);
-				if (now - job.LastAttempt.Value < retryDelay) {
+			if (instance.ConsecutiveFailures > 0 && instance.LastAttempt.HasValue) {
+				var retryDelay = instance.Stage.RetryPolicy.ComputeDelay(instance.ConsecutiveFailures);
+				if (now - instance.LastAttempt.Value < retryDelay) {
 					return TriggerResult.WaitingRetry;
 				}
 			}
@@ -32,7 +32,7 @@ internal static class TriggerAcceptance {
 		}
 
 		// source == Manual
-		if (job.LastAttempt.HasValue && (now - job.LastAttempt.Value) < job.Stage.Debounce) {
+		if (instance.LastAttempt.HasValue && (now - instance.LastAttempt.Value) < instance.Stage.Debounce) {
 			return TriggerResult.Debounced;
 		}
 		return TriggerResult.Started;

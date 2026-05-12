@@ -3,14 +3,14 @@ namespace JobOrchestrator.Internal;
 /// <summary>
 /// Утилиты работы с композитным ключом инстанса:
 /// <list type="bullet">
-/// <item><see cref="Encode"/> — канонический encoding для использования как ключ <c>Dictionary</c> в <see cref="JobManager"/> (sort by name).</item>
+/// <item><see cref="Encode"/> — канонический encoding для использования как ключ <c>Dictionary</c> в <see cref="InstanceManager"/> (sort by name).</item>
 /// <item><see cref="FormatFullyQualifiedName"/> — человеко-читаемый идентификатор для логирования (порядок объявления зависимостей).</item>
 /// </list>
 /// </summary>
 internal static class DependencyKey {
 	/// <summary>
 	/// Канонический encoding: компоненты отсортированы по имени для словарного hash-совпадения
-	/// независимо от порядка вставки. Используется ТОЛЬКО для JobManager-словарного ключа,
+	/// независимо от порядка вставки. Используется ТОЛЬКО для InstanceManager-словарного ключа,
 	/// не для логов. Для логов — <see cref="FormatFullyQualifiedName"/>.
 	/// </summary>
 	public static string Encode(IReadOnlyDictionary<string, string> keys) {

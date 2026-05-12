@@ -1,10 +1,11 @@
 namespace JobOrchestrator.Internal;
 
 /// <summary>
-/// Runtime-сущность одного инстанса. Все mutable-поля изменяются единственным consumer-потоком event loop'а —
-/// поэтому без блокировок и без CAS-операций.
+/// Runtime-сущность одного инстанса стадии (long-lived). Несколько <see cref="StageInstance"/> могут
+/// разделять один <see cref="StageDescriptor"/> — один на каждый компонент композитного ключа.
+/// Все mutable-поля изменяются единственным consumer-потоком event loop'а — поэтому без блокировок и без CAS-операций.
 /// </summary>
-internal sealed class Job {
+internal sealed class StageInstance {
 	public required StageDescriptor Stage { get; init; }
 	public required IReadOnlyDictionary<string, string> DependencyKeys { get; init; }
 	public required string FullyQualifiedName { get; init; }
@@ -13,7 +14,7 @@ internal sealed class Job {
 	/// <summary>Scope для <see cref="IJobStateStore"/>: <c>"{StageName}:{EncodedKey}"</c>.</summary>
 	public string StateScope => $"{Stage.Name}:{EncodedKey}";
 
-	public JobLifecycleState State { get; set; } = JobLifecycleState.Idle;
+	public InstanceLifecycleState State { get; set; } = InstanceLifecycleState.Idle;
 
 	/// <summary>Время последнего успешного завершения. Монотонно: после первого != null значение никогда не возвращается к null.</summary>
 	public DateTimeOffset? LastSuccess { get; set; }

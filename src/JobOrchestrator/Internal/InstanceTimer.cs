@@ -3,9 +3,9 @@ using System.Threading.Channels;
 namespace JobOrchestrator.Internal;
 
 /// <summary>Per-инстансовый таймер: один callback в <see cref="ScheduleAt"/>, публикует <see cref="TimerTickedEvent"/>.</summary>
-internal sealed class JobTimer(Job job, ChannelWriter<OrchestratorEvent> events) : IDisposable {
-	private readonly Timer _timer = new Timer(
-		_ => events.TryWrite(new TimerTickedEvent(job)),
+internal sealed class InstanceTimer(StageInstance instance, ChannelWriter<OrchestratorEvent> events) : IDisposable {
+	private readonly Timer _timer = new(
+		_ => events.TryWrite(new TimerTickedEvent(instance)),
 		null, Timeout.Infinite, Timeout.Infinite);
 	private bool _disposed;
 

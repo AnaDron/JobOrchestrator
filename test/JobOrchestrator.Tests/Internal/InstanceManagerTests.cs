@@ -1,6 +1,6 @@
 namespace JobOrchestrator.Tests.Internal;
 
-public sealed class JobManagerTests {
+public sealed class InstanceManagerTests {
 	private sealed class FakeService : IJobService {
 		public Task ExecuteAsync(JobContext ctx, CancellationToken ct) => Task.CompletedTask;
 	}
@@ -14,67 +14,67 @@ public sealed class JobManagerTests {
 		Dependencies = [],
 	};
 
-	private static Job MakeJob(StageDescriptor stage, Dictionary<string, string> keys) {
+	private static StageInstance MakeInstance(StageDescriptor stage, Dictionary<string, string> keys) {
 		var fqn = DependencyKey.FormatFullyQualifiedName(stage.Name, keys);
 		var encoded = DependencyKey.Encode(keys);
-		return new Job { Stage = stage, DependencyKeys = keys, FullyQualifiedName = fqn, EncodedKey = encoded };
+		return new StageInstance { Stage = stage, DependencyKeys = keys, FullyQualifiedName = fqn, EncodedKey = encoded };
 	}
 
 	[Fact]
 	public void Exists_NewManager_Empty() {
-		var mgr = new JobManager();
+		var mgr = new InstanceManager();
 		mgr.Exists("a", new Dictionary<string, string>()).Should().BeFalse();
 	}
 
 	[Fact]
 	public void Add_Find_RoundTrip() {
-		var mgr = new JobManager();
+		var mgr = new InstanceManager();
 		var stage = MakeStage("shops");
-		var job = MakeJob(stage, new Dictionary<string, string>());
-		mgr.Add(job);
-		mgr.Find("shops", new Dictionary<string, string>()).Should().BeSameAs(job);
+		var inst = MakeInstance(stage, new Dictionary<string, string>());
+		mgr.Add(inst);
+		mgr.Find("shops", new Dictionary<string, string>()).Should().BeSameAs(inst);
 		mgr.Exists("shops", new Dictionary<string, string>()).Should().BeTrue();
 	}
 
 	[Fact]
 	public void Add_DuplicateInstance_Throws() {
-		var mgr = new JobManager();
+		var mgr = new InstanceManager();
 		var stage = MakeStage("shops");
-		mgr.Add(MakeJob(stage, new Dictionary<string, string>()));
-		Action act = () => mgr.Add(MakeJob(stage, new Dictionary<string, string>()));
+		mgr.Add(MakeInstance(stage, new Dictionary<string, string>()));
+		Action act = () => mgr.Add(MakeInstance(stage, new Dictionary<string, string>()));
 		act.Should().Throw<InvalidOperationException>();
 	}
 
 	[Fact]
 	public void Find_DifferentKeyOrder_FindsSameInstance() {
 		// Канонический encoding сортирует ключи — два словаря с разным insertion order должны найти одну запись.
-		var mgr = new JobManager();
+		var mgr = new InstanceManager();
 		var stage = MakeStage("documents");
 		var keys1 = new Dictionary<string, string> { ["a"] = "1", ["b"] = "2" };
 		var keys2 = new Dictionary<string, string> { ["b"] = "2", ["a"] = "1" };
-		var job = MakeJob(stage, keys1);
-		mgr.Add(job);
-		mgr.Find("documents", keys2).Should().BeSameAs(job);
+		var inst = MakeInstance(stage, keys1);
+		mgr.Add(inst);
+		mgr.Find("documents", keys2).Should().BeSameAs(inst);
 	}
 
 	[Fact]
 	public void Remove_ExistingInstance_RemovesIt() {
-		var mgr = new JobManager();
+		var mgr = new InstanceManager();
 		var stage = MakeStage("shops");
-		var job = MakeJob(stage, new Dictionary<string, string>());
-		mgr.Add(job);
-		mgr.Remove(job).Should().BeTrue();
+		var inst = MakeInstance(stage, new Dictionary<string, string>());
+		mgr.Add(inst);
+		mgr.Remove(inst).Should().BeTrue();
 		mgr.Exists("shops", new Dictionary<string, string>()).Should().BeFalse();
 	}
 
 	[Fact]
 	public void InstancesOf_FiltersByStageName() {
-		var mgr = new JobManager();
+		var mgr = new InstanceManager();
 		var stageA = MakeStage("a");
 		var stageB = MakeStage("b");
-		mgr.Add(MakeJob(stageA, new Dictionary<string, string> { ["k"] = "1" }));
-		mgr.Add(MakeJob(stageA, new Dictionary<string, string> { ["k"] = "2" }));
-		mgr.Add(MakeJob(stageB, new Dictionary<string, string>()));
+		mgr.Add(MakeInstance(stageA, new Dictionary<string, string> { ["k"] = "1" }));
+		mgr.Add(MakeInstance(stageA, new Dictionary<string, string> { ["k"] = "2" }));
+		mgr.Add(MakeInstance(stageB, new Dictionary<string, string>()));
 		mgr.InstancesOf("a").Should().HaveCount(2);
 		mgr.InstancesOf("b").Should().ContainSingle();
 		mgr.InstancesOf("nonexistent").Should().BeEmpty();
@@ -82,13 +82,13 @@ public sealed class JobManagerTests {
 
 	[Fact]
 	public void ToOverview_ReflectsCurrentState() {
-		var mgr = new JobManager();
+		var mgr = new InstanceManager();
 		var stage = MakeStage("shops");
-		var job = MakeJob(stage, new Dictionary<string, string>());
-		job.LastSuccess = DateTimeOffset.UtcNow;
-		job.ConsecutiveFailures = 2;
-		job.LastError = "boom";
-		mgr.Add(job);
+		var inst = MakeInstance(stage, new Dictionary<string, string>());
+		inst.LastSuccess = DateTimeOffset.UtcNow;
+		inst.ConsecutiveFailures = 2;
+		inst.LastError = "boom";
+		mgr.Add(inst);
 
 		var overview = mgr.ToOverview();
 		overview.Jobs.Should().ContainSingle();

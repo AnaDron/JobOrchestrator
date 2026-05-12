@@ -12,7 +12,7 @@ public sealed record JobInfo {
 	public required string FullyQualifiedName { get; init; }
 
 	/// <summary>Текущее состояние.</summary>
-	public required JobLifecycleState State { get; init; }
+	public required InstanceLifecycleState State { get; init; }
 
 	/// <summary>Время последнего успеха или <c>null</c>, если инстанс ещё ни разу не был успешен. Монотонная метка.</summary>
 	public DateTimeOffset? LastSuccess { get; init; }

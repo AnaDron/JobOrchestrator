@@ -4,11 +4,11 @@ namespace JobOrchestrator.Internal;
 
 /// <summary>
 /// Реализация <see cref="IJobOrchestrator"/>: фасад поверх event loop'а.
-/// Manual-методы публикуют события в <c>Channel</c>; GetOverview читает <c>JobManager</c> снапшот.
+/// Manual-методы публикуют события в <c>Channel</c>; GetOverview читает <c>InstanceManager</c> снапшот.
 /// </summary>
 internal sealed class JobOrchestratorRuntime(
 	Channel<OrchestratorEvent> channel,
-	JobManager jobs
+	InstanceManager instances
 ) : IJobOrchestrator {
 	public async Task<TriggerResult> TriggerAsync(
 		string stageName,
@@ -35,5 +35,5 @@ internal sealed class JobOrchestratorRuntime(
 		channel.Writer.TryWrite(new KeyRemovedEvent(stageName, key));
 	}
 
-	public JobOverview GetOverview() => jobs.ToOverview();
+	public JobOverview GetOverview() => instances.ToOverview();
 }

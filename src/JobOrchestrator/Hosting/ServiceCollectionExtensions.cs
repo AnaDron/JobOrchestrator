@@ -30,7 +30,7 @@ public static class ServiceCollectionExtensions {
 		}
 
 		services.AddSingleton(registry);
-		services.AddSingleton<JobManager>();
+		services.AddSingleton<InstanceManager>();
 		services.AddSingleton<KeyspaceRegistry>();
 		services.AddSingleton<InstanceCreator>();
 		services.AddSingleton<StageRunner>();
