@@ -15,9 +15,11 @@ internal static class TestHostFactory {
 		var builder = Host.CreateApplicationBuilder();
 		builder.Logging.ClearProviders();
 
-		registerFakes?.Invoke(builder.Services);
 		builder.Services.AddInMemoryJobStateStore();
 		builder.Services.AddJobOrchestrator(configure);
+		// registerFakes — после остальных регистраций, чтобы тест мог переопределить любую (последняя
+		// регистрация singleton выигрывает при resolve).
+		registerFakes?.Invoke(builder.Services);
 
 		return builder.Build();
 	}

@@ -23,7 +23,7 @@ public sealed class ScenarioStateStoreTests {
 		using var host = TestHostFactory.Build(
 			configure: jobs => jobs.Stage("a")
 				.HandledBy<FakeServiceA>()
-				.RunPeriodically(TimeSpan.FromMilliseconds(100)),
+				.RunPeriodically(TimeSpan.FromMilliseconds(200)),
 			registerFakes: s => s.AddSingleton<FakeServiceA>(fake));
 
 		await host.StartAsync().ConfigureAwait(false);

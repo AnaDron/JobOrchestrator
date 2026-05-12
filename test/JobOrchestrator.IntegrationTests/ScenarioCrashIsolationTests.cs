@@ -1,0 +1,153 @@
+using JobOrchestrator.Internal;
+using JobOrchestrator.IntegrationTests.Support;
+
+namespace JobOrchestrator.IntegrationTests;
+
+public sealed class ScenarioCrashIsolationTests {
+	private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(10);
+
+	[Fact]
+	public async Task AfterMarkFaulted_TriggerAsync_ReturnsFaulted() {
+		using var host = TestHostFactory.Build(
+			configure: jobs => jobs.Stage("a").HandledBy<FakeServiceA>().RunPeriodically(TimeSpan.FromMinutes(1)),
+			registerFakes: s => s.AddSingleton<FakeServiceA>());
+
+		var fake = host.Services.GetRequiredService<FakeServiceA>();
+		var orchestrator = host.Services.GetRequiredService<IJobOrchestrator>();
+		await host.StartAsync().ConfigureAwait(false);
+		try {
+			(await fake.WaitForCallCountAsync(1, Timeout).ConfigureAwait(false)).Should().BeTrue();
+			orchestrator.IsFaulted.Should().BeFalse();
+
+			// Симулируем крах event loop через прямой MarkFaulted (internal API через InternalsVisibleTo).
+			var lifecycle = host.Services.GetRequiredService<OrchestratorLifecycle>();
+			lifecycle.MarkFaulted();
+			orchestrator.IsFaulted.Should().BeTrue();
+
+			var result = await orchestrator.TriggerAsync("a").ConfigureAwait(false);
+			result.Should().Be(TriggerResult.Faulted);
+		} finally {
+			await host.StopAsync().ConfigureAwait(false);
+		}
+	}
+
+	[Fact]
+	public async Task AfterMarkFaulted_RegisterUnregisterKey_ThrowsInvalidOperation() {
+		using var host = TestHostFactory.Build(
+			configure: jobs => jobs.Stage("a").HandledBy<FakeServiceA>().RunPeriodically(TimeSpan.FromMinutes(1)),
+			registerFakes: s => s.AddSingleton<FakeServiceA>());
+
+		var orchestrator = host.Services.GetRequiredService<IJobOrchestrator>();
+		await host.StartAsync().ConfigureAwait(false);
+		try {
+			host.Services.GetRequiredService<OrchestratorLifecycle>().MarkFaulted();
+
+			Action register = () => orchestrator.RegisterKey("a", "k1");
+			register.Should().Throw<InvalidOperationException>();
+
+			Action unregister = () => orchestrator.UnregisterKey("a", "k1");
+			unregister.Should().Throw<InvalidOperationException>();
+		} finally {
+			await host.StopAsync().ConfigureAwait(false);
+		}
+	}
+
+	[Fact]
+	public async Task AfterMarkFaulted_GetOverviewAsync_ThrowsInvalidOperation() {
+		using var host = TestHostFactory.Build(
+			configure: jobs => jobs.Stage("a").HandledBy<FakeServiceA>().RunPeriodically(TimeSpan.FromMinutes(1)),
+			registerFakes: s => s.AddSingleton<FakeServiceA>());
+
+		var orchestrator = host.Services.GetRequiredService<IJobOrchestrator>();
+		await host.StartAsync().ConfigureAwait(false);
+		try {
+			host.Services.GetRequiredService<OrchestratorLifecycle>().MarkFaulted();
+
+			Func<Task> act = async () => await orchestrator.GetOverviewAsync().ConfigureAwait(false);
+			await act.Should().ThrowAsync<InvalidOperationException>().ConfigureAwait(false);
+		} finally {
+			await host.StopAsync().ConfigureAwait(false);
+		}
+	}
+
+	[Fact]
+	public async Task IJobServiceThrows_ItIsCapturedAsStageFailed_EventLoopRemainsAlive() {
+		// IJobService с исключением → StageRunner ловит и публикует StageFailedEvent.
+		// Event loop обрабатывает как обычный неуспех, обновляет ConsecutiveFailures.
+		// Это per-iteration изоляция — НЕ event loop crash, но проверяет нормальный путь восстановления.
+		var fake = new FakeServiceA();
+		int call = 0;
+		fake.ExecuteHandler = (ctx, _) => {
+			call++;
+			throw new InvalidOperationException($"call {call} failed");
+		};
+
+		using var host = TestHostFactory.Build(
+			configure: jobs => jobs.Stage("a")
+				.HandledBy<FakeServiceA>()
+				.RetryAfterFailure(RetryPolicy.FixedDelay(TimeSpan.FromMilliseconds(50)))
+				.RunPeriodically(TimeSpan.FromMilliseconds(100)),
+			registerFakes: s => s.AddSingleton<FakeServiceA>(fake));
+
+		var orchestrator = host.Services.GetRequiredService<IJobOrchestrator>();
+		await host.StartAsync().ConfigureAwait(false);
+		try {
+			(await fake.WaitForCallCountAsync(2, Timeout).ConfigureAwait(false)).Should().BeTrue();
+
+			orchestrator.IsFaulted.Should().BeFalse("per-iteration исключения не валят event loop");
+			var overview = await orchestrator.GetOverviewAsync().ConfigureAwait(false);
+			var info = overview.Instances.Single();
+			info.ConsecutiveFailures.Should().BeGreaterThan(0);
+			info.LastError.Should().Contain("failed");
+			info.LastSuccess.Should().BeNull();
+		} finally {
+			await host.StopAsync().ConfigureAwait(false);
+		}
+	}
+
+	[Fact]
+	public async Task StateStoreThrowsOnRemoveScope_KeyRemoveCascadeStillCompletes() {
+		// IJobStateStore.RemoveScopeAsync падает; внутренний catch в HandleKeyRemovedAsync
+		// ловит и логирует Warning. Event loop продолжает обрабатывать события.
+		using var host = TestHostFactory.Build(
+			configure: jobs => {
+				var shops = jobs.Stage("shops").HandledBy<FakeServiceA>().RunPeriodically(TimeSpan.FromHours(1));
+				jobs.Stage("pg").HandledBy<FakeServiceB>().DependsOnInstance(shops).RunPeriodically(TimeSpan.FromHours(1));
+			},
+			registerFakes: s => {
+				s.AddSingleton<FakeServiceA>();
+				s.AddSingleton<FakeServiceB>();
+				// Заменяем дефолтный InMemoryJobStateStore на броcаемый — register перед AddJobOrchestrator.
+				s.AddSingleton<IJobStateStore, ThrowingJobStateStore>();
+			});
+
+		var shopsFake = host.Services.GetRequiredService<FakeServiceA>();
+		shopsFake.ExecuteHandler = (ctx, _) => { ctx.AddKey("u1"); return Task.CompletedTask; };
+
+		var pgFake = host.Services.GetRequiredService<FakeServiceB>();
+		var orchestrator = host.Services.GetRequiredService<IJobOrchestrator>();
+
+		await host.StartAsync().ConfigureAwait(false);
+		try {
+			(await pgFake.WaitForCallCountAsync(1, Timeout).ConfigureAwait(false)).Should().BeTrue();
+
+			orchestrator.UnregisterKey("shops", "u1");
+			await Task.Delay(300).ConfigureAwait(false);
+
+			// Event loop жив, орchestratorфункционален несмотря на исключение store-а.
+			orchestrator.IsFaulted.Should().BeFalse();
+			var overview = await orchestrator.GetOverviewAsync().ConfigureAwait(false);
+			overview.Instances.Select(i => i.FullyQualifiedName).Should().NotContain("pg[shops=u1]");
+		} finally {
+			await host.StopAsync().ConfigureAwait(false);
+		}
+	}
+
+	private sealed class ThrowingJobStateStore : IJobStateStore {
+		public Task<string?> GetAsync(string scope, string key, CancellationToken ct) => Task.FromResult<string?>(null);
+		public Task SetAsync(string scope, string key, string value, CancellationToken ct) => Task.CompletedTask;
+		public Task RemoveAsync(string scope, string key, CancellationToken ct) => Task.CompletedTask;
+		public Task RemoveScopeAsync(string scope, CancellationToken ct) =>
+			Task.FromException(new InvalidOperationException("simulated store failure"));
+	}
+}
