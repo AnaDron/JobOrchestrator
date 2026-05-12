@@ -1,3 +1,5 @@
+using System.Text;
+
 namespace JobOrchestrator.Internal;
 
 /// <summary>
@@ -15,7 +17,12 @@ internal static class DependencyKey {
 	/// </summary>
 	public static string Encode(IReadOnlyDictionary<string, string> keys) {
 		if (keys.Count == 0) return string.Empty;
-		return string.Join("|", keys.OrderBy(kv => kv.Key, StringComparer.Ordinal).Select(kv => $"{kv.Key}={kv.Value}"));
+		var sb = new StringBuilder();
+		foreach (var kv in keys.OrderBy(kv => kv.Key, StringComparer.Ordinal)) {
+			if (sb.Length > 0) sb.Append('|');
+			sb.Append(kv.Key).Append('=').Append(kv.Value);
+		}
+		return sb.ToString();
 	}
 
 	/// <summary>

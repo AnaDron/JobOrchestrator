@@ -30,20 +30,24 @@ internal sealed class StageRegistry(IReadOnlyList<StageDescriptor> stages) {
 	public IReadOnlyCollection<StageDescriptor> AllStages => _byName.Values;
 
 	/// <summary>Стадии, имеющие <c>DependsOnInstance(stageName)</c> в своих зависимостях.</summary>
-	public IReadOnlyList<StageDescriptor> StagesDependingOnInstance(string stageName) =>
-		_byName.Values
+	public IReadOnlyList<StageDescriptor> StagesDependingOnInstance(string stageName) {
+		var result = _byName.Values
 			.Where(s => s.Dependencies.Any(d =>
 				d.Mode == DependencyMode.Instance &&
 				string.Equals(d.TargetStageName, stageName, StringComparison.Ordinal)))
 			.ToList();
+		return result.Count == 0 ? [] : result;
+	}
 
 	/// <summary>Стадии, имеющие <c>DependsOn(stageName)</c> в своих зависимостях.</summary>
-	public IReadOnlyList<StageDescriptor> StagesDependingOn(string stageName) =>
-		_byName.Values
+	public IReadOnlyList<StageDescriptor> StagesDependingOn(string stageName) {
+		var result = _byName.Values
 			.Where(s => s.Dependencies.Any(d =>
 				d.Mode == DependencyMode.Whole &&
 				string.Equals(d.TargetStageName, stageName, StringComparison.Ordinal)))
 			.ToList();
+		return result.Count == 0 ? [] : result;
+	}
 
 	/// <summary>
 	/// Транзитивное замыкание стадий, инстансы которых могут унаследовать компонент ключа от <paramref name="stageName"/>.
@@ -100,25 +104,36 @@ internal sealed class StageRegistry(IReadOnlyList<StageDescriptor> stages) {
 	}
 
 	private static void ValidateNoCycles(Dictionary<string, StageDescriptor> byName) {
-		foreach (var s in byName.Values) {
-			HashSet<string> visited = new(StringComparer.Ordinal);
-			Stack<string> path = new();
-			DfsCheck(s.Name, byName, visited, path);
-		}
+		// Триколорный DFS: white (не посещён), gray (в стеке), black (завершён).
+		// Один проход по всем вершинам — O(V+E).
+		HashSet<string> gray = new(StringComparer.Ordinal);
+		HashSet<string> black = new(StringComparer.Ordinal);
+		foreach (var s in byName.Values)
+			DfsCheck(s.Name, byName, gray, black, []);
 	}
 
-	private static void DfsCheck(string node, Dictionary<string, StageDescriptor> byName, HashSet<string> visited, Stack<string> path) {
-		if (path.Contains(node)) {
-			List<string> cycle = [.. path.Reverse(), node];
+	private static void DfsCheck(
+		string node,
+		Dictionary<string, StageDescriptor> byName,
+		HashSet<string> gray,
+		HashSet<string> black,
+		List<string> path
+	) {
+		if (black.Contains(node)) return;
+		if (!gray.Add(node)) {
+			// Нашли обратное ребро — цикл. Выделяем его из path.
+			int cycleStart = path.IndexOf(node);
+			List<string> cycle = [.. path[cycleStart..], node];
 			throw new JobConfigurationException(
 				$"Цикл в графе зависимостей: {string.Join(" -> ", cycle)}");
 		}
-		if (!visited.Add(node)) return;
-		path.Push(node);
+		path.Add(node);
 		if (byName.TryGetValue(node, out var desc)) {
 			foreach (var d in desc.Dependencies)
-				DfsCheck(d.TargetStageName, byName, visited, path);
+				DfsCheck(d.TargetStageName, byName, gray, black, path);
 		}
-		path.Pop();
+		path.RemoveAt(path.Count - 1);
+		gray.Remove(node);
+		black.Add(node);
 	}
 }

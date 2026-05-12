@@ -14,15 +14,10 @@ namespace JobOrchestrator.Internal;
 /// </summary>
 internal sealed class InstanceCreator(InstanceManager instances, KeyspaceRegistry keyspace) {
 	public List<StageInstance> EvaluateAndCreate(StageDescriptor stage) {
-		List<StageInstance> created = [];
-
 		if (stage.Dependencies.Count == 0) {
 			// Безключевая стадия → один инстанс с пустыми DependencyKeys.
 			var empty = new Dictionary<string, string>(StringComparer.Ordinal);
-			if (!instances.Exists(stage.Name, empty)) {
-				created.Add(MaterializeInstance(stage, empty));
-			}
-			return created;
+			return instances.Exists(stage.Name, empty) ? [] : [MaterializeInstance(stage, empty)];
 		}
 
 		// Собираем измерения candidate-ключей.
@@ -31,11 +26,12 @@ internal sealed class InstanceCreator(InstanceManager instances, KeyspaceRegistr
 			var dim = ComputeDimension(dep);
 			if (dim.Count == 0) {
 				// Пустое измерение → cartesian product пуст → инстансов нет.
-				return created;
+				return [];
 			}
 			dimensions.Add(dim);
 		}
 
+		List<StageInstance> created = [];
 		foreach (var combo in CartesianProduct(dimensions)) {
 			var merged = TryMergeOrdered(combo);
 			if (merged is null) continue;
