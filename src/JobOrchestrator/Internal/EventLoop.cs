@@ -62,9 +62,8 @@ internal sealed class EventLoop(
 		if (!_timers.ContainsKey(job)) return;
 		var now = _timeProvider.GetUtcNow();
 		var decision = TriggerAcceptance.TryAccept(job, TriggerSource.Auto, now);
-		if (decision == TriggerResult.Started) {
+		if (decision == TriggerResult.Started)
 			BeginIteration(job, TriggerSource.Auto, ct);
-		}
 		// WaitingRetry/AlreadyRunning — ничего; timer перепланируется в StageCompleted/Failed handler-е.
 	}
 
@@ -77,9 +76,8 @@ internal sealed class EventLoop(
 		var now = _timeProvider.GetUtcNow();
 		var decision = TriggerAcceptance.TryAccept(job, TriggerSource.Manual, now);
 		evt.Tcs.TrySetResult(decision);
-		if (decision == TriggerResult.Started) {
+		if (decision == TriggerResult.Started)
 			BeginIteration(job, TriggerSource.Manual, ct);
-		}
 	}
 
 	private void BeginIteration(Job job, TriggerSource trigger, CancellationToken ct) {
@@ -91,9 +89,8 @@ internal sealed class EventLoop(
 	private void HandleKeyAdded(string stageName, string key) {
 		if (!keyspace.Add(stageName, key)) return;
 		// Каждая стадия с DependsOnInstance(stageName) может получить новый инстанс.
-		foreach (var dependent in registry.StagesDependingOnInstance(stageName)) {
+		foreach (var dependent in registry.StagesDependingOnInstance(stageName))
 			CreateAndStart(dependent);
-		}
 	}
 
 	private async Task HandleKeyRemovedAsync(string stageName, string key, CancellationToken ct) {
@@ -124,9 +121,8 @@ internal sealed class EventLoop(
 				_timers.Remove(job);
 			}
 			jobs.Remove(job);
-			string scope = $"{job.Stage.Name}:{job.EncodedKey}";
 			try {
-				await stateStore.RemoveScopeAsync(scope, ct).ConfigureAwait(false);
+				await stateStore.RemoveScopeAsync(job.StateScope, ct).ConfigureAwait(false);
 			} catch (Exception ex) {
 				logger.LogWarning(ex, "RemoveScopeAsync для {Instance} завершился с ошибкой.", job.FullyQualifiedName);
 			}
@@ -165,9 +161,8 @@ internal sealed class EventLoop(
 
 	private void ScheduleNextTick(Job job, TimeSpan delay) {
 		job.NextTickAtMs = Environment.TickCount64 + (long)delay.TotalMilliseconds;
-		if (_timers.TryGetValue(job, out var timer)) {
+		if (_timers.TryGetValue(job, out var timer))
 			timer.ScheduleAt(job.NextTickAtMs);
-		}
 	}
 
 	private void CreateAndStart(StageDescriptor stage) {

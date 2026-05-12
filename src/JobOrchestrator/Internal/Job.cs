@@ -10,6 +10,9 @@ internal sealed class Job {
 	public required string FullyQualifiedName { get; init; }
 	public required string EncodedKey { get; init; }
 
+	/// <summary>Scope для <see cref="IJobStateStore"/>: <c>"{StageName}:{EncodedKey}"</c>.</summary>
+	public string StateScope => $"{Stage.Name}:{EncodedKey}";
+
 	public JobLifecycleState State { get; set; } = JobLifecycleState.Idle;
 
 	/// <summary>Время последнего успешного завершения. Монотонно: после первого != null значение никогда не возвращается к null.</summary>

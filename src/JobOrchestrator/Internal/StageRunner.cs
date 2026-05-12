@@ -31,8 +31,7 @@ internal sealed class StageRunner(
 
 		try {
 			var service = (IJobService)scope.ServiceProvider.GetRequiredService(job.Stage.ServiceType);
-			var stateScope = $"{job.Stage.Name}:{job.EncodedKey}";
-			var jobState = new DefaultJobState(stateStore, stateScope);
+			var jobState = new DefaultJobState(stateStore, job.StateScope);
 
 			var jobContext = new JobContext(
 				correlationId: correlationId,
@@ -66,7 +65,7 @@ internal sealed class StageRunner(
 	}
 
 	private static Dictionary<string, object> BuildLogScopeFields(Job job, string correlationId) {
-		Dictionary<string, object> fields = new(StringComparer.Ordinal) {
+		Dictionary<string, object> fields = new(3 + job.DependencyKeys.Count, StringComparer.Ordinal) {
 			["CorrelationId"] = correlationId,
 			["FullyQualifiedName"] = job.FullyQualifiedName,
 			["StageName"] = job.Stage.Name,

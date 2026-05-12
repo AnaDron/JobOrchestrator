@@ -35,7 +35,5 @@ internal sealed class JobOrchestratorRuntime(
 		channel.Writer.TryWrite(new KeyRemovedEvent(stageName, key));
 	}
 
-	public JobOverview GetOverview() {
-		return jobs.ToOverview();
-	}
+	public JobOverview GetOverview() => jobs.ToOverview();
 }
