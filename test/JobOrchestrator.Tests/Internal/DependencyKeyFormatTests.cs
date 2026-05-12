@@ -59,4 +59,29 @@ public sealed class DependencyKeyFormatTests {
 		var b = new Dictionary<string, string> { ["shops"] = "u2" };
 		DependencyKey.Encode(a).Should().NotBe(DependencyKey.Encode(b));
 	}
+
+	[Fact]
+	public void Encode_EscapesSpecialCharacters_NoCollision() {
+		// Без escaping {a: "1|b=2"} и {a: "1", b: "2"} дали бы одинаковую encoded-строку.
+		// Escaping (|, =, \ через \) гарантирует уникальность.
+		var collision1 = new Dictionary<string, string> { ["a"] = "1|b=2" };
+		var collision2 = new Dictionary<string, string> { ["a"] = "1", ["b"] = "2" };
+		DependencyKey.Encode(collision1).Should().NotBe(DependencyKey.Encode(collision2));
+	}
+
+	[Fact]
+	public void Encode_EscapesBackslash() {
+		// Сам символ \ тоже должен экранироваться, иначе {a: "\|b"} коллидировал бы с {a: "", b: ""}-вариантом.
+		var withBackslash = new Dictionary<string, string> { ["a"] = "value\\with\\backslash" };
+		var simple = new Dictionary<string, string> { ["a"] = "value" };
+		DependencyKey.Encode(withBackslash).Should().NotBe(DependencyKey.Encode(simple));
+	}
+
+	[Fact]
+	public void Encode_RoundTripStability_SameDictionary_SameEncoded() {
+		var keys = new Dictionary<string, string> { ["shops"] = "u|1=v", ["currencies"] = "USD" };
+		var first = DependencyKey.Encode(keys);
+		var second = DependencyKey.Encode(keys);
+		first.Should().Be(second);
+	}
 }
