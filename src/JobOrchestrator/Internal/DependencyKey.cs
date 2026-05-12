@@ -1,5 +1,3 @@
-using System.Text;
-
 namespace JobOrchestrator.Internal;
 
 /// <summary>
@@ -17,15 +15,7 @@ internal static class DependencyKey {
 	/// </summary>
 	public static string Encode(IReadOnlyDictionary<string, string> keys) {
 		if (keys.Count == 0) return string.Empty;
-		var sorted = keys.OrderBy(kv => kv.Key, StringComparer.Ordinal);
-		StringBuilder sb = new();
-		bool first = true;
-		foreach (var kv in sorted) {
-			if (!first) sb.Append('|');
-			sb.Append(kv.Key).Append('=').Append(kv.Value);
-			first = false;
-		}
-		return sb.ToString();
+		return string.Join("|", keys.OrderBy(kv => kv.Key, StringComparer.Ordinal).Select(kv => $"{kv.Key}={kv.Value}"));
 	}
 
 	/// <summary>
@@ -36,15 +26,6 @@ internal static class DependencyKey {
 	/// </summary>
 	public static string FormatFullyQualifiedName(string stageName, IReadOnlyDictionary<string, string> keys) {
 		if (keys.Count == 0) return $"{stageName}[]";
-		StringBuilder sb = new(stageName.Length + keys.Count * 16);
-		sb.Append(stageName).Append('[');
-		bool first = true;
-		foreach (var kv in keys) {
-			if (!first) sb.Append(',');
-			sb.Append(kv.Key).Append('=').Append(kv.Value);
-			first = false;
-		}
-		sb.Append(']');
-		return sb.ToString();
+		return $"{stageName}[{string.Join(",", keys.Select(kv => $"{kv.Key}={kv.Value}"))}]";
 	}
 }

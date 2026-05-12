@@ -25,32 +25,24 @@ internal sealed class JobManager {
 		return _jobs.Remove((job.Stage.Name, job.EncodedKey));
 	}
 
-	public IEnumerable<Job> InstancesOf(string stageName) {
-		foreach (var j in _jobs.Values) {
-			if (string.Equals(j.Stage.Name, stageName, StringComparison.Ordinal)) {
-				yield return j;
-			}
-		}
-	}
+	public IEnumerable<Job> InstancesOf(string stageName) =>
+		_jobs.Values.Where(j => string.Equals(j.Stage.Name, stageName, StringComparison.Ordinal));
 
 	public IEnumerable<Job> AllJobs => _jobs.Values;
 
 	public int Count => _jobs.Count;
 
 	public JobOverview ToOverview() {
-		List<JobInfo> infos = new(_jobs.Count);
-		foreach (var j in _jobs.Values) {
-			infos.Add(new JobInfo {
-				StageName = j.Stage.Name,
-				DependencyKeys = j.DependencyKeys,
-				FullyQualifiedName = j.FullyQualifiedName,
-				State = j.State,
-				LastSuccess = j.LastSuccess,
-				LastAttempt = j.LastAttempt,
-				ConsecutiveFailures = j.ConsecutiveFailures,
-				LastError = j.LastError,
-			});
-		}
+		var infos = _jobs.Values.Select(j => new JobInfo {
+			StageName = j.Stage.Name,
+			DependencyKeys = j.DependencyKeys,
+			FullyQualifiedName = j.FullyQualifiedName,
+			State = j.State,
+			LastSuccess = j.LastSuccess,
+			LastAttempt = j.LastAttempt,
+			ConsecutiveFailures = j.ConsecutiveFailures,
+			LastError = j.LastError,
+		}).ToList();
 		return new JobOverview(infos);
 	}
 }

@@ -21,11 +21,6 @@ public sealed class JobOrchestratorBuilder {
 		return sb;
 	}
 
-	internal StageRegistry BuildRegistry() {
-		List<StageDescriptor> descriptors = new(_stages.Count);
-		foreach (var sb in _stages.Values) {
-			descriptors.Add(sb.BuildDescriptor());
-		}
-		return new StageRegistry(descriptors);
-	}
+	internal StageRegistry BuildRegistry() =>
+		new StageRegistry(_stages.Values.Select(sb => sb.BuildDescriptor()).ToList());
 }

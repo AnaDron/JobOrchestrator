@@ -7,63 +7,40 @@ namespace JobOrchestrator.Internal;
 /// Single-threaded consumer событий оркестратора. Все state-transitions инстансов происходят здесь;
 /// итерации запускаются на ThreadPool через <see cref="StageRunner"/>.
 /// </summary>
-internal sealed class EventLoop : IAsyncDisposable {
-	private readonly StageRegistry _registry;
-	private readonly JobManager _jobs;
-	private readonly KeyspaceRegistry _keyspace;
-	private readonly InstanceCreator _creator;
-	private readonly StageRunner _runner;
-	private readonly Channel<OrchestratorEvent> _channel;
-	private readonly IJobStateStore _stateStore;
-	private readonly ILogger<EventLoop> _logger;
-	private readonly TimeProvider _timeProvider;
+internal sealed class EventLoop(
+	StageRegistry registry,
+	JobManager jobs,
+	KeyspaceRegistry keyspace,
+	InstanceCreator creator,
+	StageRunner runner,
+	Channel<OrchestratorEvent> channel,
+	IJobStateStore stateStore,
+	ILogger<EventLoop> logger,
+	TimeProvider? timeProvider = null
+) : IAsyncDisposable {
+	private readonly TimeProvider _timeProvider = timeProvider ?? TimeProvider.System;
 	private readonly Dictionary<Job, JobTimer> _timers = [];
 
-	public EventLoop(
-		StageRegistry registry,
-		JobManager jobs,
-		KeyspaceRegistry keyspace,
-		InstanceCreator creator,
-		StageRunner runner,
-		Channel<OrchestratorEvent> channel,
-		IJobStateStore stateStore,
-		ILogger<EventLoop> logger,
-		TimeProvider? timeProvider = null
-	) {
-		_registry = registry;
-		_jobs = jobs;
-		_keyspace = keyspace;
-		_creator = creator;
-		_runner = runner;
-		_channel = channel;
-		_stateStore = stateStore;
-		_logger = logger;
-		_timeProvider = timeProvider ?? TimeProvider.System;
-	}
-
 	public async Task RunAsync(CancellationToken stoppingToken) {
-		_logger.LogInformation("JobOrchestrator starting, stages={StageCount}", _registry.AllStages.Count);
+		logger.LogInformation("JobOrchestrator starting, stages={StageCount}", registry.AllStages.Count);
 		BootstrapInitialInstances();
 		try {
-			await foreach (var evt in _channel.Reader.ReadAllAsync(stoppingToken).ConfigureAwait(false)) {
+			await foreach (var evt in channel.Reader.ReadAllAsync(stoppingToken).ConfigureAwait(false)) {
 				try {
 					await HandleEventAsync(evt, stoppingToken).ConfigureAwait(false);
 				} catch (Exception ex) {
-					_logger.LogCritical(ex, "Сбой обработчика события {EventType}", evt.GetType().Name);
+					logger.LogCritical(ex, "Сбой обработчика события {EventType}", evt.GetType().Name);
 				}
 			}
 		} catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) {
 			// Нормальный shutdown.
 		}
-		_logger.LogInformation("JobOrchestrator stopped.");
+		logger.LogInformation("JobOrchestrator stopped.");
 	}
 
 	private void BootstrapInitialInstances() {
-		foreach (var stage in _registry.AllStages) {
-			if (stage.Dependencies.Count == 0) {
-				CreateAndStart(stage);
-			}
-		}
+		foreach (var stage in registry.AllStages.Where(s => s.Dependencies.Count == 0))
+			CreateAndStart(stage);
 	}
 
 	private async Task HandleEventAsync(OrchestratorEvent evt, CancellationToken ct) {
@@ -75,7 +52,7 @@ internal sealed class EventLoop : IAsyncDisposable {
 			case StageCompletedEvent sc: HandleStageCompleted(sc.Job); break;
 			case StageFailedEvent sf: HandleStageFailed(sf.Job, sf.Exception); break;
 			default:
-				_logger.LogWarning("Неизвестный тип события: {EventType}", evt.GetType().Name);
+				logger.LogWarning("Неизвестный тип события: {EventType}", evt.GetType().Name);
 				break;
 		}
 	}
@@ -92,7 +69,7 @@ internal sealed class EventLoop : IAsyncDisposable {
 	}
 
 	private void HandleManualTrigger(ManualTriggerRequestedEvent evt, CancellationToken ct) {
-		var job = _jobs.Find(evt.StageName, evt.DependencyKeys);
+		var job = jobs.Find(evt.StageName, evt.DependencyKeys);
 		if (job is null) {
 			evt.Tcs.TrySetResult(TriggerResult.NotFound);
 			return;
@@ -108,40 +85,34 @@ internal sealed class EventLoop : IAsyncDisposable {
 	private void BeginIteration(Job job, TriggerSource trigger, CancellationToken ct) {
 		job.State = JobLifecycleState.Running;
 		// Fire-and-forget на ThreadPool: StageRunner внутри публикует StageCompleted/Failed в Channel.
-		_ = Task.Run(async () => await _runner.RunIterationAsync(job, trigger, ct).ConfigureAwait(false), ct);
+		_ = Task.Run(async () => await runner.RunIterationAsync(job, trigger, ct).ConfigureAwait(false), ct);
 	}
 
 	private void HandleKeyAdded(string stageName, string key) {
-		if (!_keyspace.Add(stageName, key)) return;
+		if (!keyspace.Add(stageName, key)) return;
 		// Каждая стадия с DependsOnInstance(stageName) может получить новый инстанс.
-		foreach (var dependent in _registry.StagesDependingOnInstance(stageName)) {
+		foreach (var dependent in registry.StagesDependingOnInstance(stageName)) {
 			CreateAndStart(dependent);
 		}
 	}
 
 	private async Task HandleKeyRemovedAsync(string stageName, string key, CancellationToken ct) {
-		if (!_keyspace.Remove(stageName, key)) return;
+		if (!keyspace.Remove(stageName, key)) return;
 
 		// Транзитивное замыкание стадий, чьи инстансы могут содержать {stageName: key}.
-		var affectedStages = _registry.StagesAffectedByKeyRemoval(stageName);
-		HashSet<string> affectedStageNames = new(affectedStages.Select(s => s.Name), StringComparer.Ordinal);
+		var affectedStages = registry.StagesAffectedByKeyRemoval(stageName);
 
-		List<Job> affectedJobs = [];
-		foreach (var stage in affectedStages) {
-			foreach (var inst in _jobs.InstancesOf(stage.Name)) {
-				if (inst.DependencyKeys.TryGetValue(stageName, out var v) && string.Equals(v, key, StringComparison.Ordinal)) {
-					affectedJobs.Add(inst);
-				}
-			}
-		}
+		var affectedJobs = affectedStages
+			.SelectMany(s => jobs.InstancesOf(s.Name))
+			.Where(inst => inst.DependencyKeys.TryGetValue(stageName, out var v) && string.Equals(v, key, StringComparison.Ordinal))
+			.ToList();
 		if (affectedJobs.Count == 0) return;
 
 		// Топологически обратный порядок (листья перед корнями).
-		var sortedStages = _registry.TopologicalSortReverse(affectedStages);
-		Dictionary<string, int> stageOrderIndex = new(StringComparer.Ordinal);
-		for (int i = 0; i < sortedStages.Count; i++) {
-			stageOrderIndex[sortedStages[i].Name] = i;
-		}
+		var sortedStages = registry.TopologicalSortReverse(affectedStages);
+		var stageOrderIndex = sortedStages
+			.Select((s, i) => (s.Name, Index: i))
+			.ToDictionary(t => t.Name, t => t.Index, StringComparer.Ordinal);
 		affectedJobs.Sort((a, b) => stageOrderIndex[a.Stage.Name].CompareTo(stageOrderIndex[b.Stage.Name]));
 
 		foreach (var job in affectedJobs) {
@@ -152,12 +123,12 @@ internal sealed class EventLoop : IAsyncDisposable {
 				timer.Dispose();
 				_timers.Remove(job);
 			}
-			_jobs.Remove(job);
+			jobs.Remove(job);
 			string scope = $"{job.Stage.Name}:{job.EncodedKey}";
 			try {
-				await _stateStore.RemoveScopeAsync(scope, ct).ConfigureAwait(false);
+				await stateStore.RemoveScopeAsync(scope, ct).ConfigureAwait(false);
 			} catch (Exception ex) {
-				_logger.LogWarning(ex, "RemoveScopeAsync для {Instance} завершился с ошибкой.", job.FullyQualifiedName);
+				logger.LogWarning(ex, "RemoveScopeAsync для {Instance} завершился с ошибкой.", job.FullyQualifiedName);
 			}
 		}
 	}
@@ -174,9 +145,8 @@ internal sealed class EventLoop : IAsyncDisposable {
 
 		if (wasFirstSuccess) {
 			// Каскад: возможно теперь разрешаются зависимости других стадий.
-			foreach (var dependent in EnumerateDirectDependents(job.Stage.Name)) {
+			foreach (var dependent in EnumerateDirectDependents(job.Stage.Name))
 				CreateAndStart(dependent);
-			}
 		}
 	}
 
@@ -201,27 +171,21 @@ internal sealed class EventLoop : IAsyncDisposable {
 	}
 
 	private void CreateAndStart(StageDescriptor stage) {
-		var created = _creator.EvaluateAndCreate(stage);
-		foreach (var job in created) {
+		var created = creator.EvaluateAndCreate(stage);
+		foreach (var job in created)
 			StartTimerAndScheduleImmediate(job);
-		}
 	}
 
 	private void StartTimerAndScheduleImmediate(Job job) {
-		var timer = new JobTimer(job, _channel.Writer);
+		var timer = new JobTimer(job, channel.Writer);
 		_timers[job] = timer;
 		timer.ScheduleAt(Environment.TickCount64);
 	}
 
-	private IEnumerable<StageDescriptor> EnumerateDirectDependents(string stageName) {
-		HashSet<string> seen = new(StringComparer.Ordinal);
-		foreach (var s in _registry.StagesDependingOn(stageName)) {
-			if (seen.Add(s.Name)) yield return s;
-		}
-		foreach (var s in _registry.StagesDependingOnInstance(stageName)) {
-			if (seen.Add(s.Name)) yield return s;
-		}
-	}
+	private IEnumerable<StageDescriptor> EnumerateDirectDependents(string stageName) =>
+		registry.StagesDependingOn(stageName)
+			.Concat(registry.StagesDependingOnInstance(stageName))
+			.DistinctBy(s => s.Name, StringComparer.Ordinal);
 
 	public ValueTask DisposeAsync() {
 		foreach (var timer in _timers.Values) timer.Dispose();

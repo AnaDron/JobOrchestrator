@@ -4,19 +4,19 @@ namespace JobOrchestrator.Internal;
 /// Граф стадий после сборки. Валидирует отсутствие циклов и висячих зависимостей.
 /// Предоставляет helper'ы для каскада зависимостей и каскадного удаления.
 /// </summary>
-internal sealed class StageRegistry {
-	private readonly Dictionary<string, StageDescriptor> _byName;
+internal sealed class StageRegistry(IReadOnlyList<StageDescriptor> stages) {
+	private readonly Dictionary<string, StageDescriptor> _byName = Build(stages);
 
-	public StageRegistry(IReadOnlyList<StageDescriptor> stages) {
+	private static Dictionary<string, StageDescriptor> Build(IReadOnlyList<StageDescriptor> stages) {
 		ArgumentNullException.ThrowIfNull(stages);
-		_byName = new Dictionary<string, StageDescriptor>(stages.Count, StringComparer.Ordinal);
+		var dict = new Dictionary<string, StageDescriptor>(stages.Count, StringComparer.Ordinal);
 		foreach (var s in stages) {
-			if (!_byName.TryAdd(s.Name, s)) {
+			if (!dict.TryAdd(s.Name, s))
 				throw new JobConfigurationException($"Дубль имени стадии: '{s.Name}'.");
-			}
 		}
-		ValidateNoDanglingDependencies();
-		ValidateNoCycles();
+		ValidateNoDanglingDependencies(dict);
+		ValidateNoCycles(dict);
+		return dict;
 	}
 
 	public StageDescriptor Get(string name) {
@@ -35,32 +35,20 @@ internal sealed class StageRegistry {
 	public IReadOnlyCollection<StageDescriptor> AllStages => _byName.Values;
 
 	/// <summary>Стадии, имеющие <c>DependsOnInstance(stageName)</c> в своих зависимостях.</summary>
-	public IReadOnlyList<StageDescriptor> StagesDependingOnInstance(string stageName) {
-		List<StageDescriptor> result = [];
-		foreach (var s in _byName.Values) {
-			foreach (var d in s.Dependencies) {
-				if (d.Mode == DependencyMode.Instance && string.Equals(d.TargetStageName, stageName, StringComparison.Ordinal)) {
-					result.Add(s);
-					break;
-				}
-			}
-		}
-		return result;
-	}
+	public IReadOnlyList<StageDescriptor> StagesDependingOnInstance(string stageName) =>
+		_byName.Values
+			.Where(s => s.Dependencies.Any(d =>
+				d.Mode == DependencyMode.Instance &&
+				string.Equals(d.TargetStageName, stageName, StringComparison.Ordinal)))
+			.ToList();
 
 	/// <summary>Стадии, имеющие <c>DependsOn(stageName)</c> в своих зависимостях.</summary>
-	public IReadOnlyList<StageDescriptor> StagesDependingOn(string stageName) {
-		List<StageDescriptor> result = [];
-		foreach (var s in _byName.Values) {
-			foreach (var d in s.Dependencies) {
-				if (d.Mode == DependencyMode.Whole && string.Equals(d.TargetStageName, stageName, StringComparison.Ordinal)) {
-					result.Add(s);
-					break;
-				}
-			}
-		}
-		return result;
-	}
+	public IReadOnlyList<StageDescriptor> StagesDependingOn(string stageName) =>
+		_byName.Values
+			.Where(s => s.Dependencies.Any(d =>
+				d.Mode == DependencyMode.Whole &&
+				string.Equals(d.TargetStageName, stageName, StringComparison.Ordinal)))
+			.ToList();
 
 	/// <summary>
 	/// Транзитивное замыкание стадий, инстансы которых могут унаследовать компонент ключа от <paramref name="stageName"/>.
@@ -72,22 +60,14 @@ internal sealed class StageRegistry {
 		queue.Enqueue(stageName);
 		while (queue.Count > 0) {
 			string current = queue.Dequeue();
-			foreach (var s in _byName.Values) {
-				if (visited.Contains(s.Name)) continue;
-				foreach (var d in s.Dependencies) {
-					if (string.Equals(d.TargetStageName, current, StringComparison.Ordinal)) {
-						visited.Add(s.Name);
-						queue.Enqueue(s.Name);
-						break;
-					}
-				}
+			foreach (var s in _byName.Values.Where(s =>
+				!visited.Contains(s.Name) &&
+				s.Dependencies.Any(d => string.Equals(d.TargetStageName, current, StringComparison.Ordinal)))) {
+				visited.Add(s.Name);
+				queue.Enqueue(s.Name);
 			}
 		}
-		List<StageDescriptor> result = new(visited.Count);
-		foreach (var name in visited) {
-			result.Add(_byName[name]);
-		}
-		return result;
+		return visited.Select(name => _byName[name]).ToList();
 	}
 
 	/// <summary>
@@ -117,26 +97,22 @@ internal sealed class StageRegistry {
 		order.Add(s);
 	}
 
-	private void ValidateNoDanglingDependencies() {
-		foreach (var s in _byName.Values) {
-			foreach (var d in s.Dependencies) {
-				if (!_byName.ContainsKey(d.TargetStageName)) {
-					throw new JobConfigurationException(
-						$"Стадия '{s.Name}' зависит от несуществующей стадии '{d.TargetStageName}'.");
-				}
-			}
-		}
+	private static void ValidateNoDanglingDependencies(Dictionary<string, StageDescriptor> byName) {
+		foreach (var s in byName.Values)
+			foreach (var d in s.Dependencies.Where(d => !byName.ContainsKey(d.TargetStageName)))
+				throw new JobConfigurationException(
+					$"Стадия '{s.Name}' зависит от несуществующей стадии '{d.TargetStageName}'.");
 	}
 
-	private void ValidateNoCycles() {
-		foreach (var s in _byName.Values) {
+	private static void ValidateNoCycles(Dictionary<string, StageDescriptor> byName) {
+		foreach (var s in byName.Values) {
 			HashSet<string> visited = new(StringComparer.Ordinal);
 			Stack<string> path = new();
-			DfsCheck(s.Name, visited, path);
+			DfsCheck(s.Name, byName, visited, path);
 		}
 	}
 
-	private void DfsCheck(string node, HashSet<string> visited, Stack<string> path) {
+	private static void DfsCheck(string node, Dictionary<string, StageDescriptor> byName, HashSet<string> visited, Stack<string> path) {
 		if (path.Contains(node)) {
 			List<string> cycle = [.. path.Reverse(), node];
 			throw new JobConfigurationException(
@@ -144,10 +120,9 @@ internal sealed class StageRegistry {
 		}
 		if (!visited.Add(node)) return;
 		path.Push(node);
-		if (_byName.TryGetValue(node, out var desc)) {
-			foreach (var d in desc.Dependencies) {
-				DfsCheck(d.TargetStageName, visited, path);
-			}
+		if (byName.TryGetValue(node, out var desc)) {
+			foreach (var d in desc.Dependencies)
+				DfsCheck(d.TargetStageName, byName, visited, path);
 		}
 		path.Pop();
 	}

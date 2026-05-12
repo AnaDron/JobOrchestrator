@@ -2,23 +2,16 @@ using JobOrchestrator.Internal;
 
 namespace JobOrchestrator.Configuration.Internal;
 
-internal sealed class StageBuilder : IStageBuilder {
+internal sealed class StageBuilder(string name, JobDefaults defaults) : IStageBuilder {
 	private readonly List<StageDependency> _dependencies = [];
 
-	public string Name { get; }
+	public string Name { get; } = name;
 	public Type? ServiceType { get; private set; }
 	public TimeSpan Interval { get; private set; }
-	public RetryPolicy RetryPolicy { get; private set; }
-	public TimeSpan Debounce { get; private set; }
-	public TimeSpan? ExecutionTimeout { get; private set; }
-
-	public StageBuilder(string name, JobDefaults defaults) {
-		Name = name;
-		// Snapshot defaults в момент создания стадии — последующие изменения JobDefaults не влияют.
-		RetryPolicy = defaults.RetryAfterFailure;
-		Debounce = defaults.Debounce;
-		ExecutionTimeout = defaults.ExecutionTimeout;
-	}
+	// Snapshot defaults в момент создания стадии — последующие изменения JobDefaults не влияют.
+	public RetryPolicy RetryPolicy { get; private set; } = defaults.RetryAfterFailure;
+	public TimeSpan Debounce { get; private set; } = defaults.Debounce;
+	public TimeSpan? ExecutionTimeout { get; private set; } = defaults.ExecutionTimeout;
 
 	public IStageBuilder HandledBy<TService>() where TService : class, IJobService {
 		ServiceType = typeof(TService);

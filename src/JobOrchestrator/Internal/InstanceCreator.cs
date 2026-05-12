@@ -13,16 +13,13 @@ namespace JobOrchestrator.Internal;
 /// что обеспечивает стабильный FullyQualifiedName.
 /// </summary>
 internal sealed class InstanceCreator(JobManager jobs, KeyspaceRegistry keyspace) {
-	private readonly JobManager _jobs = jobs;
-	private readonly KeyspaceRegistry _keyspace = keyspace;
-
 	public List<Job> EvaluateAndCreate(StageDescriptor stage) {
 		List<Job> created = [];
 
 		if (stage.Dependencies.Count == 0) {
 			// Безключевая стадия → один инстанс с пустыми DependencyKeys.
 			var empty = new Dictionary<string, string>(StringComparer.Ordinal);
-			if (!_jobs.Exists(stage.Name, empty)) {
+			if (!jobs.Exists(stage.Name, empty)) {
 				created.Add(MaterializeInstance(stage, empty));
 			}
 			return created;
@@ -42,28 +39,23 @@ internal sealed class InstanceCreator(JobManager jobs, KeyspaceRegistry keyspace
 		foreach (var combo in CartesianProduct(dimensions)) {
 			var merged = TryMergeOrdered(combo);
 			if (merged is null) continue;
-			if (_jobs.Exists(stage.Name, merged)) continue;
-			if (!DependencyResolver.AllDependenciesResolved(stage, merged, _jobs, _keyspace)) continue;
+			if (jobs.Exists(stage.Name, merged)) continue;
+			if (!DependencyResolver.AllDependenciesResolved(stage, merged, jobs, keyspace)) continue;
 			created.Add(MaterializeInstance(stage, merged));
 		}
 		return created;
 	}
 
 	private List<IReadOnlyDictionary<string, string>> ComputeDimension(StageDependency dep) {
-		List<IReadOnlyDictionary<string, string>> result = [];
 		if (dep.Mode == DependencyMode.Instance) {
-			foreach (var k in _keyspace.Get(dep.TargetStageName)) {
-				var single = new Dictionary<string, string>(StringComparer.Ordinal) { [dep.TargetStageName] = k };
-				result.Add(single);
-			}
-		} else {
-			foreach (var inst in _jobs.InstancesOf(dep.TargetStageName)) {
-				if (inst.LastSuccess.HasValue) {
-					result.Add(inst.DependencyKeys);
-				}
-			}
+			return keyspace.Get(dep.TargetStageName)
+				.Select(k => (IReadOnlyDictionary<string, string>)new Dictionary<string, string>(StringComparer.Ordinal) { [dep.TargetStageName] = k })
+				.ToList();
 		}
-		return result;
+		return jobs.InstancesOf(dep.TargetStageName)
+			.Where(inst => inst.LastSuccess.HasValue)
+			.Select(inst => inst.DependencyKeys)
+			.ToList();
 	}
 
 	/// <summary>
@@ -94,7 +86,7 @@ internal sealed class InstanceCreator(JobManager jobs, KeyspaceRegistry keyspace
 			EncodedKey = encoded,
 			NextTickAtMs = Environment.TickCount64,    // готов к немедленному запуску
 		};
-		_jobs.Add(job);
+		jobs.Add(job);
 		return job;
 	}
 

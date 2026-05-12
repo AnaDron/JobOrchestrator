@@ -5,14 +5,8 @@ namespace JobOrchestrator.Internal;
 /// </summary>
 internal static class DependencyResolver {
 	/// <summary>Проверка совместимости двух словарей: общие ключи должны иметь одинаковые значения.</summary>
-	public static bool AreCompatible(IReadOnlyDictionary<string, string> a, IReadOnlyDictionary<string, string> b) {
-		foreach (var kv in a) {
-			if (b.TryGetValue(kv.Key, out var bv) && !string.Equals(bv, kv.Value, StringComparison.Ordinal)) {
-				return false;
-			}
-		}
-		return true;
-	}
+	public static bool AreCompatible(IReadOnlyDictionary<string, string> a, IReadOnlyDictionary<string, string> b) =>
+		!a.Any(kv => b.TryGetValue(kv.Key, out var bv) && !string.Equals(bv, kv.Value, StringComparison.Ordinal));
 
 	/// <summary>
 	/// Найти инстанс <paramref name="targetStageName"/>, чьи <c>DependencyKeys</c> являются проекцией
@@ -20,19 +14,10 @@ internal static class DependencyResolver {
 	/// target присутствуют в candidate с теми же значениями). Для безключевой target — единственный
 	/// инстанс с пустыми DependencyKeys.
 	/// </summary>
-	public static Job? FindPairedInstance(JobManager jobs, string targetStageName, IReadOnlyDictionary<string, string> candidateKeys) {
-		foreach (var inst in jobs.InstancesOf(targetStageName)) {
-			bool match = true;
-			foreach (var kv in inst.DependencyKeys) {
-				if (!candidateKeys.TryGetValue(kv.Key, out var v) || !string.Equals(v, kv.Value, StringComparison.Ordinal)) {
-					match = false;
-					break;
-				}
-			}
-			if (match) return inst;
-		}
-		return null;
-	}
+	public static Job? FindPairedInstance(JobManager jobs, string targetStageName, IReadOnlyDictionary<string, string> candidateKeys) =>
+		jobs.InstancesOf(targetStageName)
+			.FirstOrDefault(inst => inst.DependencyKeys.All(kv =>
+				candidateKeys.TryGetValue(kv.Key, out var v) && string.Equals(v, kv.Value, StringComparison.Ordinal)));
 
 	/// <summary>
 	/// Проверить, разрешены ли все зависимости стадии <paramref name="stage"/> для кандидата с ключами <paramref name="keys"/>.
@@ -47,18 +32,11 @@ internal static class DependencyResolver {
 		IReadOnlyDictionary<string, string> keys,
 		JobManager jobs,
 		KeyspaceRegistry keyspace
-	) {
-		foreach (var dep in stage.Dependencies) {
-			if (dep.Mode == DependencyMode.Instance) {
-				if (!keys.TryGetValue(dep.TargetStageName, out var k)) return false;
-				if (!keyspace.Contains(dep.TargetStageName, k)) return false;
-				var paired = FindPairedInstance(jobs, dep.TargetStageName, keys);
-				if (paired is null || paired.LastSuccess is null) return false;
-			} else {
-				var paired = FindPairedInstance(jobs, dep.TargetStageName, keys);
-				if (paired is null || paired.LastSuccess is null) return false;
-			}
-		}
-		return true;
-	}
+	) => stage.Dependencies.All(dep => {
+		if (dep.Mode == DependencyMode.Instance &&
+			(!keys.TryGetValue(dep.TargetStageName, out var k) || !keyspace.Contains(dep.TargetStageName, k)))
+			return false;
+		var paired = FindPairedInstance(jobs, dep.TargetStageName, keys);
+		return paired is { LastSuccess: not null };
+	});
 }
