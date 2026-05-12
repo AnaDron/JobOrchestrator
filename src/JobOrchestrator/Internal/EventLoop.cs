@@ -85,7 +85,7 @@ internal sealed class EventLoop(
 	private void BeginIteration(Job job, TriggerSource trigger, CancellationToken ct) {
 		job.State = JobLifecycleState.Running;
 		// Fire-and-forget на ThreadPool: StageRunner внутри публикует StageCompleted/Failed в Channel.
-		_ = Task.Run(async () => await runner.RunIterationAsync(job, trigger, ct).ConfigureAwait(false), ct);
+		_ = Task.Run(() => runner.RunIterationAsync(job, trigger, ct), ct);
 	}
 
 	private void HandleKeyAdded(string stageName, string key) {

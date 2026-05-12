@@ -19,18 +19,13 @@ internal sealed class StageRegistry(IReadOnlyList<StageDescriptor> stages) {
 		return dict;
 	}
 
-	public StageDescriptor Get(string name) {
-		if (!_byName.TryGetValue(name, out var s)) {
-			throw new KeyNotFoundException($"Стадия '{name}' не найдена в реестре.");
-		}
-		return s;
-	}
+	public StageDescriptor Get(string name) =>
+		_byName.TryGetValue(name, out var s)
+			? s
+			: throw new KeyNotFoundException($"Стадия '{name}' не найдена в реестре.");
 
-	public bool TryGet(string name, out StageDescriptor? descriptor) {
-		bool ok = _byName.TryGetValue(name, out var s);
-		descriptor = s;
-		return ok;
-	}
+	public bool TryGet(string name, out StageDescriptor? descriptor) =>
+		_byName.TryGetValue(name, out descriptor);
 
 	public IReadOnlyCollection<StageDescriptor> AllStages => _byName.Values;
 

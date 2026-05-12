@@ -14,7 +14,6 @@ internal sealed class StageRunner(
 	Channel<OrchestratorEvent> channel,
 	ILoggerFactory loggerFactory
 ) {
-	private readonly ChannelWriter<OrchestratorEvent> _events = channel.Writer;
 	private readonly ILogger _logger = loggerFactory.CreateLogger("JobOrchestrator.StageRunner");
 
 	public async Task RunIterationAsync(Job job, TriggerSource trigger, CancellationToken stoppingToken) {
@@ -42,14 +41,14 @@ internal sealed class StageRunner(
 				lastSuccessAt: job.LastSuccess,
 				dependencyKeys: job.DependencyKeys,
 				fullyQualifiedName: job.FullyQualifiedName,
-				addKey: k => _events.TryWrite(new KeyAddedEvent(job.Stage.Name, k)),
-				removeKey: k => _events.TryWrite(new KeyRemovedEvent(job.Stage.Name, k))
+				addKey: k => channel.Writer.TryWrite(new KeyAddedEvent(job.Stage.Name, k)),
+				removeKey: k => channel.Writer.TryWrite(new KeyRemovedEvent(job.Stage.Name, k))
 			);
 
 			_logger.LogDebug("Старт итерации {Instance} (trigger={Trigger}).", job.FullyQualifiedName, trigger);
 			await service.ExecuteAsync(jobContext, runCts.Token).ConfigureAwait(false);
 			_logger.LogDebug("Итерация {Instance} успешно завершена.", job.FullyQualifiedName);
-			_events.TryWrite(new StageCompletedEvent(job));
+			channel.Writer.TryWrite(new StageCompletedEvent(job));
 		} catch (Exception ex) {
 			// Cancellation тоже считается неуспехом (watchdog / shutdown). Эти случаи различаем в log-level.
 			if (ex is OperationCanceledException && stoppingToken.IsCancellationRequested) {
@@ -59,7 +58,7 @@ internal sealed class StageRunner(
 			} else {
 				_logger.LogWarning(ex, "Итерация {Instance} завершилась с ошибкой.", job.FullyQualifiedName);
 			}
-			_events.TryWrite(new StageFailedEvent(job, ex));
+			channel.Writer.TryWrite(new StageFailedEvent(job, ex));
 		} finally {
 			runCts.Dispose();
 			job.RunCts = null;
