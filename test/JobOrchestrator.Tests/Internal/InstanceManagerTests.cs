@@ -91,8 +91,8 @@ public sealed class InstanceManagerTests {
 		mgr.Add(inst);
 
 		var overview = mgr.ToOverview();
-		overview.Jobs.Should().ContainSingle();
-		var info = overview.Jobs[0];
+		overview.Instances.Should().ContainSingle();
+		var info = overview.Instances[0];
 		info.StageName.Should().Be("shops");
 		info.FullyQualifiedName.Should().Be("shops[]");
 		info.LastSuccess.Should().NotBeNull();

@@ -11,18 +11,28 @@ namespace JobOrchestrator.Internal;
 /// </summary>
 internal static class DependencyKey {
 	/// <summary>
-	/// Канонический encoding: компоненты отсортированы по имени для словарного hash-совпадения
-	/// независимо от порядка вставки. Используется ТОЛЬКО для InstanceManager-словарного ключа,
-	/// не для логов. Для логов — <see cref="FormatFullyQualifiedName"/>.
+	/// Канонический encoding: компоненты отсортированы по имени; спецсимволы (<c>|</c>, <c>=</c>, <c>\</c>) экранируются
+	/// обратным слэшем, чтобы исключить collision-возможность вида <c>{a: "1|b=2"}</c> vs <c>{a: "1", b: "2"}</c>.
+	/// Используется ТОЛЬКО для словарного hash-ключа в <see cref="InstanceManager"/>, не для логов.
+	/// Для логов — <see cref="FormatFullyQualifiedName"/>.
 	/// </summary>
 	public static string Encode(IReadOnlyDictionary<string, string> keys) {
 		if (keys.Count == 0) return string.Empty;
 		var sb = new StringBuilder();
 		foreach (var kv in keys.OrderBy(kv => kv.Key, StringComparer.Ordinal)) {
 			if (sb.Length > 0) sb.Append('|');
-			sb.Append(kv.Key).Append('=').Append(kv.Value);
+			AppendEscaped(sb, kv.Key);
+			sb.Append('=');
+			AppendEscaped(sb, kv.Value);
 		}
 		return sb.ToString();
+	}
+
+	private static void AppendEscaped(StringBuilder sb, string value) {
+		foreach (char c in value) {
+			if (c is '\\' or '|' or '=') sb.Append('\\');
+			sb.Append(c);
+		}
 	}
 
 	/// <summary>

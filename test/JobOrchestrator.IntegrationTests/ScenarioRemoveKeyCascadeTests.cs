@@ -45,8 +45,8 @@ public sealed class ScenarioRemoveKeyCascadeTests {
 			// Дать event loop'у обработать каскадное удаление.
 			await Task.Delay(500).ConfigureAwait(false);
 
-			var overview = orchestrator.GetOverview();
-			var fqns = overview.Jobs.Select(j => j.FullyQualifiedName).ToHashSet();
+			var overview = await orchestrator.GetOverviewAsync().ConfigureAwait(false);
+			var fqns = overview.Instances.Select(j => j.FullyQualifiedName).ToHashSet();
 
 			// u1-ветвь удалена:
 			fqns.Should().NotContain("productGroups[shops=u1]");

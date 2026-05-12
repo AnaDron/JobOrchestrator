@@ -12,4 +12,6 @@ public enum TriggerResult {
 	NotFound,
 	/// <summary>Auto-триггер в окне retry-delay после неуспеха. Manual игнорирует это окно.</summary>
 	WaitingRetry,
+	/// <summary>Event loop оркестратора крашнулся или не стартовал; вызов не может быть обслужен.</summary>
+	Faulted,
 }

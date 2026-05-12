@@ -6,6 +6,9 @@ namespace JobOrchestrator.Hosting;
 
 /// <summary>Регистрация SDK в DI-контейнере хоста.</summary>
 public static class ServiceCollectionExtensions {
+	/// <summary>Размер capacity для bounded-канала событий event loop'а. Backpressure-fail-fast при заполнении.</summary>
+	private const int ChannelCapacity = 10_000;
+
 	/// <summary>
 	/// Регистрирует Job Orchestrator с графом стадий, описанным в <paramref name="configure"/>.
 	/// Также регистрирует все <see cref="IJobService"/>-реализации как scoped в DI (per-итерация scope).
@@ -35,8 +38,14 @@ public static class ServiceCollectionExtensions {
 		services.AddSingleton<InstanceCreator>();
 		services.AddSingleton<StageRunner>();
 		services.AddSingleton<EventLoop>();
-		services.AddSingleton(_ => Channel.CreateUnbounded<OrchestratorEvent>(
-			new UnboundedChannelOptions { SingleReader = true, SingleWriter = false }));
+		// Bounded channel: backpressure через Wait. При заполнении внешние писатели (Manual triggers,
+		// RegisterKey) подождут места; event loop как consumer обычно их быстро разгружает.
+		services.AddSingleton(_ => Channel.CreateBounded<OrchestratorEvent>(new BoundedChannelOptions(ChannelCapacity) {
+			SingleReader = true,
+			SingleWriter = false,
+			FullMode = BoundedChannelFullMode.Wait,
+		}));
+		services.AddSingleton<OrchestratorLifecycle>();
 		services.AddSingleton<IJobOrchestrator, JobOrchestratorRuntime>();
 		services.AddHostedService<JobOrchestratorHostedService>();
 

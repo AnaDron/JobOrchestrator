@@ -1,7 +1,7 @@
 namespace JobOrchestrator.Abstractions;
 
-/// <summary>Снимок состояния одного инстанса для <see cref="JobOverview"/>.</summary>
-public sealed record JobInfo {
+/// <summary>Снимок состояния одного инстанса для <see cref="InstancesOverview"/>.</summary>
+public sealed record InstanceInfo {
 	/// <summary>Имя стадии этого инстанса.</summary>
 	public required string StageName { get; init; }
 

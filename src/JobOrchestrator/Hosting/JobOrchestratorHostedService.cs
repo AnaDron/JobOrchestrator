@@ -5,10 +5,13 @@ namespace JobOrchestrator.Hosting;
 
 /// <summary>
 /// Стартует <see cref="EventLoop"/> как BackgroundService. Перехватывает крах event loop'а
-/// в <c>LogCritical</c> и НЕ пере-throw-ит — иначе <see cref="BackgroundService"/> останавил бы весь хост.
+/// в <c>LogCritical</c> и выставляет <see cref="OrchestratorLifecycle.MarkFaulted"/> —
+/// <see cref="IJobOrchestrator"/>-фасад начинает fail-fast для всех внешних вызовов.
+/// При штатном shutdown закрывает channel через <see cref="OrchestratorLifecycle.CloseChannel"/>.
 /// </summary>
 internal sealed class JobOrchestratorHostedService(
 	EventLoop eventLoop,
+	OrchestratorLifecycle lifecycle,
 	ILogger<JobOrchestratorHostedService> logger
 ) : BackgroundService {
 	private readonly Guid _instanceId = Guid.NewGuid();
@@ -26,10 +29,13 @@ internal sealed class JobOrchestratorHostedService(
 	protected override async Task ExecuteAsync(CancellationToken stoppingToken) {
 		try {
 			await eventLoop.RunAsync(stoppingToken).ConfigureAwait(false);
+			// Штатный shutdown — закрываем channel, чтобы внешние вызовы получили fail-fast вместо подвисания.
+			lifecycle.CloseChannel();
 		} catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) {
-			// Нормальный shutdown.
+			lifecycle.CloseChannel();
 		} catch (Exception ex) {
 			logger.LogCritical(ex, "JobOrchestrator event loop crashed; оркестрация отключена до рестарта приложения.");
+			lifecycle.MarkFaulted();
 			// НЕ throw — иначе BackgroundService.StopHost остановит весь хост.
 		}
 	}

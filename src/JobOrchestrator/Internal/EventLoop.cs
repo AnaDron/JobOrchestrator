@@ -7,6 +7,14 @@ namespace JobOrchestrator.Internal;
 /// Single-threaded consumer событий оркестратора. Все state-transitions инстансов происходят здесь;
 /// итерации запускаются на ThreadPool через <see cref="StageRunner"/>.
 /// </summary>
+/// <remarks>
+/// Координация удаления инстансов: при <see cref="KeyRemovedEvent"/> аффектированные инстансы переезжают
+/// в <c>_terminating</c> set и удаляются из <see cref="InstanceManager"/> сразу (чтобы новые триггеры
+/// не находили их). Running-итерациям отменяется <c>RunCts</c>; <c>RemoveScopeAsync</c> откладывается
+/// до момента, когда итерация физически завершилась (приходит <see cref="StageCompletedEvent"/> или
+/// <see cref="StageFailedEvent"/>). События <see cref="KeyAddedEvent"/>/<see cref="KeyRemovedEvent"/>,
+/// испущенные из terminating-инстанса, отфильтровываются по <c>Source</c>-полю.
+/// </remarks>
 internal sealed class EventLoop(
 	StageRegistry registry,
 	InstanceManager instances,
@@ -20,6 +28,9 @@ internal sealed class EventLoop(
 ) : IAsyncDisposable {
 	private readonly TimeProvider _timeProvider = timeProvider ?? TimeProvider.System;
 	private readonly Dictionary<StageInstance, InstanceTimer> _timers = [];
+	// Инстансы, для которых был запрошен cleanup, но running-итерация ещё не завершилась.
+	// Cleanup завершается в обработчике StageCompleted/Failed для этого инстанса.
+	private readonly HashSet<StageInstance> _terminating = [];
 
 	public async Task RunAsync(CancellationToken stoppingToken) {
 		logger.LogInformation("JobOrchestrator starting, stages={StageCount}", registry.AllStages.Count);
@@ -34,6 +45,8 @@ internal sealed class EventLoop(
 			}
 		} catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) {
 			// Нормальный shutdown.
+		} catch (ChannelClosedException) {
+			// Канал закрыт извне (lifecycle.MarkFaulted/CloseChannel). Нормальный shutdown.
 		}
 		logger.LogInformation("JobOrchestrator stopped.");
 	}
@@ -47,10 +60,11 @@ internal sealed class EventLoop(
 		switch (evt) {
 			case TimerTickedEvent tt: HandleTimerTick(tt.Instance, ct); break;
 			case ManualTriggerRequestedEvent mtr: HandleManualTrigger(mtr, ct); break;
-			case KeyAddedEvent ka: HandleKeyAdded(ka.StageName, ka.Key); break;
-			case KeyRemovedEvent kr: await HandleKeyRemovedAsync(kr.StageName, kr.Key, ct).ConfigureAwait(false); break;
-			case StageCompletedEvent sc: HandleStageCompleted(sc.Instance); break;
-			case StageFailedEvent sf: HandleStageFailed(sf.Instance, sf.Exception); break;
+			case KeyAddedEvent ka: HandleKeyAdded(ka.StageName, ka.Key, ka.Source); break;
+			case KeyRemovedEvent kr: await HandleKeyRemovedAsync(kr.StageName, kr.Key, kr.Source, ct).ConfigureAwait(false); break;
+			case StageCompletedEvent sc: await HandleStageCompletedAsync(sc.Instance, ct).ConfigureAwait(false); break;
+			case StageFailedEvent sf: await HandleStageFailedAsync(sf.Instance, sf.Exception, ct).ConfigureAwait(false); break;
+			case OverviewRequestedEvent or: HandleOverviewRequested(or); break;
 			default:
 				logger.LogWarning("Неизвестный тип события: {EventType}", evt.GetType().Name);
 				break;
@@ -82,19 +96,42 @@ internal sealed class EventLoop(
 
 	private void BeginIteration(StageInstance instance, TriggerSource trigger, CancellationToken ct) {
 		instance.State = InstanceLifecycleState.Running;
+		logger.LogDebug("BeginIteration {Instance} (trigger={Trigger})", instance.FullyQualifiedName, trigger);
 		// Fire-and-forget на ThreadPool: StageRunner внутри публикует StageCompleted/Failed в Channel.
-		_ = Task.Run(() => runner.RunIterationAsync(instance, trigger, ct), ct);
+		_ = Task.Run(async () => await runner.RunIterationAsync(instance, trigger, ct).ConfigureAwait(false), ct);
 	}
 
-	private void HandleKeyAdded(string stageName, string key) {
-		if (!keyspace.Add(stageName, key)) return;
-		// Каждая стадия с DependsOnInstance(stageName) может получить новый инстанс.
+	private void HandleKeyAdded(string stageName, string key, StageInstance? source) {
+		if (source is not null && _terminating.Contains(source)) {
+			logger.LogDebug("Ignored AddKey({StageName},{Key}) from terminating instance {Instance}", stageName, key, source.FullyQualifiedName);
+			return;
+		}
+		if (!registry.TryGet(stageName, out _)) {
+			logger.LogWarning("AddKey({StageName},{Key}) — стадия не зарегистрирована в реестре, игнорируем", stageName, key);
+			return;
+		}
+		if (!keyspace.Add(stageName, key)) {
+			logger.LogDebug("AddKey({StageName},{Key}) — ключ уже в keyspace, no-op", stageName, key);
+			return;
+		}
+		logger.LogDebug("AddKey({StageName},{Key}) — ключ добавлен; cascade зависимым стадиям", stageName, key);
 		foreach (var dependent in registry.StagesDependingOnInstance(stageName))
 			CreateAndStart(dependent);
 	}
 
-	private async Task HandleKeyRemovedAsync(string stageName, string key, CancellationToken ct) {
-		if (!keyspace.Remove(stageName, key)) return;
+	private async Task HandleKeyRemovedAsync(string stageName, string key, StageInstance? source, CancellationToken ct) {
+		if (source is not null && _terminating.Contains(source)) {
+			logger.LogDebug("Ignored RemoveKey({StageName},{Key}) from terminating instance {Instance}", stageName, key, source.FullyQualifiedName);
+			return;
+		}
+		if (!registry.TryGet(stageName, out _)) {
+			logger.LogWarning("RemoveKey({StageName},{Key}) — стадия не зарегистрирована, игнорируем", stageName, key);
+			return;
+		}
+		if (!keyspace.Remove(stageName, key)) {
+			logger.LogDebug("RemoveKey({StageName},{Key}) — ключа не было, no-op", stageName, key);
+			return;
+		}
 
 		// Транзитивное замыкание стадий, чьи инстансы могут содержать {stageName: key}.
 		var affectedStages = registry.StagesAffectedByKeyRemoval(stageName);
@@ -112,24 +149,43 @@ internal sealed class EventLoop(
 			.ToDictionary(t => t.Name, t => t.Index, StringComparer.Ordinal);
 		affected.Sort((a, b) => stageOrderIndex[a.Stage.Name].CompareTo(stageOrderIndex[b.Stage.Name]));
 
+		logger.LogDebug("RemoveKey({StageName},{Key}) каскадирует {Count} инстансов в порядке листьев→корней",
+			stageName, key, affected.Count);
+
 		foreach (var instance in affected) {
-			if (instance.State == InstanceLifecycleState.Running && instance.RunCts is { } cts) {
-				try { cts.Cancel(); } catch (ObjectDisposedException) { /* race на завершение */ }
-			}
+			// Извлекаем из active map (новые триггеры/lookup-ы больше не найдут).
+			instances.Remove(instance);
 			if (_timers.TryGetValue(instance, out var timer)) {
 				timer.Dispose();
 				_timers.Remove(instance);
 			}
-			instances.Remove(instance);
-			try {
-				await stateStore.RemoveScopeAsync(instance.StateScope, ct).ConfigureAwait(false);
-			} catch (Exception ex) {
-				logger.LogWarning(ex, "RemoveScopeAsync для {Instance} завершился с ошибкой.", instance.FullyQualifiedName);
+
+			if (instance.State == InstanceLifecycleState.Running && instance.RunCts is { } cts) {
+				// Сначала помечаем terminating (чтобы фильтровать события от ожидающей завершения итерации),
+				// потом cancel. RemoveScopeAsync произойдёт в StageCompleted/Failed handler-е.
+				_terminating.Add(instance);
+				try { cts.Cancel(); } catch (ObjectDisposedException) { /* race на завершение */ }
+				logger.LogDebug("Cascade-cancel running instance {Instance}; cleanup отложен до завершения итерации", instance.FullyQualifiedName);
+			} else {
+				// Не running — можно очистить scope немедленно.
+				logger.LogDebug("Cascade-remove idle instance {Instance}; RemoveScopeAsync синхронно", instance.FullyQualifiedName);
+				try {
+					await stateStore.RemoveScopeAsync(instance.StateScope, ct).ConfigureAwait(false);
+				} catch (Exception ex) {
+					logger.LogWarning(ex, "RemoveScopeAsync для {Instance} завершился с ошибкой.", instance.FullyQualifiedName);
+				}
 			}
 		}
 	}
 
-	private void HandleStageCompleted(StageInstance instance) {
+	private async Task HandleStageCompletedAsync(StageInstance instance, CancellationToken ct) {
+		if (_terminating.Remove(instance)) {
+			// Terminating-инстанс наконец завершил свою running-итерацию — теперь безопасно вычистить scope.
+			logger.LogDebug("Terminating instance {Instance} закончил итерацию (success); финализируем cleanup", instance.FullyQualifiedName);
+			await FinalizeTerminatingAsync(instance, ct).ConfigureAwait(false);
+			return;
+		}
+
 		bool wasFirstSuccess = !instance.LastSuccess.HasValue;
 		var now = _timeProvider.GetUtcNow();
 		instance.LastAttempt = now;
@@ -140,13 +196,19 @@ internal sealed class EventLoop(
 		ScheduleNextTick(instance, instance.Stage.Interval);
 
 		if (wasFirstSuccess) {
-			// Каскад: возможно теперь разрешаются зависимости других стадий.
+			logger.LogDebug("First success {Instance}; cascade зависимым стадиям", instance.FullyQualifiedName);
 			foreach (var dependent in EnumerateDirectDependents(instance.Stage.Name))
 				CreateAndStart(dependent);
 		}
 	}
 
-	private void HandleStageFailed(StageInstance instance, Exception ex) {
+	private async Task HandleStageFailedAsync(StageInstance instance, Exception ex, CancellationToken ct) {
+		if (_terminating.Remove(instance)) {
+			logger.LogDebug("Terminating instance {Instance} закончил итерацию (failure); финализируем cleanup", instance.FullyQualifiedName);
+			await FinalizeTerminatingAsync(instance, ct).ConfigureAwait(false);
+			return;
+		}
+
 		var now = _timeProvider.GetUtcNow();
 		instance.LastAttempt = now;
 		instance.ConsecutiveFailures++;
@@ -159,6 +221,24 @@ internal sealed class EventLoop(
 		ScheduleNextTick(instance, nextDelay);
 	}
 
+	private async Task FinalizeTerminatingAsync(StageInstance instance, CancellationToken ct) {
+		try {
+			await stateStore.RemoveScopeAsync(instance.StateScope, ct).ConfigureAwait(false);
+		} catch (Exception ex) {
+			logger.LogWarning(ex, "RemoveScopeAsync для terminating-инстанса {Instance} завершился с ошибкой.", instance.FullyQualifiedName);
+		}
+		// Timer уже dispose-ан в HandleKeyRemoved; инстанс уже Remove-нут из InstanceManager.
+	}
+
+	private void HandleOverviewRequested(OverviewRequestedEvent evt) {
+		try {
+			var overview = instances.ToOverview();
+			evt.Tcs.TrySetResult(overview);
+		} catch (Exception ex) {
+			evt.Tcs.TrySetException(ex);
+		}
+	}
+
 	private void ScheduleNextTick(StageInstance instance, TimeSpan delay) {
 		instance.NextTickAtMs = Environment.TickCount64 + (long)delay.TotalMilliseconds;
 		if (_timers.TryGetValue(instance, out var timer))
@@ -167,8 +247,10 @@ internal sealed class EventLoop(
 
 	private void CreateAndStart(StageDescriptor stage) {
 		var created = creator.EvaluateAndCreate(stage);
-		foreach (var instance in created)
+		foreach (var instance in created) {
+			logger.LogDebug("Создан инстанс {Instance}", instance.FullyQualifiedName);
 			StartTimerAndScheduleImmediate(instance);
+		}
 	}
 
 	private void StartTimerAndScheduleImmediate(StageInstance instance) {
@@ -185,6 +267,7 @@ internal sealed class EventLoop(
 	public ValueTask DisposeAsync() {
 		foreach (var timer in _timers.Values) timer.Dispose();
 		_timers.Clear();
+		_terminating.Clear();
 		return ValueTask.CompletedTask;
 	}
 }

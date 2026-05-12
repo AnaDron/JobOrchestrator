@@ -40,8 +40,8 @@ internal sealed class StageRunner(
 				lastSuccessAt: instance.LastSuccess,
 				dependencyKeys: instance.DependencyKeys,
 				fullyQualifiedName: instance.FullyQualifiedName,
-				addKey: k => channel.Writer.TryWrite(new KeyAddedEvent(instance.Stage.Name, k)),
-				removeKey: k => channel.Writer.TryWrite(new KeyRemovedEvent(instance.Stage.Name, k))
+				addKey: k => channel.Writer.TryWrite(new KeyAddedEvent(instance.Stage.Name, k, instance)),
+				removeKey: k => channel.Writer.TryWrite(new KeyRemovedEvent(instance.Stage.Name, k, instance))
 			);
 
 			_logger.LogDebug("Старт итерации {Instance} (trigger={Trigger}).", instance.FullyQualifiedName, trigger);

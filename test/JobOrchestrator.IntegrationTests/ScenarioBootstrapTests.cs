@@ -100,8 +100,8 @@ public sealed class ScenarioBootstrapTests {
 		await host.StartAsync().ConfigureAwait(false);
 		try {
 			(await fakeB.WaitForCallCountAsync(1, Timeout).ConfigureAwait(false)).Should().BeTrue();
-			var overview = orchestrator.GetOverview();
-			overview.Jobs.Select(j => j.FullyQualifiedName).Should().BeEquivalentTo(["a[]", "b[]"]);
+			var overview = await orchestrator.GetOverviewAsync().ConfigureAwait(false);
+			overview.Instances.Select(j => j.FullyQualifiedName).Should().BeEquivalentTo(["a[]", "b[]"]);
 		} finally {
 			await host.StopAsync().ConfigureAwait(false);
 		}
