@@ -85,12 +85,7 @@ public sealed class DueScannerBacklogWarningTests {
 			Debounce = TimeSpan.Zero,
 			Dependencies = [],
 		};
-		var inst = new StageInstance {
-			Stage = stage,
-			DependencyKeys = new Dictionary<string, string>(StringComparer.Ordinal),
-			FullyQualifiedName = "stub[]",
-			EncodedKey = "",
-		};
+		var inst = new StageInstance { Identity = new InstanceIdentity(stage, new Dictionary<string, string>(StringComparer.Ordinal)) };
 		return new StageCompletedEvent(inst, DateTimeOffset.UtcNow);
 	}
 }

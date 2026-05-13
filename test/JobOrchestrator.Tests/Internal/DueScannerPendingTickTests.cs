@@ -35,12 +35,7 @@ public sealed class DueScannerPendingTickTests {
 		var channel = Channel.CreateUnbounded<OrchestratorEvent>();
 		var stage = MakeStage();
 		var empty = new Dictionary<string, string>(StringComparer.Ordinal);
-		var inst = new StageInstance {
-			Stage = stage,
-			DependencyKeys = empty,
-			FullyQualifiedName = "x[]",
-			EncodedKey = "",
-		};
+		var inst = new StageInstance { Identity = new InstanceIdentity(stage, empty) };
 		inst.SetMetrics(inst.Metrics with { NextAutoUtc = DateTimeOffset.UtcNow.AddMilliseconds(-1) });   // due
 		manager.Add(inst);
 
@@ -68,12 +63,7 @@ public sealed class DueScannerPendingTickTests {
 		var channel = Channel.CreateUnbounded<OrchestratorEvent>();
 		var stage = MakeStage();
 		var empty = new Dictionary<string, string>(StringComparer.Ordinal);
-		var inst = new StageInstance {
-			Stage = stage,
-			DependencyKeys = empty,
-			FullyQualifiedName = "x[]",
-			EncodedKey = "",
-		};
+		var inst = new StageInstance { Identity = new InstanceIdentity(stage, empty) };
 		inst.SetMetrics(inst.Metrics with { NextAutoUtc = DateTimeOffset.UtcNow.AddMilliseconds(-1) });
 		manager.Add(inst);
 

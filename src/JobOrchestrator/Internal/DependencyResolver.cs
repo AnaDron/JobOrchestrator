@@ -34,7 +34,7 @@ internal static class DependencyResolver {
 		KeyspaceRegistry keyspace
 	) => stage.Dependencies.All(dep => {
 		var paired = FindPairedInstance(instances, dep.TargetStageName, keys);
-		if (paired is null || paired.LastSuccess is null) return false;
+		if (paired is null || paired.Metrics.LastSuccess is null) return false;
 		if (dep.Mode == DependencyMode.Instance) {
 			// Per-emitter check: bucket именно ЭТОГО paired-инстанса как эмитера должен содержать ключ.
 			// Защищает от race-condition «keyspace.Add → KeyRemoved между построением кандидата и resolve».

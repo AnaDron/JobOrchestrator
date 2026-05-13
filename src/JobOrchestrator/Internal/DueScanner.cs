@@ -128,9 +128,9 @@ internal sealed class DueScanner(
 	private DateTimeOffset? ScanAndPublishDue(DateTimeOffset now) {
 		DateTimeOffset? nextDue = null;
 		foreach (var instance in instances.All) {
-			// Running-инстансы не тикают: их перепланирование произойдёт в StageCompleted/Failed handler-е.
+			// Running/Terminating-инстансы не тикают.
 			if (instance.State != InstanceLifecycleState.Idle) continue;
-			var next = instance.NextAutoUtc;
+			var next = instance.Metrics.NextAutoUtc;
 			if (next is null) continue;
 			if (next.Value <= now) {
 				// CAS-acquire: ровно одна публикация на due-окно. Без этого race-window между

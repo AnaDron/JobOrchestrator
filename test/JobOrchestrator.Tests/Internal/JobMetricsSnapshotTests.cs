@@ -19,23 +19,18 @@ public sealed class JobMetricsSnapshotTests {
 			Dependencies = [],
 		};
 		var keys = new Dictionary<string, string>(StringComparer.Ordinal);
-		return new StageInstance {
-			Stage = stage,
-			DependencyKeys = keys,
-			FullyQualifiedName = "x[]",
-			EncodedKey = "",
-		};
+		return new StageInstance { Identity = new InstanceIdentity(stage, keys) };
 	}
 
 	[Fact]
 	public void Metrics_NewInstance_IsEmpty() {
 		var inst = MakeInstance();
 		inst.Metrics.Should().Be(JobMetrics.Empty);
-		inst.LastSuccess.Should().BeNull();
-		inst.LastAttempt.Should().BeNull();
-		inst.ConsecutiveFailures.Should().Be(0);
-		inst.LastError.Should().BeNull();
-		inst.NextAutoUtc.Should().BeNull();
+		inst.Metrics.LastSuccess.Should().BeNull();
+		inst.Metrics.LastAttempt.Should().BeNull();
+		inst.Metrics.ConsecutiveFailures.Should().Be(0);
+		inst.Metrics.LastError.Should().BeNull();
+		inst.Metrics.NextAutoUtc.Should().BeNull();
 	}
 
 	[Fact]

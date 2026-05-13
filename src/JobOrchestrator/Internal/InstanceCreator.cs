@@ -112,7 +112,7 @@ internal sealed class InstanceCreator(InstanceManager instances, KeyspaceRegistr
 			return result;
 		}
 		return instances.InstancesOf(dep.TargetStageName)
-			.Where(inst => inst.LastSuccess.HasValue)
+			.Where(inst => inst.Metrics.LastSuccess.HasValue)
 			.Select(inst => inst.DependencyKeys)
 			.ToList();
 	}
@@ -157,14 +157,8 @@ internal sealed class InstanceCreator(InstanceManager instances, KeyspaceRegistr
 	}
 
 	private StageInstance MaterializeInstance(StageDescriptor stage, IReadOnlyDictionary<string, string> keys) {
-		var fqn = DependencyKey.FormatFullyQualifiedName(stage.Name, keys);
-		var encoded = DependencyKey.Encode(keys);
-		var instance = new StageInstance {
-			Stage = stage,
-			DependencyKeys = keys,
-			FullyQualifiedName = fqn,
-			EncodedKey = encoded,
-		};
+		var identity = new InstanceIdentity(stage, keys);
+		var instance = new StageInstance { Identity = identity };
 		// NextAutoUtc = now → DueScanner подберёт инстанс при ближайшем проходе.
 		instance.SetMetrics(JobMetrics.Empty with { NextAutoUtc = time.GetUtcNow() });
 		instances.Add(instance);

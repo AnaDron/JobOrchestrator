@@ -17,14 +17,18 @@ internal static class TriggerAcceptance {
 		TriggerSource source,
 		DateTimeOffset now
 	) {
-		if (instance.State == InstanceLifecycleState.Running) {
-			return TriggerResult.AlreadyRunning;
-		}
+		// Terminating-инстансы — не существуют в смысле триггеров.
+		var state = instance.State;
+		if (state == InstanceLifecycleState.Terminating) return TriggerResult.NotFound;
+		if (state == InstanceLifecycleState.Running) return TriggerResult.AlreadyRunning;
+
+		// Один атомарный snapshot метрик — все поля согласованы и читаются один раз.
+		var m = instance.Metrics;
 
 		if (source == TriggerSource.Auto) {
-			if (instance.ConsecutiveFailures > 0 && instance.LastAttempt.HasValue) {
-				var retryDelay = instance.Stage.RetryPolicy.ComputeDelay(instance.ConsecutiveFailures);
-				if (now - instance.LastAttempt.Value < retryDelay) {
+			if (m.ConsecutiveFailures > 0 && m.LastAttempt.HasValue) {
+				var retryDelay = instance.Stage.RetryPolicy.ComputeDelay(m.ConsecutiveFailures);
+				if (now - m.LastAttempt.Value < retryDelay) {
 					return TriggerResult.WaitingRetry;
 				}
 			}
@@ -32,7 +36,7 @@ internal static class TriggerAcceptance {
 		}
 
 		// source == Manual
-		if (instance.LastAttempt.HasValue && (now - instance.LastAttempt.Value) < instance.Stage.Debounce) {
+		if (m.LastAttempt.HasValue && (now - m.LastAttempt.Value) < instance.Stage.Debounce) {
 			return TriggerResult.Debounced;
 		}
 		return TriggerResult.Started;

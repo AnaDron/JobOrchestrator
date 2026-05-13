@@ -47,12 +47,8 @@ public sealed class DueScannerProfileTests(ITestOutputHelper output) {
 		var emptyKeys = new Dictionary<string, string>(StringComparer.Ordinal);
 
 		for (int i = 0; i < n; i++) {
-			var instance = new StageInstance {
-				Stage = stage,
-				DependencyKeys = emptyKeys,
-				FullyQualifiedName = $"stage[i={i}]",
-				EncodedKey = $"i={i}",
-			};
+			var keys = new Dictionary<string, string>(StringComparer.Ordinal) { ["i"] = i.ToString() };
+			var instance = new StageInstance { Identity = new InstanceIdentity(stage, keys) };
 			// All-due → NextAutoUtc в прошлом; no-work → далеко в будущем.
 			instance.SetMetrics(instance.Metrics with {
 				NextAutoUtc = allDue ? DateTimeOffset.UtcNow.AddSeconds(-1) : DateTimeOffset.UtcNow.AddDays(30),

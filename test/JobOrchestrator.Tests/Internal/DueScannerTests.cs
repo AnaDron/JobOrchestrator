@@ -19,12 +19,7 @@ public sealed class DueScannerTests {
 
 	private static StageInstance MakeInstance(StageDescriptor stage, DateTimeOffset? nextAuto, InstanceLifecycleState state = InstanceLifecycleState.Idle) {
 		var empty = new Dictionary<string, string>(StringComparer.Ordinal);
-		var inst = new StageInstance {
-			Stage = stage,
-			DependencyKeys = empty,
-			FullyQualifiedName = DependencyKey.FormatFullyQualifiedName(stage.Name, empty),
-			EncodedKey = DependencyKey.Encode(empty),
-		};
+		var inst = new StageInstance { Identity = new InstanceIdentity(stage, empty) };
 		inst.SetMetrics(inst.Metrics with { NextAutoUtc = nextAuto });
 		inst.State = state;
 		return inst;
@@ -36,19 +31,20 @@ public sealed class DueScannerTests {
 		var manager = new InstanceManager();
 		var stage = MakeStage("x");
 
-		// Один идле-инстанс уже due, один — в будущем, один — Running (должен быть пропущен).
-		var dueInstance = MakeInstance(stage, DateTimeOffset.UtcNow.AddMilliseconds(-10));
-		dueInstance = new StageInstance { Stage = stage, DependencyKeys = dueInstance.DependencyKeys, FullyQualifiedName = "x[due]", EncodedKey = "due" };
-		dueInstance.SetMetrics(dueInstance.Metrics with { NextAutoUtc = DateTimeOffset.UtcNow.AddMilliseconds(-10) });
+		// Три инстанса с разными "marker"-ключами, чтобы Identity-equality их различал в InstanceManager:
+		// один уже due, один — в будущем, один — Running (должен быть пропущен).
+		StageInstance MakeMarked(string marker, DateTimeOffset nextAuto, InstanceLifecycleState state = InstanceLifecycleState.Idle) {
+			var keys = new Dictionary<string, string>(StringComparer.Ordinal) { ["marker"] = marker };
+			var inst = new StageInstance { Identity = new InstanceIdentity(stage, keys) };
+			inst.SetMetrics(inst.Metrics with { NextAutoUtc = nextAuto });
+			inst.State = state;
+			return inst;
+		}
+		var dueInstance = MakeMarked("due", DateTimeOffset.UtcNow.AddMilliseconds(-10));
 		manager.Add(dueInstance);
-
-		var futureInstance = new StageInstance { Stage = stage, DependencyKeys = dueInstance.DependencyKeys, FullyQualifiedName = "x[future]", EncodedKey = "future" };
-		futureInstance.SetMetrics(futureInstance.Metrics with { NextAutoUtc = DateTimeOffset.UtcNow.AddMinutes(5) });
+		var futureInstance = MakeMarked("future", DateTimeOffset.UtcNow.AddMinutes(5));
 		manager.Add(futureInstance);
-
-		var runningInstance = new StageInstance { Stage = stage, DependencyKeys = dueInstance.DependencyKeys, FullyQualifiedName = "x[running]", EncodedKey = "running" };
-		runningInstance.SetMetrics(runningInstance.Metrics with { NextAutoUtc = DateTimeOffset.UtcNow.AddMilliseconds(-10) });
-		runningInstance.State = InstanceLifecycleState.Running;
+		var runningInstance = MakeMarked("running", DateTimeOffset.UtcNow.AddMilliseconds(-10), InstanceLifecycleState.Running);
 		manager.Add(runningInstance);
 
 		var scanner = new DueScanner(manager, channel, TimeProvider.System, NullLogger<DueScanner>.Instance);
@@ -67,9 +63,9 @@ public sealed class DueScannerTests {
 
 		// Опубликован тик именно для due-инстанса; running и future-инстансы — пропущены.
 		published.OfType<TimerTickedEvent>().Select(e => e.Instance.FullyQualifiedName)
-			.Should().Contain("x[due]")
-			.And.NotContain("x[future]")
-			.And.NotContain("x[running]");
+			.Should().Contain("x[marker=due]")
+			.And.NotContain("x[marker=future]")
+			.And.NotContain("x[marker=running]");
 	}
 
 	[Fact]
@@ -79,12 +75,7 @@ public sealed class DueScannerTests {
 		var stage = MakeStage("x");
 
 		// Всё в далёком будущем — без Wake() scanner спал бы дольше теста.
-		var farFuture = new StageInstance {
-			Stage = stage,
-			DependencyKeys = new Dictionary<string, string>(StringComparer.Ordinal),
-			FullyQualifiedName = "x[far]",
-			EncodedKey = "far",
-		};
+		var farFuture = new StageInstance { Identity = new InstanceIdentity(stage, new Dictionary<string, string>(StringComparer.Ordinal)) };
 		farFuture.SetMetrics(farFuture.Metrics with { NextAutoUtc = DateTimeOffset.UtcNow.AddMinutes(10) });
 		manager.Add(farFuture);
 
@@ -110,6 +101,6 @@ public sealed class DueScannerTests {
 
 		channel.Reader.TryRead(out var evt).Should().BeTrue();
 		evt.Should().BeOfType<TimerTickedEvent>()
-			.Which.Instance.FullyQualifiedName.Should().Be("x[far]");
+			.Which.Instance.FullyQualifiedName.Should().Be("x[]");
 	}
 }

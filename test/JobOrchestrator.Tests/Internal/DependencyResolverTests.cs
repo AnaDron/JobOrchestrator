@@ -19,12 +19,7 @@ public sealed class DependencyResolverTests {
 
 	private static StageInstance MakeInstance(StageDescriptor stage, Dictionary<string, string>? keys = null) {
 		keys ??= new Dictionary<string, string>(StringComparer.Ordinal);
-		return new StageInstance {
-			Stage = stage,
-			DependencyKeys = keys,
-			FullyQualifiedName = DependencyKey.FormatFullyQualifiedName(stage.Name, keys),
-			EncodedKey = DependencyKey.Encode(keys),
-		};
+		return new StageInstance { Identity = new InstanceIdentity(stage, keys) };
 	}
 
 	[Fact]

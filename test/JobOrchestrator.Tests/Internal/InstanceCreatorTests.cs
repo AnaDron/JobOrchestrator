@@ -19,12 +19,7 @@ public sealed class InstanceCreatorTests {
 
 	private static StageInstance MakeInstanceWithSuccess(StageDescriptor stage, Dictionary<string, string>? keys = null) {
 		keys ??= new Dictionary<string, string>(StringComparer.Ordinal);
-		var inst = new StageInstance {
-			Stage = stage,
-			DependencyKeys = keys,
-			FullyQualifiedName = DependencyKey.FormatFullyQualifiedName(stage.Name, keys),
-			EncodedKey = DependencyKey.Encode(keys),
-		};
+		var inst = new StageInstance { Identity = new InstanceIdentity(stage, keys) };
 		inst.SetMetrics(inst.Metrics with { LastSuccess = DateTimeOffset.UtcNow });
 		return inst;
 	}
@@ -129,13 +124,8 @@ public sealed class InstanceCreatorTests {
 		var products = MakeStage("products", new StageDependency("productGroups", DependencyMode.Whole));
 		var instances = new InstanceManager();
 		var keyspace = new KeyspaceRegistry();
-		var pgInst = new StageInstance {
-			Stage = pg,
-			DependencyKeys = new Dictionary<string, string>(),
-			FullyQualifiedName = "productGroups[]",
-			EncodedKey = "",
-			// LastSuccess = null — ещё не был успешен
-		};
+		// LastSuccess = null — ещё не был успешен.
+		var pgInst = new StageInstance { Identity = new InstanceIdentity(pg, new Dictionary<string, string>(StringComparer.Ordinal)) };
 		instances.Add(pgInst);
 		var creator = new InstanceCreator(instances, keyspace, TimeProvider.System);
 

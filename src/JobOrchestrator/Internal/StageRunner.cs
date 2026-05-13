@@ -25,12 +25,21 @@ internal sealed class StageRunner(
 		await using var scope = rootProvider.CreateAsyncScope();
 		using var loggerScope = _logger.BeginScope(logFields);
 
-		// Linked CTS: cancel при host shutdown (stoppingToken) И при crash event loop (lifecycle.WorkersCancellationToken).
-		var runCts = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken, lifecycle.WorkersCancellationToken);
-		if (instance.Stage.ExecutionTimeout is { } timeout) {
-			runCts.CancelAfter(timeout);
-		}
-		instance.RunCts = runCts;
+		// Различаем источники cancel через ОТДЕЛЬНЫЕ CTS:
+		// - stoppingToken — shutdown хоста;
+		// - lifecycle.WorkersCancellationToken — crash event loop;
+		// - watchdogCts — ExecutionTimeout превышен;
+		// - cascadeCts (instance.RunCts) — событие-loop отменил из-за cascade-removal.
+		// runCts — linked-источник всех вышеперечисленных, передаётся в IJobService.ExecuteAsync.
+		var watchdogCts = instance.Stage.ExecutionTimeout is { } timeout
+			? new CancellationTokenSource(timeout)
+			: null;
+		var cascadeCts = new CancellationTokenSource();
+		var runCts = watchdogCts is not null
+			? CancellationTokenSource.CreateLinkedTokenSource(stoppingToken, lifecycle.WorkersCancellationToken, watchdogCts.Token, cascadeCts.Token)
+			: CancellationTokenSource.CreateLinkedTokenSource(stoppingToken, lifecycle.WorkersCancellationToken, cascadeCts.Token);
+		// EventLoop вызывает Cancel() на cascadeCts (через instance.RunCts) для cascade-removal.
+		instance.RunCts = cascadeCts;
 
 		try {
 			var service = (IJobService)scope.ServiceProvider.GetRequiredService(instance.Stage.ServiceType);
@@ -41,7 +50,7 @@ internal sealed class StageRunner(
 				CorrelationId = correlationId,
 				Trigger = trigger,
 				State = jobState,
-				LastSuccessAt = instance.LastSuccess,
+				LastSuccessAt = instance.Metrics.LastSuccess,
 				DependencyKeys = instance.DependencyKeys,
 				FullyQualifiedName = instance.FullyQualifiedName,
 				Sink = sink,
@@ -51,19 +60,34 @@ internal sealed class StageRunner(
 			await service.ExecuteAsync(jobContext, runCts.Token).ConfigureAwait(false);
 			Log.IterationCompleted(_logger, instance.FullyQualifiedName, null);
 			channel.Writer.Publish(new StageCompletedEvent(instance, time.GetUtcNow()));
-		} catch (Exception ex) {
-			// Cancellation тоже считается неуспехом (watchdog / shutdown). Эти случаи различаем в log-level.
-			if (ex is OperationCanceledException && stoppingToken.IsCancellationRequested) {
+		} catch (OperationCanceledException oce) {
+			// Различаем источник cancel — даёт точный StageFailed.Exception для подписчика.
+			Exception failure;
+			if (stoppingToken.IsCancellationRequested) {
 				Log.IterationCancelledShutdown(_logger, instance.FullyQualifiedName, null);
-			} else if (ex is OperationCanceledException) {
+				failure = oce;
+			} else if (watchdogCts?.IsCancellationRequested == true) {
 				Log.IterationCancelledWatchdog(_logger, instance.FullyQualifiedName, null);
+				failure = new TimeoutException(
+					$"Стадия {instance.FullyQualifiedName} превысила ExecutionTimeout ({instance.Stage.ExecutionTimeout}).",
+					oce);
+			} else if (cascadeCts.IsCancellationRequested) {
+				Log.IterationCancelledCascade(_logger, instance.FullyQualifiedName, null);
+				failure = oce;
 			} else {
-				Log.IterationFailed(_logger, instance.FullyQualifiedName, ex);
+				// Внутренний OCE сервиса, не связанный с нашими CTS.
+				Log.IterationFailed(_logger, instance.FullyQualifiedName, oce);
+				failure = oce;
 			}
+			channel.Writer.Publish(new StageFailedEvent(instance, failure, time.GetUtcNow()));
+		} catch (Exception ex) {
+			Log.IterationFailed(_logger, instance.FullyQualifiedName, ex);
 			channel.Writer.Publish(new StageFailedEvent(instance, ex, time.GetUtcNow()));
 		} finally {
-			runCts.Dispose();
 			instance.RunCts = null;
+			runCts.Dispose();
+			watchdogCts?.Dispose();
+			cascadeCts.Dispose();
 		}
 	}
 
@@ -99,7 +123,11 @@ internal sealed class StageRunner(
 
 		public static readonly Action<ILogger, string, Exception?> IterationCancelledWatchdog =
 			LoggerMessage.Define<string>(LogLevel.Warning, new EventId(4004, nameof(IterationCancelledWatchdog)),
-				"Итерация {Instance} отменена (watchdog timeout или внешний cancel).");
+				"Итерация {Instance} превысила ExecutionTimeout (watchdog).");
+
+		public static readonly Action<ILogger, string, Exception?> IterationCancelledCascade =
+			LoggerMessage.Define<string>(LogLevel.Information, new EventId(4006, nameof(IterationCancelledCascade)),
+				"Итерация {Instance} отменена при cascade-removal.");
 
 		public static readonly Action<ILogger, string, Exception?> IterationFailed =
 			LoggerMessage.Define<string>(LogLevel.Warning, new EventId(4005, nameof(IterationFailed)),

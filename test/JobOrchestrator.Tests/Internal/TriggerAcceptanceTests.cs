@@ -14,12 +14,8 @@ public sealed class TriggerAcceptanceTests {
 		Dependencies = [],
 	};
 
-	private static StageInstance MakeInstance(StageDescriptor stage) => new() {
-		Stage = stage,
-		DependencyKeys = new Dictionary<string, string>(),
-		FullyQualifiedName = "x[]",
-		EncodedKey = "",
-	};
+	private static StageInstance MakeInstance(StageDescriptor stage) =>
+		new() { Identity = new InstanceIdentity(stage, new Dictionary<string, string>(StringComparer.Ordinal)) };
 
 	private static readonly DateTimeOffset Now = new(2026, 1, 1, 12, 0, 0, TimeSpan.Zero);
 
@@ -66,7 +62,7 @@ public sealed class TriggerAcceptanceTests {
 	public void Manual_InDebounceWindow_AfterSuccess_Rejected() {
 		var inst = MakeInstance(MakeStage(TimeSpan.FromSeconds(10), RetryPolicy.NoRetry));
 		inst.SetMetrics(inst.Metrics with { LastAttempt = Now.AddSeconds(-5) });
-		inst.SetMetrics(inst.Metrics with { LastSuccess = inst.LastAttempt });
+		inst.SetMetrics(inst.Metrics with { LastSuccess = inst.Metrics.LastAttempt });
 		TriggerAcceptance.TryAccept(inst, TriggerSource.Manual, Now).Should().Be(TriggerResult.Debounced);
 	}
 
@@ -92,7 +88,7 @@ public sealed class TriggerAcceptanceTests {
 		// Auto не проверяет debounce — scheduled tick через interval сам по себе соблюдает темп.
 		var inst = MakeInstance(MakeStage(TimeSpan.FromMinutes(1), RetryPolicy.NoRetry));
 		inst.SetMetrics(inst.Metrics with { LastAttempt = Now.AddSeconds(-1) });
-		inst.SetMetrics(inst.Metrics with { LastSuccess = inst.LastAttempt });
+		inst.SetMetrics(inst.Metrics with { LastSuccess = inst.Metrics.LastAttempt });
 		TriggerAcceptance.TryAccept(inst, TriggerSource.Auto, Now).Should().Be(TriggerResult.Started);
 	}
 }

@@ -9,23 +9,25 @@ namespace JobOrchestrator.Internal;
 /// </summary>
 /// <remarks>
 /// <para>
-/// Координация удаления инстансов: при <see cref="KeyRemovedEvent"/> аффектированные инстансы переезжают
-/// в <c>_terminating</c> set и удаляются из <see cref="InstanceManager"/> сразу (чтобы новые триггеры
-/// не находили их). Running-итерациям отменяется <c>RunCts</c>; <c>RemoveScopeAsync</c> откладывается
-/// до момента, когда итерация физически завершилась (приходит <see cref="StageCompletedEvent"/> или
-/// <see cref="StageFailedEvent"/>). События <see cref="KeyAddedEvent"/>/<see cref="KeyRemovedEvent"/>,
-/// испущенные из terminating-инстанса, отфильтровываются по <c>Source</c>-полю.
+/// <b>Terminating state.</b> При <see cref="KeyRemovedEvent"/> аффектированные инстансы получают
+/// <see cref="InstanceLifecycleState.Terminating"/>. Они остаются в <see cref="InstanceManager"/>
+/// до фактического finalize'а, но новые триггеры (<see cref="TriggerAcceptance"/>) и DueScanner
+/// игнорируют их (state != Idle). Cleanup для Running-инстансов откладывается до их
+/// <see cref="StageCompletedEvent"/>/<see cref="StageFailedEvent"/>; для Idle-инстансов — синхронно
+/// в момент cascade.
 /// </para>
 /// <para>
-/// Планирование Auto-тиков: <see cref="StageInstance.NextAutoUtc"/> хранит дедлайн, <see cref="DueScanner"/>
-/// — централизованный pull-loop. После любого изменения расписания (создание инстанса, schedule next tick)
-/// event loop вызывает <see cref="DueScanner.Wake"/> — scanner пересчитает ближайший due-момент.
+/// <b>Iterative cascade.</b> Каскад при <see cref="KeyRemovedEvent"/> обходит транзитивное замыкание
+/// через очередь (BFS), без рекурсивных await-frame'ов — защищает стек от deep-graph-cascade-storm.
 /// </para>
 /// <para>
-/// Hot-path логи разворачиваются через <see cref="LoggerMessage.Define"/> (см. <see cref="Log"/>) —
-/// zero-allocation для args[], предкэшированный formatter. Каждый вызов handler-а event-loop'а
-/// может писать несколько log statements, в логе на DEBUG это десятки сообщений в секунду —
-/// LoggerMessage даёт ощутимый allocation-cut.
+/// <b>Schedule next-tick от <c>at</c>.</b> NextAutoUtc вычисляется от <c>at</c> (фактическое время
+/// завершения runner-а), а не от <c>time.GetUtcNow()</c> в момент обработки события — это сохраняет
+/// корректное расписание даже когда event-loop отстаёт.
+/// </para>
+/// <para>
+/// <b>Try/finally state consistency.</b> В StageCompleted/Failed handler-е <see cref="StageInstance.State"/>=Idle
+/// проставляется в finally — exception между SetMetrics и State=Idle не оставит инстанс залипшим в Running.
 /// </para>
 /// </remarks>
 internal sealed class EventLoop(
@@ -40,10 +42,6 @@ internal sealed class EventLoop(
 	ILogger<EventLoop> logger,
 	TimeProvider time
 ) {
-	// Инстансы, для которых был запрошен cleanup, но running-итерация ещё не завершилась.
-	// Cleanup завершается в обработчике StageCompleted/Failed для этого инстанса.
-	private readonly HashSet<StageInstance> _terminating = [];
-
 	public async Task RunAsync(CancellationToken stoppingToken) {
 		Log.Starting(logger, registry.AllStages.Count, null);
 		BootstrapInitialInstances();
@@ -62,11 +60,8 @@ internal sealed class EventLoop(
 		} catch (ChannelClosedException) {
 			// Канал закрыт извне (lifecycle.MarkFaulted/CloseChannel). Нормальный shutdown.
 		} finally {
-			// Drain: оставшиеся в очереди запросы (Manual triggers) должны быть завершены
-			// с Faulted/Exception, иначе их TaskCompletionSource'ы зависнут навсегда.
 			DrainPendingRequests();
-			// Финализируем все terminating-инстансы (их finalize-events потенциально не прилетят,
-			// если runner-ы не успели опубликовать StageCompleted/Failed).
+			// Финализируем все Terminating-инстансы (их finalize-events не прилетят при закрытом Channel).
 			await FinalizeAllTerminatingAsync().ConfigureAwait(false);
 		}
 		Log.Stopped(logger, null);
@@ -81,15 +76,18 @@ internal sealed class EventLoop(
 	}
 
 	private async Task FinalizeAllTerminatingAsync() {
-		if (_terminating.Count == 0) return;
-		foreach (var instance in _terminating) {
+		// Снимок терминирующих инстансов через State-чтение; их StageCompleted/Failed уже не придут.
+		var terminating = instances.All
+			.Where(inst => inst.State == InstanceLifecycleState.Terminating)
+			.ToList();
+		foreach (var instance in terminating) {
 			try {
 				await stateStore.RemoveScopeAsync(instance.StateScope, CancellationToken.None).ConfigureAwait(false);
 			} catch (Exception ex) {
 				Log.FinalizeShutdownFailed(logger, instance.FullyQualifiedName, ex);
 			}
+			instances.Remove(instance);
 		}
-		_terminating.Clear();
 	}
 
 	private void BootstrapInitialInstances() {
@@ -112,12 +110,11 @@ internal sealed class EventLoop(
 	}
 
 	private void HandleTimerTick(StageInstance instance, CancellationToken ct) {
-		// pendingTick освобождается ВСЕГДА при обработке tick-события — независимо от того,
-		// запустим ли мы итерацию (Started) или отбросим (AlreadyRunning/WaitingRetry).
-		// В случае Started — следующий due-tick будет после успешного перепланирования NextAutoUtc;
-		// в случае AlreadyRunning — pendingTick освободит будущие due-окна, когда они появятся.
+		// pendingTick освобождается ВСЕГДА при обработке tick-события.
 		instance.ReleasePendingTick();
-		if (instances.Find(instance.Stage.Name, instance.DependencyKeys) != instance) return;
+		// Идемпотентность: инстанс мог быть уже Terminated/удалён.
+		if (instances.Find(instance.Identity) != instance) return;
+		if (instance.State != InstanceLifecycleState.Idle) return;
 		var now = time.GetUtcNow();
 		var decision = TriggerAcceptance.TryAccept(instance, TriggerSource.Auto, now);
 		if (decision == TriggerResult.Started) {
@@ -143,11 +140,12 @@ internal sealed class EventLoop(
 		instance.State = InstanceLifecycleState.Running;
 		instance.SetMetrics(instance.Metrics with { NextAutoUtc = null });
 		Log.BeginIteration(logger, instance.FullyQualifiedName, trigger, null);
-		instance.RunningTask = Task.Run(async () => await runner.RunIterationAsync(instance, trigger, ct).ConfigureAwait(false), ct);
+		// Fire-and-forget на ThreadPool: StageRunner внутри публикует StageCompleted/Failed в Channel.
+		_ = Task.Run(async () => await runner.RunIterationAsync(instance, trigger, ct).ConfigureAwait(false), ct);
 	}
 
 	private void HandleKeyAdded(StageInstance source, string key) {
-		if (_terminating.Contains(source)) {
+		if (source.State == InstanceLifecycleState.Terminating) {
 			Log.IgnoredAddKeyFromTerminating(logger, source.Stage.Name, key, source.FullyQualifiedName, null);
 			return;
 		}
@@ -163,7 +161,7 @@ internal sealed class EventLoop(
 	}
 
 	private async Task HandleKeyRemovedAsync(StageInstance source, string key, CancellationToken ct) {
-		if (_terminating.Contains(source)) {
+		if (source.State == InstanceLifecycleState.Terminating) {
 			Log.IgnoredRemoveKeyFromTerminating(logger, source.Stage.Name, key, source.FullyQualifiedName, null);
 			return;
 		}
@@ -176,10 +174,15 @@ internal sealed class EventLoop(
 	}
 
 	/// <summary>
-	/// Каскадно отменяет потомков, чьи DependencyKeys соответствуют (emitter-stage + emitter-keys + key):
-	/// инстанс был порождён ИМЕННО ЭТИМ эмитером по этому ключу. Транзитивно: при удалении инстанса
-	/// его собственный keyspace-bucket уничтожается, и каждый orphan-ключ запускает рекурсивный cascade
-	/// для своих потомков.
+	/// <b>Итеративный</b> cascade через BFS-очередь: каждый шаг очереди — это (эмитер-стадия, его ключи, удалённый ключ).
+	/// Для каждого аффектированного инстанса:
+	/// <list type="bullet">
+	/// <item>устанавливаем State=Terminating;</item>
+	/// <item>если был Running — cancel <see cref="StageInstance.RunCts"/>, finalize отложен до StageCompleted/Failed;</item>
+	/// <item>если был Idle — сразу finalize (Remove + RemoveScopeAsync);</item>
+	/// <item>сирот-ключи из его keyspace-bucket → enqueue для дальнейшего обхода.</item>
+	/// </list>
+	/// Преимущество vs рекурсия: глубокие графы не порождают цепочки async-state-machine-frame'ов в куче.
 	/// </summary>
 	private async Task CascadeKeyRemovalAsync(
 		string emitterStage,
@@ -187,38 +190,44 @@ internal sealed class EventLoop(
 		string key,
 		CancellationToken ct
 	) {
-		var affectedStages = registry.StagesAffectedByKeyRemoval(emitterStage);
-		var affected = affectedStages
-			.SelectMany(s => instances.InstancesOf(s.Name))
-			.Where(inst => MatchesEmitter(inst.DependencyKeys, emitterStage, emitterKeys, key))
-			.ToList();
-		if (affected.Count == 0) return;
+		var queue = new Queue<(string Stage, IReadOnlyDictionary<string, string> EmitterKeys, string Key)>();
+		queue.Enqueue((emitterStage, emitterKeys, key));
 
-		affected.Sort((a, b) => registry.CancellationRank(a.Stage.Name).CompareTo(registry.CancellationRank(b.Stage.Name)));
-		Log.RemoveKeyCascade(logger, emitterStage, key, affected.Count, null);
+		while (queue.Count > 0) {
+			var (es, ek, k) = queue.Dequeue();
+			var affectedStages = registry.StagesAffectedByKeyRemoval(es);
+			var affected = affectedStages
+				.SelectMany(s => instances.InstancesOf(s.Name))
+				.Where(inst => inst.State != InstanceLifecycleState.Terminating)
+				.Where(inst => MatchesEmitter(inst.DependencyKeys, es, ek, k))
+				.ToList();
+			if (affected.Count == 0) continue;
 
-		foreach (var instance in affected) {
-			// Сначала удаляем bucket эмитера-удаляемого; orphan-ключи запустят дальнейший каскад.
-			var orphans = keyspace.RemoveInstance(instance.Stage.Name, instance.DependencyKeys);
+			// Сортировка по pre-computed cancellation rank (листья — меньший ранг — отменяются первыми).
+			affected.Sort((a, b) => registry.CancellationRank(a.Stage.Name).CompareTo(registry.CancellationRank(b.Stage.Name)));
+			Log.RemoveKeyCascade(logger, es, k, affected.Count, null);
 
-			instances.Remove(instance);
-
-			if (instance.State == InstanceLifecycleState.Running && instance.RunCts is { } cts) {
-				_terminating.Add(instance);
-				try { cts.Cancel(); } catch (ObjectDisposedException) { /* race на завершение */ }
-				Log.CascadeCancelRunning(logger, instance.FullyQualifiedName, null);
-			} else {
-				Log.CascadeRemoveIdle(logger, instance.FullyQualifiedName, null);
-				try {
-					await stateStore.RemoveScopeAsync(instance.StateScope, ct).ConfigureAwait(false);
-				} catch (Exception ex) {
-					Log.RemoveScopeFailed(logger, instance.FullyQualifiedName, ex);
+			foreach (var instance in affected) {
+				// Снимаем bucket этого инстанса — orphan-ключи enqueue'ём для дальнейшего обхода.
+				var orphans = keyspace.RemoveInstance(instance.Stage.Name, instance.DependencyKeys);
+				foreach (var orphanKey in orphans) {
+					queue.Enqueue((instance.Stage.Name, instance.DependencyKeys, orphanKey));
 				}
-			}
 
-			// Рекурсивный cascade для каждого orphan-ключа удаляемого инстанса.
-			foreach (var orphanKey in orphans) {
-				await CascadeKeyRemovalAsync(instance.Stage.Name, instance.DependencyKeys, orphanKey, ct).ConfigureAwait(false);
+				// Атомарный snapshot State + RunCts ДО State=Terminating, чтобы понять Running vs Idle ветку.
+				var wasRunning = instance.State == InstanceLifecycleState.Running;
+				var cts = instance.RunCts;    // volatile read
+				instance.State = InstanceLifecycleState.Terminating;
+
+				if (wasRunning) {
+					// Defer cleanup: runner отстрелит StageCompleted/Failed, handler увидит Terminating → finalize.
+					try { cts?.Cancel(); } catch (ObjectDisposedException) { /* race на завершение */ }
+					Log.CascadeCancelRunning(logger, instance.FullyQualifiedName, null);
+				} else {
+					// Идиотическое сразу-удаление: будущего event'а от runner-а не будет.
+					Log.CascadeRemoveIdle(logger, instance.FullyQualifiedName, null);
+					await FinalizeTerminatingAsync(instance, ct).ConfigureAwait(false);
+				}
 			}
 		}
 	}
@@ -242,56 +251,70 @@ internal sealed class EventLoop(
 	}
 
 	private async Task HandleStageCompletedAsync(StageInstance instance, DateTimeOffset at, CancellationToken ct) {
-		if (_terminating.Remove(instance)) {
+		// Terminating: finalize cleanup, метрики не трогаем (инстанс «мёртв»).
+		if (instance.State == InstanceLifecycleState.Terminating) {
 			Log.TerminatingCompletedFinalize(logger, instance.FullyQualifiedName, null);
 			await FinalizeTerminatingAsync(instance, ct).ConfigureAwait(false);
 			return;
 		}
+		// Idempotence: если инстанс уже не Running — не двигаемся (могло прийти двойное событие).
+		if (instance.State != InstanceLifecycleState.Running) return;
 
-		var current = instance.Metrics;
-		bool wasFirstSuccess = !current.LastSuccess.HasValue;
-		// Атомарная замена всей пятёрки + перепланирование NextAutoUtc в одном snapshot —
-		// reader (DueScanner / GetOverview) увидит согласованное состояние.
-		instance.SetMetrics(new JobMetrics(
-			LastSuccess: at,                    // монотонно: не сбрасывается на последующих неуспехах
-			LastAttempt: at,
-			ConsecutiveFailures: 0,
-			LastError: null,
-			NextAutoUtc: time.GetUtcNow() + instance.Stage.Interval));
-		instance.State = InstanceLifecycleState.Idle;
+		try {
+			var current = instance.Metrics;
+			bool wasFirstSuccess = !current.LastSuccess.HasValue;
+			// NextAutoUtc вычисляется от `at` (фактическое завершение runner-а), не от now — корректное
+			// расписание даже под backlog'ом event-loop'а.
+			instance.SetMetrics(new JobMetrics(
+				LastSuccess: at,                   // монотонно: не сбрасывается на последующих неуспехах
+				LastAttempt: at,
+				ConsecutiveFailures: 0,
+				LastError: null,
+				NextAutoUtc: at + instance.Stage.Interval));
 
-		if (wasFirstSuccess) {
-			Log.FirstSuccessCascade(logger, instance.FullyQualifiedName, null);
-			foreach (var dependent in EnumerateDirectDependents(instance.Stage.Name)) {
-				CreateAndStart(dependent);
+			if (wasFirstSuccess) {
+				Log.FirstSuccessCascade(logger, instance.FullyQualifiedName, null);
+				foreach (var dependent in EnumerateDirectDependents(instance.Stage.Name)) {
+					CreateAndStart(dependent);
+				}
 			}
+		} finally {
+			// Guarantee: State выходит из Running при ЛЮБОМ исходе обработки (включая exception из EnumerateDirectDependents).
+			instance.State = InstanceLifecycleState.Idle;
+			scanner.Wake();
 		}
-		scanner.Wake();
 	}
 
 	private async Task HandleStageFailedAsync(StageInstance instance, Exception ex, DateTimeOffset at, CancellationToken ct) {
-		if (_terminating.Remove(instance)) {
+		// Terminating: finalize cleanup.
+		if (instance.State == InstanceLifecycleState.Terminating) {
 			Log.TerminatingFailedFinalize(logger, instance.FullyQualifiedName, null);
 			await FinalizeTerminatingAsync(instance, ct).ConfigureAwait(false);
 			return;
 		}
+		if (instance.State != InstanceLifecycleState.Running) return;
 
-		var current = instance.Metrics;
-		var failures = current.ConsecutiveFailures + 1;
-		var retryDelay = instance.Stage.RetryPolicy.ComputeDelay(failures);
-		var nextDelay = retryDelay > TimeSpan.Zero ? retryDelay : instance.Stage.Interval;
-		// LastSuccess НЕ меняется — монотонная метка («хоть раз был успех» сохраняется через неуспехи).
-		instance.SetMetrics(current with {
-			LastAttempt = at,
-			ConsecutiveFailures = failures,
-			LastError = ex.Message,
-			NextAutoUtc = time.GetUtcNow() + nextDelay,
-		});
-		instance.State = InstanceLifecycleState.Idle;
-		scanner.Wake();
+		try {
+			var current = instance.Metrics;
+			var failures = current.ConsecutiveFailures + 1;
+			var retryDelay = instance.Stage.RetryPolicy.ComputeDelay(failures);
+			var nextDelay = retryDelay > TimeSpan.Zero ? retryDelay : instance.Stage.Interval;
+			// LastSuccess НЕ меняется — монотонная метка. NextAutoUtc от `at`, не от now.
+			instance.SetMetrics(current with {
+				LastAttempt = at,
+				ConsecutiveFailures = failures,
+				LastError = ex.Message,
+				NextAutoUtc = at + nextDelay,
+			});
+		} finally {
+			instance.State = InstanceLifecycleState.Idle;
+			scanner.Wake();
+		}
 	}
 
 	private async Task FinalizeTerminatingAsync(StageInstance instance, CancellationToken ct) {
+		// Remove из InstanceManager БЕФОRE RemoveScopeAsync — следующие lookup'ы не найдут.
+		instances.Remove(instance);
 		try {
 			await stateStore.RemoveScopeAsync(instance.StateScope, ct).ConfigureAwait(false);
 		} catch (Exception ex) {
@@ -313,8 +336,7 @@ internal sealed class EventLoop(
 
 	/// <summary>
 	/// Pre-allocated <see cref="LoggerMessage.Define{T}"/>-делегаты для всех hot-path логов EventLoop.
-	/// EventId-ы 3xxx — диапазон EventLoop. Преимущество vs обычный <c>logger.LogXxx</c>:
-	/// ноль аллокаций <c>object[]</c> на args + закэшированный formatter (~3-5x перформанс на DEBUG-spam).
+	/// EventId-ы 3xxx — диапазон EventLoop.
 	/// </summary>
 	private static class Log {
 		public static readonly Action<ILogger, int, Exception?> Starting =
@@ -372,10 +394,6 @@ internal sealed class EventLoop(
 		public static readonly Action<ILogger, string, Exception?> CascadeRemoveIdle =
 			LoggerMessage.Define<string>(LogLevel.Debug, new EventId(3016, nameof(CascadeRemoveIdle)),
 				"Cascade-remove idle instance {Instance}; RemoveScopeAsync синхронно");
-
-		public static readonly Action<ILogger, string, Exception?> RemoveScopeFailed =
-			LoggerMessage.Define<string>(LogLevel.Warning, new EventId(3017, nameof(RemoveScopeFailed)),
-				"RemoveScopeAsync для {Instance} завершился с ошибкой.");
 
 		public static readonly Action<ILogger, string, Exception?> TerminatingCompletedFinalize =
 			LoggerMessage.Define<string>(LogLevel.Debug, new EventId(3018, nameof(TerminatingCompletedFinalize)),

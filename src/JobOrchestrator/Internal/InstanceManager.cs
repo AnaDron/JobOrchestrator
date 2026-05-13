@@ -3,33 +3,43 @@ using System.Collections.Concurrent;
 namespace JobOrchestrator.Internal;
 
 /// <summary>
-/// Owner runtime-состояния <see cref="StageInstance"/>-ов. Структуры на <see cref="ConcurrentDictionary{TKey,TValue}"/> —
-/// мутации идут из event-loop-consumer-потока (single writer), reads возможны из любого потока
-/// (<see cref="DueScanner"/>, <see cref="IJobOrchestrator.GetOverview"/>) — без блокировок.
+/// Owner runtime-состояния <see cref="StageInstance"/>-ов. Lookup идёт по <see cref="InstanceIdentity"/>
+/// (canonical hash-equality по <c>(StageName, EncodedKey)</c>). Структуры на <see cref="ConcurrentDictionary{TKey,TValue}"/>:
+/// writes — из event-loop-consumer-потока (single writer); reads — из любого потока
+/// (<see cref="DueScanner"/>, <see cref="IJobOrchestrator.GetOverview"/>), без блокировок.
 /// </summary>
 internal sealed class InstanceManager {
-	private readonly ConcurrentDictionary<(string Stage, string EncodedKey), StageInstance> _instances = new();
+	private readonly ConcurrentDictionary<InstanceIdentity, StageInstance> _instances = new();
 	private readonly ConcurrentDictionary<string, ConcurrentDictionary<StageInstance, byte>> _byStage = new(StringComparer.Ordinal);
 	private static readonly ConcurrentDictionary<StageInstance, byte> EmptySet = new();
 
 	public bool Exists(string stageName, IReadOnlyDictionary<string, string> keys) =>
-		_instances.ContainsKey((stageName, DependencyKey.Encode(keys)));
+		Find(stageName, keys) is not null;
 
-	public StageInstance? Find(string stageName, IReadOnlyDictionary<string, string> keys) =>
-		_instances.TryGetValue((stageName, DependencyKey.Encode(keys)), out var inst) ? inst : null;
+	public StageInstance? Find(string stageName, IReadOnlyDictionary<string, string> keys) {
+		// Сначала пробуем через secondary index — избегаем создания временного InstanceIdentity для lookup.
+		if (!_byStage.TryGetValue(stageName, out var set)) return null;
+		var enc = DependencyKey.Encode(keys);
+		foreach (var inst in set.Keys) {
+			if (string.Equals(inst.Identity.EncodedKey, enc, StringComparison.Ordinal)) return inst;
+		}
+		return null;
+	}
+
+	public StageInstance? Find(InstanceIdentity identity) =>
+		_instances.TryGetValue(identity, out var inst) ? inst : null;
 
 	public void Add(StageInstance instance) {
-		var key = (instance.Stage.Name, instance.EncodedKey);
-		if (!_instances.TryAdd(key, instance)) {
-			throw new InvalidOperationException($"Дубль инстанса в InstanceManager: {instance.FullyQualifiedName}");
+		if (!_instances.TryAdd(instance.Identity, instance)) {
+			throw new InvalidOperationException($"Дубль инстанса в InstanceManager: {instance.Identity.FullyQualifiedName}");
 		}
-		var set = _byStage.GetOrAdd(instance.Stage.Name, _ => new ConcurrentDictionary<StageInstance, byte>());
+		var set = _byStage.GetOrAdd(instance.Identity.Stage.Name, _ => new ConcurrentDictionary<StageInstance, byte>());
 		set.TryAdd(instance, 0);
 	}
 
 	public bool Remove(StageInstance instance) {
-		var removed = _instances.TryRemove((instance.Stage.Name, instance.EncodedKey), out _);
-		if (removed && _byStage.TryGetValue(instance.Stage.Name, out var set)) {
+		var removed = _instances.TryRemove(instance.Identity, out _);
+		if (removed && _byStage.TryGetValue(instance.Identity.Stage.Name, out var set)) {
 			set.TryRemove(instance, out _);
 		}
 		return removed;
@@ -46,8 +56,8 @@ internal sealed class InstanceManager {
 
 	/// <summary>
 	/// Снимок состояния всех инстансов. Lock-free через atomic-reads StageInstance-полей.
-	/// Snapshot может быть eventually consistent между разными полями одного инстанса (race с writer-обновлениями),
-	/// но это приемлемо для диагностики через <see cref="IJobOrchestrator.GetOverview"/>.
+	/// Snapshot полей внутри одного инстанса согласован (через <see cref="JobMetrics"/>-record), но
+	/// между разными инстансами snapshot eventually-consistent. Это приемлемо для диагностики.
 	/// </summary>
 	public InstancesOverview Snapshot() {
 		var infos = new List<InstanceInfo>(_instances.Count);
@@ -55,9 +65,9 @@ internal sealed class InstanceManager {
 			// Один атомарный snapshot метрик — все 5 полей согласованы между собой.
 			var m = i.Metrics;
 			infos.Add(new InstanceInfo {
-				StageName = i.Stage.Name,
-				DependencyKeys = i.DependencyKeys,
-				FullyQualifiedName = i.FullyQualifiedName,
+				StageName = i.Identity.Stage.Name,
+				DependencyKeys = i.Identity.DependencyKeys,
+				FullyQualifiedName = i.Identity.FullyQualifiedName,
 				State = i.State,
 				LastSuccess = m.LastSuccess,
 				LastAttempt = m.LastAttempt,
