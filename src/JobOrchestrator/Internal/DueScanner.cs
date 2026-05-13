@@ -40,9 +40,15 @@ internal sealed class DueScanner(
 	// Максимальный интервал сна, если нет ни одного инстанса с NextAutoUtc — просыпаемся периодически
 	// проверить, не создались ли новые (на случай, если Wake() пропустили race-condition).
 	private static readonly TimeSpan MaxSleep = TimeSpan.FromSeconds(30);
+	// Channel-capacity = 10_000 (см. ServiceCollectionExtensions). Порог backlog-warning = 70%,
+	// чтобы успеть среагировать ДО backpressure-блокировки producer-ов.
+	private const int ChannelBacklogThreshold = 7_000;
+	// Anti-spam: не чаще одного warning'а в 30 секунд.
+	private static readonly TimeSpan BacklogWarningInterval = TimeSpan.FromSeconds(30);
 
 	private CancellationTokenSource _wakeCts = new();
 	private readonly object _wakeLock = new();
+	private DateTimeOffset _lastBacklogWarning = DateTimeOffset.MinValue;
 	private bool _disposed;
 
 	/// <summary>Будит scanner: следующая итерация loop'а посмотрит на актуальный <c>NextAutoUtc</c>.</summary>
@@ -56,9 +62,10 @@ internal sealed class DueScanner(
 	}
 
 	public async Task RunAsync(CancellationToken stoppingToken) {
-		logger.LogDebug("DueScanner started.");
+		Log.Started(logger, null);
 		while (!stoppingToken.IsCancellationRequested) {
 			var now = time.GetUtcNow();
+			WarnOnChannelBacklog(now);
 			var nextDue = ScanAndPublishDue(now);
 
 			TimeSpan sleep;
@@ -82,7 +89,7 @@ internal sealed class DueScanner(
 				// Либо shutdown, либо Wake() — в обоих случаях просто продолжаем loop.
 			}
 		}
-		logger.LogDebug("DueScanner stopped.");
+		Log.Stopped(logger, null);
 	}
 
 	/// <summary>
@@ -91,6 +98,22 @@ internal sealed class DueScanner(
 	/// <see cref="RunAsync"/> с динамической задержкой и wake-up CTS.
 	/// </summary>
 	internal DateTimeOffset? Tick(DateTimeOffset now) => ScanAndPublishDue(now);
+
+	/// <summary>
+	/// Operational visibility: если очередь оркестратор-событий превысила <see cref="ChannelBacklogThreshold"/>,
+	/// логирует warning с anti-spam suppression (<see cref="BacklogWarningInterval"/>). Сигнализирует, что
+	/// consumer event loop не успевает за producer-ами; типовые причины — медленный <c>IJobStateStore</c> или
+	/// крупный cascade. <c>internal</c> для unit-теста.
+	/// </summary>
+	internal void WarnOnChannelBacklog(DateTimeOffset now) {
+		var reader = channel.Reader;
+		if (!reader.CanCount) return;
+		int count = reader.Count;
+		if (count < ChannelBacklogThreshold) return;
+		if (now - _lastBacklogWarning < BacklogWarningInterval) return;
+		_lastBacklogWarning = now;
+		Log.ChannelBacklog(logger, count, null);
+	}
 
 	/// <summary>
 	/// Сканирует все инстансы, публикует <see cref="TimerTickedEvent"/> для due-инстансов,
@@ -118,5 +141,20 @@ internal sealed class DueScanner(
 		lock (_wakeLock) {
 			_wakeCts.Dispose();
 		}
+	}
+
+	/// <summary>EventId-диапазон 5xxx — DueScanner.</summary>
+	private static class Log {
+		public static readonly Action<ILogger, Exception?> Started =
+			LoggerMessage.Define(LogLevel.Debug, new EventId(5001, nameof(Started)),
+				"DueScanner started.");
+
+		public static readonly Action<ILogger, Exception?> Stopped =
+			LoggerMessage.Define(LogLevel.Debug, new EventId(5002, nameof(Stopped)),
+				"DueScanner stopped.");
+
+		public static readonly Action<ILogger, int, Exception?> ChannelBacklog =
+			LoggerMessage.Define<int>(LogLevel.Warning, new EventId(5003, nameof(ChannelBacklog)),
+				"JobOrchestrator: очередь событий выросла до {EventCount} — consumer event-loop не успевает за producer-ами (медленный IJobStateStore или крупный cascade).");
 	}
 }
