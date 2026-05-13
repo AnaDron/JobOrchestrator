@@ -1,3 +1,5 @@
+using Microsoft.Extensions.DependencyInjection;
+
 namespace JobOrchestrator.Internal;
 
 /// <summary>
@@ -82,6 +84,34 @@ internal sealed class StageRegistry {
 	/// </summary>
 	public IReadOnlyList<string> ExpectedKeyNames(string stageName) =>
 		_expectedKeyNames.TryGetValue(stageName, out var names) ? names : [];
+
+	/// <summary>
+	/// Startup-валидация: для каждой стадии в реестре проверяет, что её <see cref="StageDescriptor.ServiceType"/>
+	/// (a) зарегистрирован в DI, (b) реально резолвится (constructor-params не ломают граф),
+	/// (c) реализует <see cref="IJobService"/>. Бросает <see cref="JobConfigurationException"/> с описанием
+	/// первой найденной проблемы. Вызывается из <see cref="Hosting.JobOrchestratorHostedService.StartAsync"/>.
+	/// </summary>
+	public void ValidateServiceRegistrations(IServiceProvider services) {
+		ArgumentNullException.ThrowIfNull(services);
+		using var scope = services.CreateScope();
+		foreach (var stage in _byName.Values) {
+			object? resolved;
+			try {
+				resolved = scope.ServiceProvider.GetService(stage.ServiceType);
+			} catch (Exception ex) {
+				throw new JobConfigurationException(
+					$"Стадия '{stage.Name}': резолв {stage.ServiceType.FullName} из DI завершился с ошибкой: {ex.Message}", ex);
+			}
+			if (resolved is null) {
+				throw new JobConfigurationException(
+					$"Стадия '{stage.Name}': тип {stage.ServiceType.FullName} не зарегистрирован в DI.");
+			}
+			if (resolved is not IJobService) {
+				throw new JobConfigurationException(
+					$"Стадия '{stage.Name}': тип {stage.ServiceType.FullName} зарегистрирован, но не реализует IJobService.");
+			}
+		}
+	}
 
 	private static Dictionary<string, IReadOnlyList<StageDescriptor>> BuildReverseIndex(
 		Dictionary<string, StageDescriptor> byName,

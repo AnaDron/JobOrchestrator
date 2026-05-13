@@ -12,12 +12,16 @@ namespace JobOrchestrator.Hosting;
 internal sealed class JobOrchestratorHostedService(
 	EventLoop eventLoop,
 	DueScanner scanner,
+	StageRegistry registry,
+	IServiceProvider services,
 	OrchestratorLifecycle lifecycle,
 	ILogger<JobOrchestratorHostedService> logger
 ) : BackgroundService {
 	private readonly Guid _instanceId = Guid.NewGuid();
 
 	public override async Task StartAsync(CancellationToken cancellationToken) {
+		// Fail-fast: ловим misconfiguration на старте, а не на первой итерации стадии.
+		registry.ValidateServiceRegistrations(services);
 		logger.LogInformation("JobOrchestratorHostedService starting, instance={InstanceId}", _instanceId);
 		await base.StartAsync(cancellationToken).ConfigureAwait(false);
 	}
