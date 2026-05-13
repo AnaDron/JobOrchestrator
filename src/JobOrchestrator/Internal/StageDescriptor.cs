@@ -11,11 +11,4 @@ internal sealed class StageDescriptor {
 
 	/// <summary>Зависимости в порядке объявления в Fluent API.</summary>
 	public required IReadOnlyList<StageDependency> Dependencies { get; init; }
-
-	/// <summary>
-	/// Имена ключей, которые ожидаются в <c>DependencyKeys</c> инстансов этой стадии — равны именам её
-	/// <c>DependsOnInstance</c>-зависимостей в порядке Fluent API. Pre-computed в момент сборки <see cref="StageRegistry"/>.
-	/// Для безключевой стадии (нет <c>DependsOnInstance</c>) — пустой список.
-	/// </summary>
-	public required IReadOnlyList<string> InstanceKeyNames { get; init; }
 }

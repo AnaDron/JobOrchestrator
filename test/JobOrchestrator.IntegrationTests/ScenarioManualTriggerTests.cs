@@ -56,6 +56,61 @@ public sealed class ScenarioManualTriggerTests {
 	}
 
 	[Fact]
+	public async Task TriggerAsync_InheritedKeyThroughDependsOn_IsAcceptedNotInvalidKeys() {
+		// Regression-тест на bug в плоском InstanceKeyNames:
+		// products нет прямого DependsOnInstance(shops), но через DependsOn(productGroups) измерение
+		// `shops` унаследовано. TriggerAsync("products", { shops: "u1" }) должен принять keys.
+		var shopsFake = new FakeServiceA();
+		shopsFake.ExecuteHandler = (ctx, _) => { ctx.AddKey("u1"); return Task.CompletedTask; };
+
+		using var host = TestHostFactory.Build(
+			configure: jobs => {
+				var shops = jobs.Stage("shops").HandledBy<FakeServiceA>().RunPeriodically(TimeSpan.FromHours(1));
+				var pg = jobs.Stage("productGroups").HandledBy<FakeServiceB>().DependsOnInstance(shops).RunPeriodically(TimeSpan.FromHours(1));
+				jobs.Stage("products").HandledBy<FakeServiceC>().DependsOn(pg).RunPeriodically(TimeSpan.FromHours(1));
+			},
+			registerFakes: s => {
+				s.AddSingleton<FakeServiceA>(shopsFake);
+				s.AddSingleton<FakeServiceB>();
+				s.AddSingleton<FakeServiceC>();
+			});
+
+		await host.StartAsync().ConfigureAwait(false);
+		try {
+			var productsFake = host.Services.GetRequiredService<FakeServiceC>();
+			(await productsFake.WaitForCallCountAsync(1, Timeout).ConfigureAwait(false))
+				.Should().BeTrue("products[shops=u1] должен пробуститься после каскада");
+
+			var orchestrator = host.Services.GetRequiredService<IJobOrchestrator>();
+			// Manual triggered c унаследованным ключом — раньше валидация отбрасывала это как InvalidKeys.
+			var result = await orchestrator.TriggerAsync("products",
+				new Dictionary<string, string>(StringComparer.Ordinal) { ["shops"] = "u1" }).ConfigureAwait(false);
+			result.Should().NotBe(TriggerResult.InvalidKeys, "inherited key через DependsOn должен валидироваться корректно");
+			result.Should().BeOneOf(TriggerResult.Started, TriggerResult.Debounced, TriggerResult.AlreadyRunning);
+		} finally {
+			await host.StopAsync().ConfigureAwait(false);
+		}
+	}
+
+	[Fact]
+	public async Task TriggerAsync_KeysNotMatchingExpected_ReturnsInvalidKeys() {
+		// Keyless-стадия не должна принимать ключи; и наоборот, ключевая — не принимать пустой dict.
+		using var host = TestHostFactory.Build(
+			configure: jobs => jobs.Stage("keyless").HandledBy<FakeServiceA>().RunPeriodically(TimeSpan.FromHours(1)),
+			registerFakes: s => s.AddSingleton<FakeServiceA>());
+
+		await host.StartAsync().ConfigureAwait(false);
+		try {
+			var orchestrator = host.Services.GetRequiredService<IJobOrchestrator>();
+			var result = await orchestrator.TriggerAsync("keyless",
+				new Dictionary<string, string>(StringComparer.Ordinal) { ["unexpected"] = "x" }).ConfigureAwait(false);
+			result.Should().Be(TriggerResult.InvalidKeys);
+		} finally {
+			await host.StopAsync().ConfigureAwait(false);
+		}
+	}
+
+	[Fact]
 	public async Task TriggerAsync_InDebounceWindow_ReturnsDebounced() {
 		var fake = new FakeServiceA();
 		using var host = TestHostFactory.Build(

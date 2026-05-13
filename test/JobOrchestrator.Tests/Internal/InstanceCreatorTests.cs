@@ -12,7 +12,6 @@ public sealed class InstanceCreatorTests {
 		RetryPolicy = RetryPolicy.NoRetry,
 		Debounce = TimeSpan.Zero,
 		Dependencies = deps,
-		InstanceKeyNames = [.. deps.Where(d => d.Mode == DependencyMode.Instance).Select(d => d.TargetStageName)],
 	};
 
 	private static StageInstance MakeInstanceWithSuccess(StageDescriptor stage, Dictionary<string, string>? keys = null) {

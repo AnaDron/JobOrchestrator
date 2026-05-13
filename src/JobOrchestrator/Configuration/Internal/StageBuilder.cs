@@ -78,10 +78,8 @@ internal sealed class StageBuilder(string name, JobDefaults defaults) : IStageBu
 			throw new JobConfigurationException($"Стадия '{Name}': RunPeriodically(...) не задано.");
 		}
 		var deps = _dependencies.ToArray();
-		var instanceKeyNames = deps
-			.Where(d => d.Mode == DependencyMode.Instance)
-			.Select(d => d.TargetStageName)
-			.ToArray();
+		// Имена ожидаемых ключей вычисляются позже в StageRegistry — там доступны транзитивные
+		// зависимости (имена, унаследованные через цепочку DependsOn-родителей).
 		return new StageDescriptor {
 			Name = Name,
 			ServiceType = ServiceType,
@@ -90,7 +88,6 @@ internal sealed class StageBuilder(string name, JobDefaults defaults) : IStageBu
 			Debounce = Debounce,
 			ExecutionTimeout = ExecutionTimeout,
 			Dependencies = deps,
-			InstanceKeyNames = instanceKeyNames,
 		};
 	}
 }

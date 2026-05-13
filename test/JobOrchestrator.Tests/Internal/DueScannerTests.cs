@@ -15,7 +15,6 @@ public sealed class DueScannerTests {
 		RetryPolicy = RetryPolicy.NoRetry,
 		Debounce = TimeSpan.Zero,
 		Dependencies = [],
-		InstanceKeyNames = [],
 	};
 
 	private static StageInstance MakeInstance(StageDescriptor stage, DateTimeOffset? nextAuto, InstanceLifecycleState state = InstanceLifecycleState.Idle) {

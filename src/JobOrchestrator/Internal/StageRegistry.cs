@@ -16,6 +16,7 @@ internal sealed class StageRegistry {
 	private readonly Dictionary<string, IReadOnlyList<StageDescriptor>> _dependingOnInstance;
 	private readonly Dictionary<string, IReadOnlyList<StageDescriptor>> _affectedByKeyRemoval;
 	private readonly Dictionary<string, int> _cancellationRank;
+	private readonly Dictionary<string, IReadOnlyList<string>> _expectedKeyNames;
 
 	public StageRegistry(IReadOnlyList<StageDescriptor> stages) {
 		ArgumentNullException.ThrowIfNull(stages);
@@ -31,6 +32,7 @@ internal sealed class StageRegistry {
 		_dependingOnInstance = BuildReverseIndex(_byName, DependencyMode.Instance);
 		_affectedByKeyRemoval = BuildAffectedByKeyRemoval(_byName);
 		_cancellationRank = BuildCancellationRank(_byName);
+		_expectedKeyNames = BuildExpectedKeyNames(_byName);
 	}
 
 	public StageDescriptor Get(string name) =>
@@ -66,6 +68,20 @@ internal sealed class StageRegistry {
 	/// </summary>
 	public int CancellationRank(string stageName) =>
 		_cancellationRank.TryGetValue(stageName, out var rank) ? rank : 0;
+
+	/// <summary>
+	/// Имена компонентов <c>DependencyKeys</c>, которые ожидаются у инстансов стадии <paramref name="stageName"/>.
+	/// Транзитивно: включает имена, унаследованные через цепочку <c>DependsOn</c>-родителей.
+	/// <para>
+	/// Пример: <c>shops --DependsOnInstance--> productGroups --DependsOn--> products</c>. У <c>products</c>
+	/// нет прямой <c>DependsOnInstance</c>, но измерение <c>shops</c> наследуется через <c>productGroups</c>
+	/// → <c>ExpectedKeyNames("products") == [shops]</c>. Используется в <c>ValidateKeys</c> для
+	/// <see cref="IJobOrchestrator.TriggerAsync"/>: корректное принятие/отбрасывание ключей независимо от
+	/// того, прямая зависимость это <c>DependsOnInstance</c> или унаследованная.
+	/// </para>
+	/// </summary>
+	public IReadOnlyList<string> ExpectedKeyNames(string stageName) =>
+		_expectedKeyNames.TryGetValue(stageName, out var names) ? names : [];
 
 	private static Dictionary<string, IReadOnlyList<StageDescriptor>> BuildReverseIndex(
 		Dictionary<string, StageDescriptor> byName,
@@ -153,6 +169,42 @@ internal sealed class StageRegistry {
 			}
 			rank[node] = max;
 			return max;
+		}
+	}
+
+	/// <summary>
+	/// Транзитивно собирает имена ожидаемых key-измерений для каждой стадии.
+	/// Алгоритм рекурсивного обхода по <c>stage.Dependencies</c> в Fluent-порядке:
+	/// <list type="bullet">
+	/// <item><c>DependsOnInstance(parent)</c> — сначала включает все имена родителя, затем добавляет имя самого родителя.</item>
+	/// <item><c>DependsOn(parent)</c> — включает все имена родителя (наследование измерений), но имя самого родителя НЕ добавляется (DependsOn не вводит новое измерение).</item>
+	/// </list>
+	/// Цикл уже исключён <see cref="ValidateNoCycles"/>, поэтому рекурсия завершается. Memo-кэш per stageName
+	/// внутри вызова — каждая стадия посещается ровно один раз.
+	/// </summary>
+	private static Dictionary<string, IReadOnlyList<string>> BuildExpectedKeyNames(Dictionary<string, StageDescriptor> byName) {
+		var memo = new Dictionary<string, IReadOnlyList<string>>(byName.Count, StringComparer.Ordinal);
+		foreach (var stage in byName.Values) {
+			_ = Collect(stage);
+		}
+		return memo;
+
+		IReadOnlyList<string> Collect(StageDescriptor stage) {
+			if (memo.TryGetValue(stage.Name, out var cached)) return cached;
+			var names = new List<string>();
+			var seen = new HashSet<string>(StringComparer.Ordinal);
+			foreach (var dep in stage.Dependencies) {
+				if (!byName.TryGetValue(dep.TargetStageName, out var parent)) continue;
+				foreach (var inherited in Collect(parent)) {
+					if (seen.Add(inherited)) names.Add(inherited);
+				}
+				if (dep.Mode == DependencyMode.Instance) {
+					if (seen.Add(dep.TargetStageName)) names.Add(dep.TargetStageName);
+				}
+			}
+			IReadOnlyList<string> result = names;
+			memo[stage.Name] = result;
+			return result;
 		}
 	}
 

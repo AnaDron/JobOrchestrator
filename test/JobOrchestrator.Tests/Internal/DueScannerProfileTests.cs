@@ -38,7 +38,6 @@ public sealed class DueScannerProfileTests(ITestOutputHelper output) {
 		RetryPolicy = RetryPolicy.NoRetry,
 		Debounce = TimeSpan.Zero,
 		Dependencies = [],
-		InstanceKeyNames = [],
 	};
 
 	private static (DueScanner Scanner, InstanceManager Manager, Channel<OrchestratorEvent> Channel) Setup(int n, bool allDue) {

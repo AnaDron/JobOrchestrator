@@ -13,7 +13,6 @@ public sealed class StageRegistryValidationTests {
 		Debounce = TimeSpan.Zero,
 		ExecutionTimeout = null,
 		Dependencies = deps,
-		InstanceKeyNames = [.. deps.Where(d => d.Mode == DependencyMode.Instance).Select(d => d.TargetStageName)],
 	};
 
 	[Fact]
@@ -101,6 +100,38 @@ public sealed class StageRegistryValidationTests {
 		]);
 		var affected = reg.StagesAffectedByKeyRemoval("shops");
 		affected.Select(s => s.Name).Should().BeEquivalentTo(["productGroups", "products", "documents"]);
+	}
+
+	[Fact]
+	public void ExpectedKeyNames_TransitivelyInheritsThroughDependsOn() {
+		// Цепь: shops --DependsOnInstance--> productGroups --DependsOn--> products --DependsOn--> documents.
+		// Direct DependsOnInstance только у productGroups. Через цепочку DependsOn измерение `shops`
+		// наследуется до documents — ExpectedKeyNames должен это отразить.
+		var reg = new StageRegistry([
+			MakeStage("shops"),
+			MakeStage("productGroups", new StageDependency("shops", DependencyMode.Instance)),
+			MakeStage("products", new StageDependency("productGroups", DependencyMode.Whole)),
+			MakeStage("documents", new StageDependency("products", DependencyMode.Whole)),
+		]);
+
+		reg.ExpectedKeyNames("shops").Should().BeEmpty();
+		reg.ExpectedKeyNames("productGroups").Should().BeEquivalentTo(["shops"]);
+		reg.ExpectedKeyNames("products").Should().BeEquivalentTo(["shops"], "products унаследовал измерение от productGroups через DependsOn");
+		reg.ExpectedKeyNames("documents").Should().BeEquivalentTo(["shops"], "documents унаследовал то же измерение через цепочку DependsOn");
+	}
+
+	[Fact]
+	public void ExpectedKeyNames_MultipleDependsOnInstance_MergesInDeclarationOrder() {
+		var reg = new StageRegistry([
+			MakeStage("shops"),
+			MakeStage("currencies"),
+			MakeStage("rates",
+				new StageDependency("shops", DependencyMode.Instance),
+				new StageDependency("currencies", DependencyMode.Instance)),
+		]);
+		// Имена в порядке объявления: shops, потом currencies — что соответствует Fluent API
+		// .DependsOnInstance(shops).DependsOnInstance(currencies).
+		reg.ExpectedKeyNames("rates").Should().Equal("shops", "currencies");
 	}
 
 	[Fact]

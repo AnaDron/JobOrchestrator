@@ -12,7 +12,6 @@ public sealed class InstanceManagerTests {
 		RetryPolicy = RetryPolicy.NoRetry,
 		Debounce = TimeSpan.Zero,
 		Dependencies = [],
-		InstanceKeyNames = [],
 	};
 
 	private static StageInstance MakeInstance(StageDescriptor stage, Dictionary<string, string> keys) {

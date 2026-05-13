@@ -25,10 +25,10 @@ internal sealed class JobOrchestratorRuntime(
 	) {
 		ArgumentException.ThrowIfNullOrEmpty(stageName);
 		if (lifecycle.IsFaulted) return TriggerResult.Faulted;
-		if (!registry.TryGet(stageName, out var stage)) return TriggerResult.NotFound;
+		if (!registry.TryGet(stageName, out _)) return TriggerResult.NotFound;
 
 		var keys = dependencyKeys ?? new Dictionary<string, string>(StringComparer.Ordinal);
-		if (!ValidateKeys(stage!, keys)) return TriggerResult.InvalidKeys;
+		if (!ValidateKeys(registry.ExpectedKeyNames(stageName), keys)) return TriggerResult.InvalidKeys;
 
 		var tcs = new TaskCompletionSource<TriggerResult>(TaskCreationOptions.RunContinuationsAsynchronously);
 		var evt = new ManualTriggerRequestedEvent(stageName, keys, tcs);
@@ -66,11 +66,11 @@ internal sealed class JobOrchestratorRuntime(
 	}
 
 	/// <summary>
-	/// Проверяет, что набор имён ключей соответствует <c>DependsOnInstance</c>-зависимостям стадии.
+	/// Проверяет, что набор имён ключей соответствует ожидаемым именам, включая транзитивно унаследованные
+	/// через цепочку <c>DependsOn</c>-родителей (см. <see cref="StageRegistry.ExpectedKeyNames"/>).
 	/// Точное соответствие: те же имена в одинаковом наборе. Для безключевой стадии — пустой словарь.
 	/// </summary>
-	private static bool ValidateKeys(StageDescriptor stage, IReadOnlyDictionary<string, string> keys) {
-		var expected = stage.InstanceKeyNames;
+	private static bool ValidateKeys(IReadOnlyList<string> expected, IReadOnlyDictionary<string, string> keys) {
 		if (keys.Count != expected.Count) return false;
 		foreach (var name in expected) {
 			if (!keys.ContainsKey(name)) return false;

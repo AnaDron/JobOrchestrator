@@ -12,7 +12,6 @@ public sealed class DependencyResolverTests {
 		RetryPolicy = RetryPolicy.NoRetry,
 		Debounce = TimeSpan.Zero,
 		Dependencies = deps,
-		InstanceKeyNames = [.. deps.Where(d => d.Mode == DependencyMode.Instance).Select(d => d.TargetStageName)],
 	};
 
 	private static StageInstance MakeInstance(StageDescriptor stage, Dictionary<string, string>? keys = null) {
