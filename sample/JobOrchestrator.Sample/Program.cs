@@ -8,7 +8,8 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
 // Минимальный пример: producer-стадия эмитит три ключа, consumer-стадия параметризуется ими,
-// reporter-стадия наследует ключи consumer через DependsOn. Запускается ~5 секунд, потом выходит.
+// reporter-стадия наследует ключи consumer через DependsOn. Запускается ~5 секунд, выводит
+// snapshot через GetOverviewAsync и проверяет IsFaulted.
 
 var builder = Host.CreateApplicationBuilder(args);
 builder.Logging.AddSimpleConsole(o => {
@@ -36,5 +37,17 @@ builder.Services.AddJobOrchestrator(jobs => {
 
 using var host = builder.Build();
 await host.StartAsync();
-await Task.Delay(TimeSpan.FromSeconds(5));
+
+await Task.Delay(TimeSpan.FromSeconds(3));
+
+// Snapshot через event-loop RPC — thread-safe доступ из любого потока.
+var orchestrator = host.Services.GetRequiredService<IJobOrchestrator>();
+Console.WriteLine($"\n=== Snapshot (IsFaulted={orchestrator.IsFaulted}) ===");
+var overview = await orchestrator.GetOverviewAsync();
+foreach (var info in overview.Instances.OrderBy(i => i.FullyQualifiedName, StringComparer.Ordinal)) {
+	Console.WriteLine($"  {info.FullyQualifiedName,-40} state={info.State}  lastSuccess={info.LastSuccess:HH:mm:ss}");
+}
+Console.WriteLine();
+
+await Task.Delay(TimeSpan.FromSeconds(2));
 await host.StopAsync();

@@ -7,16 +7,18 @@ public sealed class ScenarioStateStoreTests {
 
 	[Fact]
 	public async Task IJobState_PersistsBetweenIterations() {
-		// На первой итерации записываем в State, на следующей — читаем.
+		// На первой итерации записываем в State, на следующей — читаем. Signal-based wait через TCS:
+		// тест больше не зависит от точного интервала-таймера, ждёт ровно того, что нужно.
 		var fake = new FakeServiceA();
 		int call = 0;
-		string? readBack = null;
+		var readSignal = new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously);
 		fake.ExecuteHandler = async (ctx, _) => {
-			call++;
-			if (call == 1) {
+			int n = Interlocked.Increment(ref call);
+			if (n == 1) {
 				await ctx.State.SetAsync("cursor", "value-1").ConfigureAwait(false);
-			} else if (call == 2) {
-				readBack = await ctx.State.GetAsync<string>("cursor").ConfigureAwait(false);
+			} else if (n == 2) {
+				var read = await ctx.State.GetAsync<string>("cursor").ConfigureAwait(false);
+				readSignal.TrySetResult(read);
 			}
 		};
 
@@ -28,7 +30,7 @@ public sealed class ScenarioStateStoreTests {
 
 		await host.StartAsync().ConfigureAwait(false);
 		try {
-			(await fake.WaitForCallCountAsync(2, Timeout).ConfigureAwait(false)).Should().BeTrue();
+			var readBack = await readSignal.Task.WaitAsync(Timeout).ConfigureAwait(false);
 			readBack.Should().Be("value-1");
 		} finally {
 			await host.StopAsync().ConfigureAwait(false);
@@ -66,20 +68,21 @@ public sealed class ScenarioStateStoreTests {
 		await host.StartAsync().ConfigureAwait(false);
 		try {
 			(await pgFake.WaitForCallCountAsync(1, Timeout).ConfigureAwait(false)).Should().BeTrue();
-			await Task.Delay(200).ConfigureAwait(false);
-
-			// До UnregisterKey: scope pg[shops=u1] существует и содержит данные.
 			var scopeName = "pg:shops=u1";
-			(await store.GetAsync(scopeName, "data", CancellationToken.None).ConfigureAwait(false))
-				.Should().NotBeNull();
+			// Дожидаемся, что pg.ExecuteAsync действительно сохранил данные (SetAsync завершился).
+			(await TestSync.WaitForAsync(async () =>
+				(await store.GetAsync(scopeName, "data", CancellationToken.None).ConfigureAwait(false)) is not null,
+				Timeout
+			).ConfigureAwait(false)).Should().BeTrue("pg должен был записать в State до UnregisterKey");
 
 			var orchestrator = host.Services.GetRequiredService<IJobOrchestrator>();
 			orchestrator.UnregisterKey("shops", "u1");
-			await Task.Delay(300).ConfigureAwait(false);
 
-			// После UnregisterKey: scope полностью удалён через RemoveScopeAsync.
-			(await store.GetAsync(scopeName, "data", CancellationToken.None).ConfigureAwait(false))
-				.Should().BeNull("RemoveScopeAsync должен был очистить scope при каскадном удалении");
+			// Дожидаемся завершения каскада: scope полностью удалён через RemoveScopeAsync.
+			(await TestSync.WaitForAsync(async () =>
+				(await store.GetAsync(scopeName, "data", CancellationToken.None).ConfigureAwait(false)) is null,
+				Timeout
+			).ConfigureAwait(false)).Should().BeTrue("RemoveScopeAsync должен был очистить scope при каскадном удалении");
 		} finally {
 			await host.StopAsync().ConfigureAwait(false);
 		}

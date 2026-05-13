@@ -45,7 +45,9 @@ services.AddInMemoryJobStateStore();
 
 SDK оперирует тремя сущностями: **Stage** (immutable декларация в Fluent API), **StageInstance** (long-lived runtime-экземпляр с композитным ключом), **Job** (одна итерация = один вызов `IJobService.ExecuteAsync`). Соотношение `Stage:Instance = 1:N`, `Instance:Job = 1:M`. Подробный разбор и иллюстрация на Эвотор-сценарии — в [docs/concepts.md](docs/concepts.md).
 
-Архитектурное обсуждение, которое привело к текущему дизайну (отклонения от первоначального DESIGN.md, эволюция семантики `DependsOn`/`DependsOnInstance`, каскадное удаление, structured logging) — в `docs/ultrathink-dynamic-emerson.md` (план, переехавший в SDK как design-история).
+## Архитектура
+
+Описание устройства SDK (single-threaded event loop, каскадное удаление с deferred cleanup, backtracking-merge при создании инстансов, lifecycle/IsFaulted, структурное логирование) — в [docs/architecture.md](docs/architecture.md).
 
 ## Сборка и тесты
 

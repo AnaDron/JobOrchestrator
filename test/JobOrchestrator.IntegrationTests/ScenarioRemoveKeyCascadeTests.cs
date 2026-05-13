@@ -42,8 +42,11 @@ public sealed class ScenarioRemoveKeyCascadeTests {
 			var orchestrator = host.Services.GetRequiredService<IJobOrchestrator>();
 			orchestrator.UnregisterKey("shops", "u1");
 
-			// Дать event loop'у обработать каскадное удаление.
-			await Task.Delay(500).ConfigureAwait(false);
+			// Signal-based wait: каскадное удаление завершилось, когда u1-инстансы исчезли из overview.
+			(await TestSync.WaitForAsync(async () => {
+				var snap = await orchestrator.GetOverviewAsync().ConfigureAwait(false);
+				return !snap.Instances.Any(i => i.DependencyKeys.GetValueOrDefault("shops") == "u1");
+			}, Timeout).ConfigureAwait(false)).Should().BeTrue("каскадное удаление должно завершиться в Timeout");
 
 			var overview = await orchestrator.GetOverviewAsync().ConfigureAwait(false);
 			var fqns = overview.Instances.Select(j => j.FullyQualifiedName).ToHashSet();
