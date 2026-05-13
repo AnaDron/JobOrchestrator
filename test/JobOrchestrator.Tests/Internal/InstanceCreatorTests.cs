@@ -29,7 +29,7 @@ public sealed class InstanceCreatorTests {
 		var stage = MakeStage("shops");
 		var instances = new InstanceManager();
 		var keyspace = new KeyspaceRegistry();
-		var creator = new InstanceCreator(instances, keyspace, TimeProvider.System);
+		var creator = new InstanceCreator(instances, keyspace, TimeProvider.System, System.Threading.Channels.Channel.CreateUnbounded<OrchestratorEvent>());
 
 		var created = creator.EvaluateAndCreate(stage);
 		created.Should().ContainSingle();
@@ -44,7 +44,7 @@ public sealed class InstanceCreatorTests {
 		var stage = MakeStage("shops");
 		var instances = new InstanceManager();
 		var keyspace = new KeyspaceRegistry();
-		var creator = new InstanceCreator(instances, keyspace, TimeProvider.System);
+		var creator = new InstanceCreator(instances, keyspace, TimeProvider.System, System.Threading.Channels.Channel.CreateUnbounded<OrchestratorEvent>());
 
 		creator.EvaluateAndCreate(stage).Should().ContainSingle();
 		creator.EvaluateAndCreate(stage).Should().BeEmpty();  // идемпотентно
@@ -58,7 +58,7 @@ public sealed class InstanceCreatorTests {
 		var instances = new InstanceManager();
 		var keyspace = new KeyspaceRegistry();
 		instances.Add(MakeInstanceWithSuccess(shops));  // shops успешен, но keyspace пуст
-		var creator = new InstanceCreator(instances, keyspace, TimeProvider.System);
+		var creator = new InstanceCreator(instances, keyspace, TimeProvider.System, System.Threading.Channels.Channel.CreateUnbounded<OrchestratorEvent>());
 
 		creator.EvaluateAndCreate(pg).Should().BeEmpty();
 	}
@@ -73,7 +73,7 @@ public sealed class InstanceCreatorTests {
 		keyspace.Add("shops", EmptyKeys, "u1");
 		keyspace.Add("shops", EmptyKeys, "u2");
 		keyspace.Add("shops", EmptyKeys, "u3");
-		var creator = new InstanceCreator(instances, keyspace, TimeProvider.System);
+		var creator = new InstanceCreator(instances, keyspace, TimeProvider.System, System.Threading.Channels.Channel.CreateUnbounded<OrchestratorEvent>());
 
 		var created = creator.EvaluateAndCreate(pg);
 		created.Should().HaveCount(3);
@@ -93,7 +93,7 @@ public sealed class InstanceCreatorTests {
 		var instances = new InstanceManager();
 		var keyspace = new KeyspaceRegistry();
 		instances.Add(MakeInstanceWithSuccess(pg, new Dictionary<string, string> { ["shops"] = "u1" }));
-		var creator = new InstanceCreator(instances, keyspace, TimeProvider.System);
+		var creator = new InstanceCreator(instances, keyspace, TimeProvider.System, System.Threading.Channels.Channel.CreateUnbounded<OrchestratorEvent>());
 
 		var created = creator.EvaluateAndCreate(products);
 		created.Should().ContainSingle();
@@ -112,7 +112,7 @@ public sealed class InstanceCreatorTests {
 		instances.Add(MakeInstanceWithSuccess(pg, new Dictionary<string, string> { ["shops"] = "u1" }));
 		instances.Add(MakeInstanceWithSuccess(pg, new Dictionary<string, string> { ["shops"] = "u2" }));
 		instances.Add(MakeInstanceWithSuccess(pg, new Dictionary<string, string> { ["shops"] = "u3" }));
-		var creator = new InstanceCreator(instances, keyspace, TimeProvider.System);
+		var creator = new InstanceCreator(instances, keyspace, TimeProvider.System, System.Threading.Channels.Channel.CreateUnbounded<OrchestratorEvent>());
 
 		var created = creator.EvaluateAndCreate(products);
 		created.Select(j => j.DependencyKeys["shops"]).Should().BeEquivalentTo("u1", "u2", "u3");
@@ -127,7 +127,7 @@ public sealed class InstanceCreatorTests {
 		// LastSuccess = null — ещё не был успешен.
 		var pgInst = new StageInstance { Identity = new InstanceIdentity(pg, new Dictionary<string, string>(StringComparer.Ordinal)) };
 		instances.Add(pgInst);
-		var creator = new InstanceCreator(instances, keyspace, TimeProvider.System);
+		var creator = new InstanceCreator(instances, keyspace, TimeProvider.System, System.Threading.Channels.Channel.CreateUnbounded<OrchestratorEvent>());
 
 		creator.EvaluateAndCreate(products).Should().BeEmpty();
 	}
@@ -148,7 +148,7 @@ public sealed class InstanceCreatorTests {
 		keyspace.Add("a", EmptyKeys, "2");
 		keyspace.Add("b", EmptyKeys, "x");
 		keyspace.Add("b", EmptyKeys, "y");
-		var creator = new InstanceCreator(instances, keyspace, TimeProvider.System);
+		var creator = new InstanceCreator(instances, keyspace, TimeProvider.System, System.Threading.Channels.Channel.CreateUnbounded<OrchestratorEvent>());
 
 		var created = creator.EvaluateAndCreate(c);
 		// 2 × 2 = 4 комбинации
@@ -170,7 +170,7 @@ public sealed class InstanceCreatorTests {
 		var keyspace = new KeyspaceRegistry();
 		instances.Add(MakeInstanceWithSuccess(a, new Dictionary<string, string> { ["k"] = "1" }));
 		instances.Add(MakeInstanceWithSuccess(b, new Dictionary<string, string> { ["k"] = "2" }));
-		var creator = new InstanceCreator(instances, keyspace, TimeProvider.System);
+		var creator = new InstanceCreator(instances, keyspace, TimeProvider.System, System.Threading.Channels.Channel.CreateUnbounded<OrchestratorEvent>());
 
 		creator.EvaluateAndCreate(x).Should().BeEmpty();
 	}
@@ -187,7 +187,7 @@ public sealed class InstanceCreatorTests {
 		var keyspace = new KeyspaceRegistry();
 		instances.Add(MakeInstanceWithSuccess(a, new Dictionary<string, string> { ["k"] = "1" }));
 		instances.Add(MakeInstanceWithSuccess(b, new Dictionary<string, string> { ["k"] = "1" }));
-		var creator = new InstanceCreator(instances, keyspace, TimeProvider.System);
+		var creator = new InstanceCreator(instances, keyspace, TimeProvider.System, System.Threading.Channels.Channel.CreateUnbounded<OrchestratorEvent>());
 
 		var created = creator.EvaluateAndCreate(x);
 		created.Should().ContainSingle();

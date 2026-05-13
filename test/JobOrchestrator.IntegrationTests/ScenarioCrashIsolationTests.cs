@@ -53,7 +53,10 @@ public sealed class ScenarioCrashIsolationTests {
 	}
 
 	[Fact]
-	public async Task AfterMarkFaulted_GetOverview_ThrowsInvalidOperation() {
+	public async Task AfterMarkFaulted_GetOverview_IsStillAccessible() {
+		// Новый контракт (см. ultrathink-анализ, P3.5.2): GetOverview доступен даже в Faulted-состоянии,
+		// чтобы можно было увидеть post-mortem snapshot — что было в InstanceManager на момент краша.
+		// Мутирующие операции (TriggerAsync/RegisterKey) — fail-fast как раньше.
 		using var host = TestHostFactory.Build(
 			configure: jobs => jobs.Stage("a").HandledBy<FakeServiceA>().RunPeriodically(TimeSpan.FromMinutes(1)),
 			registerFakes: s => s.AddSingleton<FakeServiceA>());
@@ -63,8 +66,14 @@ public sealed class ScenarioCrashIsolationTests {
 		try {
 			host.Services.GetRequiredService<OrchestratorLifecycle>().MarkFaulted();
 
+			// GetOverview не throws — даёт snapshot для диагностики.
 			var act = () => orchestrator.GetOverview();
-			act.Should().Throw<InvalidOperationException>();
+			act.Should().NotThrow();
+			orchestrator.IsFaulted.Should().BeTrue();
+
+			// Но мутирующие операции — throws.
+			Action register = () => orchestrator.RegisterKey("a", "k1");
+			register.Should().Throw<InvalidOperationException>();
 		} finally {
 			await host.StopAsync().ConfigureAwait(false);
 		}

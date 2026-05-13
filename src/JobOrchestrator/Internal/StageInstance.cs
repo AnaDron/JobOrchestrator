@@ -26,6 +26,15 @@ namespace JobOrchestrator.Internal;
 internal sealed class StageInstance {
 	public required InstanceIdentity Identity { get; init; }
 
+	/// <summary>
+	/// Sink для пересылки <c>ctx.AddKey/RemoveKey</c> в event loop. <b>Один объект на инстанс</b>
+	/// (а не на каждую итерацию), потому что <c>Source</c> и <c>ChannelWriter</c> неизменны
+	/// в течение жизни инстанса. Inject'ится <see cref="InstanceCreator"/> при материализации
+	/// (через mutable setter, так как Sink-конструктору нужна обратная ссылка на этот же инстанс).
+	/// После материализации не меняется.
+	/// </summary>
+	public IJobContextSink Sink { get; set; } = null!;
+
 	// Identity-facades — immutable, без подводных камней; делегируют для краткости call-sites.
 	public StageDescriptor Stage => Identity.Stage;
 	public IReadOnlyDictionary<string, string> DependencyKeys => Identity.DependencyKeys;

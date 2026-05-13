@@ -1,3 +1,5 @@
+using System.Threading.Channels;
+
 namespace JobOrchestrator.Internal;
 
 /// <summary>
@@ -21,7 +23,12 @@ namespace JobOrchestrator.Internal;
 /// от того, в каком порядке прилетали разрешающие события.
 /// </para>
 /// </summary>
-internal sealed class InstanceCreator(InstanceManager instances, KeyspaceRegistry keyspace, TimeProvider time) {
+internal sealed class InstanceCreator(
+	InstanceManager instances,
+	KeyspaceRegistry keyspace,
+	TimeProvider time,
+	Channel<OrchestratorEvent> channel
+) {
 	public List<StageInstance> EvaluateAndCreate(StageDescriptor stage) {
 		if (stage.Dependencies.Count == 0) {
 			// Безключевая стадия → один инстанс с пустыми DependencyKeys.
@@ -159,6 +166,9 @@ internal sealed class InstanceCreator(InstanceManager instances, KeyspaceRegistr
 	private StageInstance MaterializeInstance(StageDescriptor stage, IReadOnlyDictionary<string, string> keys) {
 		var identity = new InstanceIdentity(stage, keys);
 		var instance = new StageInstance { Identity = identity };
+		// Pre-allocated Sink: один объект на lifetime инстанса (Source/Writer постоянны), переиспользуется
+		// всеми итерациями StageRunner-а — экономим аллокацию per-iteration.
+		instance.Sink = new ChannelJobContextSink(channel.Writer, instance);
 		// NextAutoUtc = now → DueScanner подберёт инстанс при ближайшем проходе.
 		instance.SetMetrics(JobMetrics.Empty with { NextAutoUtc = time.GetUtcNow() });
 		instances.Add(instance);

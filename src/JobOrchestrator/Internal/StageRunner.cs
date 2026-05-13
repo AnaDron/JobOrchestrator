@@ -44,7 +44,6 @@ internal sealed class StageRunner(
 		try {
 			var service = (IJobService)scope.ServiceProvider.GetRequiredService(instance.Stage.ServiceType);
 			var jobState = new DefaultJobState(stateStore, instance.StateScope);
-			var sink = new ChannelJobContextSink(channel.Writer, instance);
 
 			var jobContext = new JobContext {
 				CorrelationId = correlationId,
@@ -53,7 +52,7 @@ internal sealed class StageRunner(
 				LastSuccessAt = instance.Metrics.LastSuccess,
 				DependencyKeys = instance.DependencyKeys,
 				FullyQualifiedName = instance.FullyQualifiedName,
-				Sink = sink,
+				Sink = instance.Sink,    // pre-allocated в InstanceCreator, переиспользуется через все итерации
 			};
 
 			Log.IterationStart(_logger, instance.FullyQualifiedName, trigger, null);

@@ -1,4 +1,6 @@
+using System.Collections.Immutable;
 using System.Threading.Channels;
+using Microsoft.Extensions.Logging;
 
 namespace JobOrchestrator.Internal;
 
@@ -7,15 +9,20 @@ namespace JobOrchestrator.Internal;
 /// <list type="bullet">
 /// <item><c>TriggerAsync</c>: валидация ключей → публикация <see cref="ManualTriggerRequestedEvent"/> в Channel, await TCS.</item>
 /// <item><c>Register/UnregisterKey</c>: проверка существования стадии → публикация <see cref="KeyAddedEvent"/>/<see cref="KeyRemovedEvent"/>.</item>
-/// <item><c>GetOverview</c>: синхронный snapshot через atomic-reads <see cref="StageInstance"/>-полей. Lock-free, без RPC.</item>
+/// <item><c>GetOverview</c>: синхронный snapshot через atomic-reads <see cref="StageInstance"/>-полей. Lock-free, без RPC. Доступен и в Faulted (для диагностики).</item>
 /// </list>
 /// </summary>
 internal sealed class JobOrchestratorRuntime(
 	Channel<OrchestratorEvent> channel,
 	StageRegistry registry,
 	InstanceManager instances,
-	OrchestratorLifecycle lifecycle
+	OrchestratorLifecycle lifecycle,
+	ILogger<JobOrchestratorRuntime> logger
 ) : IJobOrchestrator {
+	// Pre-allocated пустой словарь для null-path в TriggerAsync — избегаем аллокации при каждом вызове.
+	private static readonly IReadOnlyDictionary<string, string> EmptyKeys =
+		ImmutableDictionary<string, string>.Empty.WithComparers(StringComparer.Ordinal);
+
 	public bool IsFaulted => lifecycle.IsFaulted;
 
 	public async Task<TriggerResult> TriggerAsync(
@@ -24,11 +31,20 @@ internal sealed class JobOrchestratorRuntime(
 		CancellationToken ct = default
 	) {
 		ArgumentException.ThrowIfNullOrEmpty(stageName);
-		if (lifecycle.IsFaulted) return TriggerResult.Faulted;
-		if (!registry.TryGet(stageName, out _)) return TriggerResult.NotFound;
+		if (lifecycle.IsFaulted) {
+			Log.TriggerFaulted(logger, stageName, null);
+			return TriggerResult.Faulted;
+		}
+		if (!registry.TryGet(stageName, out _)) {
+			Log.TriggerNotFound(logger, stageName, null);
+			return TriggerResult.NotFound;
+		}
 
-		var keys = dependencyKeys ?? new Dictionary<string, string>(StringComparer.Ordinal);
-		if (!ValidateKeys(registry.ExpectedKeyNames(stageName), keys)) return TriggerResult.InvalidKeys;
+		var keys = dependencyKeys ?? EmptyKeys;
+		if (!ValidateKeys(registry.ExpectedKeyNames(stageName), keys)) {
+			Log.TriggerInvalidKeys(logger, stageName, null);
+			return TriggerResult.InvalidKeys;
+		}
 
 		var tcs = new TaskCompletionSource<TriggerResult>(TaskCreationOptions.RunContinuationsAsynchronously);
 		var evt = new ManualTriggerRequestedEvent(stageName, keys, tcs);
@@ -37,7 +53,9 @@ internal sealed class JobOrchestratorRuntime(
 		} catch (ChannelClosedException) {
 			return TriggerResult.Faulted;
 		}
-		return await tcs.Task.WaitAsync(ct).ConfigureAwait(false);
+		var result = await tcs.Task.WaitAsync(ct).ConfigureAwait(false);
+		Log.TriggerCompleted(logger, stageName, result, null);
+		return result;
 	}
 
 	public void RegisterKey(string stageName, string key) {
@@ -45,6 +63,7 @@ internal sealed class JobOrchestratorRuntime(
 		ArgumentException.ThrowIfNullOrEmpty(key);
 		ThrowIfFaulted();
 		var source = ResolveKeylessSource(stageName);
+		Log.RegisterKeyExternal(logger, stageName, key, null);
 		channel.Writer.Publish(new KeyAddedEvent(source, key));
 	}
 
@@ -53,6 +72,7 @@ internal sealed class JobOrchestratorRuntime(
 		ArgumentException.ThrowIfNullOrEmpty(key);
 		ThrowIfFaulted();
 		var source = ResolveKeylessSource(stageName);
+		Log.UnregisterKeyExternal(logger, stageName, key, null);
 		channel.Writer.Publish(new KeyRemovedEvent(source, key));
 	}
 
@@ -70,8 +90,7 @@ internal sealed class JobOrchestratorRuntime(
 			throw new InvalidOperationException(
 				$"Стадия '{stageName}' имеет ключевые зависимости. Внешний RegisterKey/UnregisterKey работает только для keyless-эмитеров; используйте JobContext.AddKey/RemoveKey из ExecuteAsync.");
 		}
-		var empty = new Dictionary<string, string>(StringComparer.Ordinal);
-		var source = instances.Find(stageName, empty);
+		var source = instances.Find(stageName, EmptyKeys);
 		if (source is null) {
 			throw new InvalidOperationException(
 				$"Keyless-инстанс для стадии '{stageName}' ещё не создан (оркестратор не стартован?).");
@@ -79,15 +98,15 @@ internal sealed class JobOrchestratorRuntime(
 		return source;
 	}
 
-	public InstancesOverview GetOverview() {
-		ThrowIfFaulted();
-		return instances.Snapshot();
-	}
+	/// <summary>
+	/// Lock-free snapshot. Доступен и в <see cref="IsFaulted"/>-состоянии — для post-mortem-диагностики
+	/// важно видеть, в каком состоянии оркестратор крашнулся (метрики, расписания инстансов).
+	/// </summary>
+	public InstancesOverview GetOverview() => instances.Snapshot();
 
 	/// <summary>
 	/// Проверяет, что набор имён ключей соответствует ожидаемым именам, включая транзитивно унаследованные
 	/// через цепочку <c>DependsOn</c>-родителей (см. <see cref="StageRegistry.ExpectedKeyNames"/>).
-	/// Точное соответствие: те же имена в одинаковом наборе. Для безключевой стадии — пустой словарь.
 	/// </summary>
 	private static bool ValidateKeys(IReadOnlyList<string> expected, IReadOnlyDictionary<string, string> keys) {
 		if (keys.Count != expected.Count) return false;
@@ -101,5 +120,35 @@ internal sealed class JobOrchestratorRuntime(
 		if (lifecycle.IsFaulted) {
 			throw new InvalidOperationException("Оркестратор находится в Faulted-состоянии — операции недоступны до рестарта.");
 		}
+	}
+
+	/// <summary>
+	/// Pre-allocated LoggerMessage-делегаты для внешнего API (TriggerAsync/RegisterKey/UnregisterKey).
+	/// EventId-ы 6xxx — диапазон Runtime. Operational visibility: видно кто и когда дёргал manual-triggers.
+	/// </summary>
+	private static class Log {
+		public static readonly Action<ILogger, string, TriggerResult, Exception?> TriggerCompleted =
+			LoggerMessage.Define<string, TriggerResult>(LogLevel.Debug, new EventId(6001, nameof(TriggerCompleted)),
+				"TriggerAsync({StageName}) → {Result}");
+
+		public static readonly Action<ILogger, string, Exception?> TriggerFaulted =
+			LoggerMessage.Define<string>(LogLevel.Debug, new EventId(6002, nameof(TriggerFaulted)),
+				"TriggerAsync({StageName}) → Faulted (оркестратор крашнулся)");
+
+		public static readonly Action<ILogger, string, Exception?> TriggerNotFound =
+			LoggerMessage.Define<string>(LogLevel.Warning, new EventId(6003, nameof(TriggerNotFound)),
+				"TriggerAsync({StageName}) → NotFound (стадия не зарегистрирована или инстанс не существует)");
+
+		public static readonly Action<ILogger, string, Exception?> TriggerInvalidKeys =
+			LoggerMessage.Define<string>(LogLevel.Warning, new EventId(6004, nameof(TriggerInvalidKeys)),
+				"TriggerAsync({StageName}) → InvalidKeys (набор ключей не соответствует ExpectedKeyNames стадии)");
+
+		public static readonly Action<ILogger, string, string, Exception?> RegisterKeyExternal =
+			LoggerMessage.Define<string, string>(LogLevel.Information, new EventId(6005, nameof(RegisterKeyExternal)),
+				"RegisterKey(stage={StageName}, key={Key}) внешний вызов (bootstrap)");
+
+		public static readonly Action<ILogger, string, string, Exception?> UnregisterKeyExternal =
+			LoggerMessage.Define<string, string>(LogLevel.Information, new EventId(6006, nameof(UnregisterKeyExternal)),
+				"UnregisterKey(stage={StageName}, key={Key}) внешний вызов");
 	}
 }
