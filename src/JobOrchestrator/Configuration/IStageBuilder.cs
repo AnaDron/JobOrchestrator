@@ -21,6 +21,18 @@ public interface IStageBuilder {
 	IStageBuilder WithExecutionTimeout(TimeSpan timeout);
 
 	/// <summary>
+	/// Лимит одновременно работающих инстансов этой стадии. Для multi-instance-стадий (с
+	/// <see cref="DependsOnInstance"/>) защищает от saturate-а downstream-ресурсов (DB connection pool,
+	/// внешний API rate-limit). По умолчанию лимита нет (все инстансы могут выполняться параллельно).
+	/// <para>
+	/// Реализация — <c>SemaphoreSlim</c> per stage: <c>BeginIteration</c> ждёт acquire-токена,
+	/// release происходит в <c>finally</c> блока <see cref="StageRunner.RunIterationAsync"/> —
+	/// гарантирует release при любом исходе (success/failure/cancel).
+	/// </para>
+	/// </summary>
+	IStageBuilder WithConcurrencyLimit(int maxParallel);
+
+	/// <summary>
 	/// Whole-зависимость: для каждого успешно завершённого инстанса <paramref name="other"/>
 	/// создаётся соответствующий инстанс этой стадии с теми же DependencyKeys.
 	/// Семантика «fan-out с наследованием ключей».

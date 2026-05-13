@@ -13,6 +13,7 @@ internal sealed class StageRunner(
 	IJobStateStore stateStore,
 	Channel<OrchestratorEvent> channel,
 	OrchestratorLifecycle lifecycle,
+	ConcurrencyLimits concurrency,
 	TimeProvider time,
 	ILoggerFactory loggerFactory
 ) {
@@ -87,6 +88,9 @@ internal sealed class StageRunner(
 			runCts.Dispose();
 			watchdogCts?.Dispose();
 			cascadeCts.Dispose();
+			// Release ВСЕГДА: семафор был Acquire'нут в EventLoop.BeginIteration перед запуском runner-а.
+			// Без release пропускной канал стадии останется навсегда заблокирован.
+			concurrency.Release(instance.Stage.Name);
 		}
 	}
 

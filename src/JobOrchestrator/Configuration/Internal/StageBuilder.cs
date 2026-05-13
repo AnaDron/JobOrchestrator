@@ -12,6 +12,7 @@ internal sealed class StageBuilder(string name, JobDefaults defaults) : IStageBu
 	public RetryPolicy RetryPolicy { get; private set; } = defaults.RetryAfterFailure;
 	public TimeSpan Debounce { get; private set; } = defaults.Debounce;
 	public TimeSpan? ExecutionTimeout { get; private set; } = defaults.ExecutionTimeout;
+	public int? ConcurrencyLimit { get; private set; }
 
 	public IStageBuilder HandledBy<TService>() where TService : class, IJobService {
 		ServiceType = typeof(TService);
@@ -45,6 +46,14 @@ internal sealed class StageBuilder(string name, JobDefaults defaults) : IStageBu
 			throw new ArgumentOutOfRangeException(nameof(timeout), "Watchdog-таймаут должен быть положительным.");
 		}
 		ExecutionTimeout = timeout;
+		return this;
+	}
+
+	public IStageBuilder WithConcurrencyLimit(int maxParallel) {
+		if (maxParallel <= 0) {
+			throw new ArgumentOutOfRangeException(nameof(maxParallel), "Лимит параллельных итераций должен быть положительным.");
+		}
+		ConcurrencyLimit = maxParallel;
 		return this;
 	}
 
@@ -87,6 +96,7 @@ internal sealed class StageBuilder(string name, JobDefaults defaults) : IStageBu
 			RetryPolicy = RetryPolicy,
 			Debounce = Debounce,
 			ExecutionTimeout = ExecutionTimeout,
+			ConcurrencyLimit = ConcurrencyLimit,
 			Dependencies = deps,
 		};
 	}

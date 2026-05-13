@@ -9,6 +9,12 @@ internal sealed class StageDescriptor {
 	public required TimeSpan Debounce { get; init; }
 	public TimeSpan? ExecutionTimeout { get; init; }
 
+	/// <summary>
+	/// Лимит одновременно работающих инстансов стадии. <c>null</c> = без лимита (все параллельно).
+	/// Используется <see cref="EventLoop"/> через <c>SemaphoreSlim</c> per stage в <c>BeginIteration</c>.
+	/// </summary>
+	public int? ConcurrencyLimit { get; init; }
+
 	/// <summary>Зависимости в порядке объявления в Fluent API.</summary>
 	public required IReadOnlyList<StageDependency> Dependencies { get; init; }
 }

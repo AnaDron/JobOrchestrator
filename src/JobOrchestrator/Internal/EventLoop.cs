@@ -37,6 +37,7 @@ internal sealed class EventLoop(
 	InstanceCreator creator,
 	StageRunner runner,
 	DueScanner scanner,
+	ConcurrencyLimits concurrency,
 	Channel<OrchestratorEvent> channel,
 	IJobStateStore stateStore,
 	ILogger<EventLoop> logger,
@@ -137,10 +138,19 @@ internal sealed class EventLoop(
 	}
 
 	private void BeginIteration(StageInstance instance, TriggerSource trigger, CancellationToken ct) {
+		// ConcurrencyLimit: если стадия уже на лимите — re-schedule инстанс через короткое окно
+		// (1 sec), не меняя State (остаётся Idle). DueScanner подберёт его снова, когда лимит откроется.
+		if (!concurrency.TryAcquire(instance.Stage.Name)) {
+			Log.ConcurrencyDeferred(logger, instance.FullyQualifiedName, instance.Stage.Name, null);
+			instance.SetMetrics(instance.Metrics with { NextAutoUtc = time.GetUtcNow() + TimeSpan.FromSeconds(1) });
+			scanner.Wake();
+			return;
+		}
 		instance.State = InstanceLifecycleState.Running;
 		instance.SetMetrics(instance.Metrics with { NextAutoUtc = null });
 		Log.BeginIteration(logger, instance.FullyQualifiedName, trigger, null);
 		// Fire-and-forget на ThreadPool: StageRunner внутри публикует StageCompleted/Failed в Channel.
+		// StageRunner.RunIterationAsync обязан вызвать concurrency.Release(stage) в finally.
 		_ = Task.Run(async () => await runner.RunIterationAsync(instance, trigger, ct).ConfigureAwait(false), ct);
 	}
 
@@ -362,6 +372,10 @@ internal sealed class EventLoop(
 		public static readonly Action<ILogger, string, TriggerSource, Exception?> BeginIteration =
 			LoggerMessage.Define<string, TriggerSource>(LogLevel.Debug, new EventId(3006, nameof(BeginIteration)),
 				"BeginIteration {Instance} (trigger={Trigger})");
+
+		public static readonly Action<ILogger, string, string, Exception?> ConcurrencyDeferred =
+			LoggerMessage.Define<string, string>(LogLevel.Debug, new EventId(3023, nameof(ConcurrencyDeferred)),
+				"Iteration {Instance} отложена: лимит ConcurrencyLimit стадии {StageName} выбран; re-schedule через 1s");
 
 		public static readonly Action<ILogger, string, string, string, Exception?> IgnoredAddKeyFromTerminating =
 			LoggerMessage.Define<string, string, string>(LogLevel.Debug, new EventId(3007, nameof(IgnoredAddKeyFromTerminating)),
