@@ -47,18 +47,18 @@ internal sealed class StageRunner(
 				Sink = sink,
 			};
 
-			_logger.LogDebug("Старт итерации {Instance} (trigger={Trigger}).", instance.FullyQualifiedName, trigger);
+			Log.IterationStart(_logger, instance.FullyQualifiedName, trigger, null);
 			await service.ExecuteAsync(jobContext, runCts.Token).ConfigureAwait(false);
-			_logger.LogDebug("Итерация {Instance} успешно завершена.", instance.FullyQualifiedName);
+			Log.IterationCompleted(_logger, instance.FullyQualifiedName, null);
 			channel.Writer.Publish(new StageCompletedEvent(instance, time.GetUtcNow()));
 		} catch (Exception ex) {
 			// Cancellation тоже считается неуспехом (watchdog / shutdown). Эти случаи различаем в log-level.
 			if (ex is OperationCanceledException && stoppingToken.IsCancellationRequested) {
-				_logger.LogInformation("Итерация {Instance} отменена при shutdown.", instance.FullyQualifiedName);
+				Log.IterationCancelledShutdown(_logger, instance.FullyQualifiedName, null);
 			} else if (ex is OperationCanceledException) {
-				_logger.LogWarning("Итерация {Instance} отменена (watchdog timeout или внешний cancel).", instance.FullyQualifiedName);
+				Log.IterationCancelledWatchdog(_logger, instance.FullyQualifiedName, null);
 			} else {
-				_logger.LogWarning(ex, "Итерация {Instance} завершилась с ошибкой.", instance.FullyQualifiedName);
+				Log.IterationFailed(_logger, instance.FullyQualifiedName, ex);
 			}
 			channel.Writer.Publish(new StageFailedEvent(instance, ex, time.GetUtcNow()));
 		} finally {
@@ -78,5 +78,31 @@ internal sealed class StageRunner(
 			fields[$"{kv.Key}Key"] = kv.Value;
 		}
 		return fields;
+	}
+
+	/// <summary>
+	/// Pre-allocated <see cref="LoggerMessage.Define{T}"/>-делегаты для hot-path логов runner-а
+	/// (по 1-2 сообщения на каждую итерацию любой стадии). EventId-ы 4xxx — диапазон StageRunner.
+	/// </summary>
+	private static class Log {
+		public static readonly Action<ILogger, string, TriggerSource, Exception?> IterationStart =
+			LoggerMessage.Define<string, TriggerSource>(LogLevel.Debug, new EventId(4001, nameof(IterationStart)),
+				"Старт итерации {Instance} (trigger={Trigger}).");
+
+		public static readonly Action<ILogger, string, Exception?> IterationCompleted =
+			LoggerMessage.Define<string>(LogLevel.Debug, new EventId(4002, nameof(IterationCompleted)),
+				"Итерация {Instance} успешно завершена.");
+
+		public static readonly Action<ILogger, string, Exception?> IterationCancelledShutdown =
+			LoggerMessage.Define<string>(LogLevel.Information, new EventId(4003, nameof(IterationCancelledShutdown)),
+				"Итерация {Instance} отменена при shutdown.");
+
+		public static readonly Action<ILogger, string, Exception?> IterationCancelledWatchdog =
+			LoggerMessage.Define<string>(LogLevel.Warning, new EventId(4004, nameof(IterationCancelledWatchdog)),
+				"Итерация {Instance} отменена (watchdog timeout или внешний cancel).");
+
+		public static readonly Action<ILogger, string, Exception?> IterationFailed =
+			LoggerMessage.Define<string>(LogLevel.Warning, new EventId(4005, nameof(IterationFailed)),
+				"Итерация {Instance} завершилась с ошибкой.");
 	}
 }
