@@ -47,8 +47,41 @@ internal sealed class EventLoop(
 			// Нормальный shutdown.
 		} catch (ChannelClosedException) {
 			// Канал закрыт извне (lifecycle.MarkFaulted/CloseChannel). Нормальный shutdown.
+		} finally {
+			// Drain: оставшиеся в очереди запросы (Manual triggers, GetOverview) должны быть завершены
+			// с Faulted/Exception, иначе их TaskCompletionSource'ы зависнут навсегда.
+			DrainPendingRequests();
+			// Финализируем все terminating-инстансы (их finalize-events потенциально не прилетят,
+			// если runner-ы не успели опубликовать StageCompleted/Failed).
+			await FinalizeAllTerminatingAsync().ConfigureAwait(false);
 		}
 		logger.LogInformation("JobOrchestrator stopped.");
+	}
+
+	private void DrainPendingRequests() {
+		while (channel.Reader.TryRead(out var evt)) {
+			switch (evt) {
+				case OverviewRequestedEvent or:
+					or.Tcs.TrySetException(new InvalidOperationException("Оркестратор остановлен."));
+					break;
+				case ManualTriggerRequestedEvent mt:
+					mt.Tcs.TrySetResult(TriggerResult.Faulted);
+					break;
+				// TimerTicked/KeyAdded/KeyRemoved/StageCompleted/StageFailed без TCS — просто пропускаем.
+			}
+		}
+	}
+
+	private async Task FinalizeAllTerminatingAsync() {
+		if (_terminating.Count == 0) return;
+		foreach (var instance in _terminating) {
+			try {
+				await stateStore.RemoveScopeAsync(instance.StateScope, CancellationToken.None).ConfigureAwait(false);
+			} catch (Exception ex) {
+				logger.LogWarning(ex, "Финализация terminating-инстанса {Instance} при shutdown завершилась с ошибкой.", instance.FullyQualifiedName);
+			}
+		}
+		_terminating.Clear();
 	}
 
 	private void BootstrapInitialInstances() {

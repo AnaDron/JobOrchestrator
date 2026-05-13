@@ -36,14 +36,14 @@ internal sealed class JobOrchestratorRuntime(
 		ArgumentException.ThrowIfNullOrEmpty(stageName);
 		ArgumentException.ThrowIfNullOrEmpty(key);
 		ThrowIfFaulted();
-		channel.Writer.TryWrite(new KeyAddedEvent(stageName, key));
+		channel.Writer.Publish(new KeyAddedEvent(stageName, key));
 	}
 
 	public void UnregisterKey(string stageName, string key) {
 		ArgumentException.ThrowIfNullOrEmpty(stageName);
 		ArgumentException.ThrowIfNullOrEmpty(key);
 		ThrowIfFaulted();
-		channel.Writer.TryWrite(new KeyRemovedEvent(stageName, key));
+		channel.Writer.Publish(new KeyRemovedEvent(stageName, key));
 	}
 
 	public async Task<InstancesOverview> GetOverviewAsync(CancellationToken ct = default) {

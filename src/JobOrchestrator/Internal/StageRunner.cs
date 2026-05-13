@@ -12,6 +12,7 @@ internal sealed class StageRunner(
 	IServiceProvider rootProvider,
 	IJobStateStore stateStore,
 	Channel<OrchestratorEvent> channel,
+	OrchestratorLifecycle lifecycle,
 	ILoggerFactory loggerFactory
 ) {
 	private readonly ILogger _logger = loggerFactory.CreateLogger("JobOrchestrator.StageRunner");
@@ -23,7 +24,8 @@ internal sealed class StageRunner(
 		await using var scope = rootProvider.CreateAsyncScope();
 		using var loggerScope = _logger.BeginScope(logFields);
 
-		var runCts = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
+		// Linked CTS: cancel при host shutdown (stoppingToken) И при crash event loop (lifecycle.WorkersCancellationToken).
+		var runCts = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken, lifecycle.WorkersCancellationToken);
 		if (instance.Stage.ExecutionTimeout is { } timeout) {
 			runCts.CancelAfter(timeout);
 		}
@@ -40,14 +42,14 @@ internal sealed class StageRunner(
 				lastSuccessAt: instance.LastSuccess,
 				dependencyKeys: instance.DependencyKeys,
 				fullyQualifiedName: instance.FullyQualifiedName,
-				addKey: k => channel.Writer.TryWrite(new KeyAddedEvent(instance.Stage.Name, k, instance)),
-				removeKey: k => channel.Writer.TryWrite(new KeyRemovedEvent(instance.Stage.Name, k, instance))
+				addKey: k => channel.Writer.Publish(new KeyAddedEvent(instance.Stage.Name, k, instance)),
+				removeKey: k => channel.Writer.Publish(new KeyRemovedEvent(instance.Stage.Name, k, instance))
 			);
 
 			_logger.LogDebug("Старт итерации {Instance} (trigger={Trigger}).", instance.FullyQualifiedName, trigger);
 			await service.ExecuteAsync(jobContext, runCts.Token).ConfigureAwait(false);
 			_logger.LogDebug("Итерация {Instance} успешно завершена.", instance.FullyQualifiedName);
-			channel.Writer.TryWrite(new StageCompletedEvent(instance));
+			channel.Writer.Publish(new StageCompletedEvent(instance));
 		} catch (Exception ex) {
 			// Cancellation тоже считается неуспехом (watchdog / shutdown). Эти случаи различаем в log-level.
 			if (ex is OperationCanceledException && stoppingToken.IsCancellationRequested) {
@@ -57,7 +59,7 @@ internal sealed class StageRunner(
 			} else {
 				_logger.LogWarning(ex, "Итерация {Instance} завершилась с ошибкой.", instance.FullyQualifiedName);
 			}
-			channel.Writer.TryWrite(new StageFailedEvent(instance, ex));
+			channel.Writer.Publish(new StageFailedEvent(instance, ex));
 		} finally {
 			runCts.Dispose();
 			instance.RunCts = null;
