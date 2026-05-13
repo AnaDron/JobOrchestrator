@@ -1,6 +1,9 @@
 namespace JobOrchestrator.Tests.Internal;
 
 public sealed class InstanceCreatorTests {
+	private static readonly IReadOnlyDictionary<string, string> EmptyKeys =
+		new Dictionary<string, string>(StringComparer.Ordinal);
+
 	private sealed class FakeService : IJobService {
 		public Task ExecuteAsync(JobContext ctx, CancellationToken ct) => Task.CompletedTask;
 	}
@@ -72,9 +75,9 @@ public sealed class InstanceCreatorTests {
 		var instances = new InstanceManager();
 		var keyspace = new KeyspaceRegistry();
 		instances.Add(MakeInstanceWithSuccess(shops));
-		keyspace.Add("shops", "u1");
-		keyspace.Add("shops", "u2");
-		keyspace.Add("shops", "u3");
+		keyspace.Add("shops", EmptyKeys, "u1");
+		keyspace.Add("shops", EmptyKeys, "u2");
+		keyspace.Add("shops", EmptyKeys, "u3");
 		var creator = new InstanceCreator(instances, keyspace, TimeProvider.System);
 
 		var created = creator.EvaluateAndCreate(pg);
@@ -151,10 +154,10 @@ public sealed class InstanceCreatorTests {
 		var keyspace = new KeyspaceRegistry();
 		instances.Add(MakeInstanceWithSuccess(a));
 		instances.Add(MakeInstanceWithSuccess(b));
-		keyspace.Add("a", "1");
-		keyspace.Add("a", "2");
-		keyspace.Add("b", "x");
-		keyspace.Add("b", "y");
+		keyspace.Add("a", EmptyKeys, "1");
+		keyspace.Add("a", EmptyKeys, "2");
+		keyspace.Add("b", EmptyKeys, "x");
+		keyspace.Add("b", EmptyKeys, "y");
 		var creator = new InstanceCreator(instances, keyspace, TimeProvider.System);
 
 		var created = creator.EvaluateAndCreate(c);

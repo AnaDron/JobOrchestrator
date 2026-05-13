@@ -101,8 +101,8 @@ internal sealed class EventLoop(
 		switch (evt) {
 			case TimerTickedEvent tt: HandleTimerTick(tt.Instance, ct); break;
 			case ManualTriggerRequestedEvent mtr: HandleManualTrigger(mtr, ct); break;
-			case KeyAddedEvent ka: HandleKeyAdded(ka.StageName, ka.Key, ka.Source); break;
-			case KeyRemovedEvent kr: await HandleKeyRemovedAsync(kr.StageName, kr.Key, kr.Source, ct).ConfigureAwait(false); break;
+			case KeyAddedEvent ka: HandleKeyAdded(ka.Source, ka.Key); break;
+			case KeyRemovedEvent kr: await HandleKeyRemovedAsync(kr.Source, kr.Key, ct).ConfigureAwait(false); break;
 			case StageCompletedEvent sc: await HandleStageCompletedAsync(sc.Instance, sc.At, ct).ConfigureAwait(false); break;
 			case StageFailedEvent sf: await HandleStageFailedAsync(sf.Instance, sf.Exception, sf.At, ct).ConfigureAwait(false); break;
 			default:
@@ -146,51 +146,61 @@ internal sealed class EventLoop(
 		instance.RunningTask = Task.Run(async () => await runner.RunIterationAsync(instance, trigger, ct).ConfigureAwait(false), ct);
 	}
 
-	private void HandleKeyAdded(string stageName, string key, StageInstance? source) {
-		if (source is not null && _terminating.Contains(source)) {
-			Log.IgnoredAddKeyFromTerminating(logger, stageName, key, source.FullyQualifiedName, null);
+	private void HandleKeyAdded(StageInstance source, string key) {
+		if (_terminating.Contains(source)) {
+			Log.IgnoredAddKeyFromTerminating(logger, source.Stage.Name, key, source.FullyQualifiedName, null);
 			return;
 		}
-		if (!registry.TryGet(stageName, out _)) {
-			Log.AddKeyUnknownStage(logger, stageName, key, null);
+		if (!keyspace.Add(source.Stage.Name, source.DependencyKeys, key)) {
+			Log.AddKeyAlreadyPresent(logger, source.Stage.Name, key, null);
 			return;
 		}
-		if (!keyspace.Add(stageName, key)) {
-			Log.AddKeyAlreadyPresent(logger, stageName, key, null);
-			return;
-		}
-		Log.AddKeyAdded(logger, stageName, key, null);
-		foreach (var dependent in registry.StagesDependingOnInstance(stageName)) {
+		Log.AddKeyAdded(logger, source.Stage.Name, key, null);
+		foreach (var dependent in registry.StagesDependingOnInstance(source.Stage.Name)) {
 			CreateAndStart(dependent);
 		}
 		scanner.Wake();
 	}
 
-	private async Task HandleKeyRemovedAsync(string stageName, string key, StageInstance? source, CancellationToken ct) {
-		if (source is not null && _terminating.Contains(source)) {
-			Log.IgnoredRemoveKeyFromTerminating(logger, stageName, key, source.FullyQualifiedName, null);
+	private async Task HandleKeyRemovedAsync(StageInstance source, string key, CancellationToken ct) {
+		if (_terminating.Contains(source)) {
+			Log.IgnoredRemoveKeyFromTerminating(logger, source.Stage.Name, key, source.FullyQualifiedName, null);
 			return;
 		}
-		if (!registry.TryGet(stageName, out _)) {
-			Log.RemoveKeyUnknownStage(logger, stageName, key, null);
+		if (!keyspace.Remove(source.Stage.Name, source.DependencyKeys, key)) {
+			Log.RemoveKeyAbsent(logger, source.Stage.Name, key, null);
 			return;
 		}
-		if (!keyspace.Remove(stageName, key)) {
-			Log.RemoveKeyAbsent(logger, stageName, key, null);
-			return;
-		}
+		await CascadeKeyRemovalAsync(source.Stage.Name, source.DependencyKeys, key, ct).ConfigureAwait(false);
+		scanner.Wake();
+	}
 
-		var affectedStages = registry.StagesAffectedByKeyRemoval(stageName);
+	/// <summary>
+	/// Каскадно отменяет потомков, чьи DependencyKeys соответствуют (emitter-stage + emitter-keys + key):
+	/// инстанс был порождён ИМЕННО ЭТИМ эмитером по этому ключу. Транзитивно: при удалении инстанса
+	/// его собственный keyspace-bucket уничтожается, и каждый orphan-ключ запускает рекурсивный cascade
+	/// для своих потомков.
+	/// </summary>
+	private async Task CascadeKeyRemovalAsync(
+		string emitterStage,
+		IReadOnlyDictionary<string, string> emitterKeys,
+		string key,
+		CancellationToken ct
+	) {
+		var affectedStages = registry.StagesAffectedByKeyRemoval(emitterStage);
 		var affected = affectedStages
 			.SelectMany(s => instances.InstancesOf(s.Name))
-			.Where(inst => inst.DependencyKeys.TryGetValue(stageName, out var v) && string.Equals(v, key, StringComparison.Ordinal))
+			.Where(inst => MatchesEmitter(inst.DependencyKeys, emitterStage, emitterKeys, key))
 			.ToList();
 		if (affected.Count == 0) return;
 
 		affected.Sort((a, b) => registry.CancellationRank(a.Stage.Name).CompareTo(registry.CancellationRank(b.Stage.Name)));
-		Log.RemoveKeyCascade(logger, stageName, key, affected.Count, null);
+		Log.RemoveKeyCascade(logger, emitterStage, key, affected.Count, null);
 
 		foreach (var instance in affected) {
+			// Сначала удаляем bucket эмитера-удаляемого; orphan-ключи запустят дальнейший каскад.
+			var orphans = keyspace.RemoveInstance(instance.Stage.Name, instance.DependencyKeys);
+
 			instances.Remove(instance);
 
 			if (instance.State == InstanceLifecycleState.Running && instance.RunCts is { } cts) {
@@ -205,8 +215,30 @@ internal sealed class EventLoop(
 					Log.RemoveScopeFailed(logger, instance.FullyQualifiedName, ex);
 				}
 			}
+
+			// Рекурсивный cascade для каждого orphan-ключа удаляемого инстанса.
+			foreach (var orphanKey in orphans) {
+				await CascadeKeyRemovalAsync(instance.Stage.Name, instance.DependencyKeys, orphanKey, ct).ConfigureAwait(false);
+			}
 		}
-		scanner.Wake();
+	}
+
+	/// <summary>
+	/// True, если <paramref name="dependencyKeys"/> кандидата содержит <c>{emitterStage: key}</c>
+	/// И ВСЕ <paramref name="emitterKeys"/> эмитера (т.е. кандидат был порождён именно этой комбинацией
+	/// emitter+key, а не другим инстансом той же стадии-эмитера).
+	/// </summary>
+	private static bool MatchesEmitter(
+		IReadOnlyDictionary<string, string> dependencyKeys,
+		string emitterStage,
+		IReadOnlyDictionary<string, string> emitterKeys,
+		string key
+	) {
+		if (!dependencyKeys.TryGetValue(emitterStage, out var v) || !string.Equals(v, key, StringComparison.Ordinal)) return false;
+		foreach (var kv in emitterKeys) {
+			if (!dependencyKeys.TryGetValue(kv.Key, out var dv) || !string.Equals(dv, kv.Value, StringComparison.Ordinal)) return false;
+		}
+		return true;
 	}
 
 	private async Task HandleStageCompletedAsync(StageInstance instance, DateTimeOffset at, CancellationToken ct) {
@@ -313,10 +345,6 @@ internal sealed class EventLoop(
 			LoggerMessage.Define<string, string, string>(LogLevel.Debug, new EventId(3007, nameof(IgnoredAddKeyFromTerminating)),
 				"Ignored AddKey({StageName},{Key}) from terminating instance {Instance}");
 
-		public static readonly Action<ILogger, string, string, Exception?> AddKeyUnknownStage =
-			LoggerMessage.Define<string, string>(LogLevel.Warning, new EventId(3008, nameof(AddKeyUnknownStage)),
-				"AddKey({StageName},{Key}) — стадия не зарегистрирована в реестре, игнорируем");
-
 		public static readonly Action<ILogger, string, string, Exception?> AddKeyAlreadyPresent =
 			LoggerMessage.Define<string, string>(LogLevel.Debug, new EventId(3009, nameof(AddKeyAlreadyPresent)),
 				"AddKey({StageName},{Key}) — ключ уже в keyspace, no-op");
@@ -328,10 +356,6 @@ internal sealed class EventLoop(
 		public static readonly Action<ILogger, string, string, string, Exception?> IgnoredRemoveKeyFromTerminating =
 			LoggerMessage.Define<string, string, string>(LogLevel.Debug, new EventId(3011, nameof(IgnoredRemoveKeyFromTerminating)),
 				"Ignored RemoveKey({StageName},{Key}) from terminating instance {Instance}");
-
-		public static readonly Action<ILogger, string, string, Exception?> RemoveKeyUnknownStage =
-			LoggerMessage.Define<string, string>(LogLevel.Warning, new EventId(3012, nameof(RemoveKeyUnknownStage)),
-				"RemoveKey({StageName},{Key}) — стадия не зарегистрирована, игнорируем");
 
 		public static readonly Action<ILogger, string, string, Exception?> RemoveKeyAbsent =
 			LoggerMessage.Define<string, string>(LogLevel.Debug, new EventId(3013, nameof(RemoveKeyAbsent)),

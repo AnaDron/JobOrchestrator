@@ -1,6 +1,9 @@
 namespace JobOrchestrator.Tests.Internal;
 
 public sealed class DependencyResolverTests {
+	private static readonly IReadOnlyDictionary<string, string> EmptyKeys =
+		new Dictionary<string, string>(StringComparer.Ordinal);
+
 	private sealed class FakeService : IJobService {
 		public Task ExecuteAsync(JobContext ctx, CancellationToken ct) => Task.CompletedTask;
 	}
@@ -102,7 +105,7 @@ public sealed class DependencyResolverTests {
 		var shopsInst = MakeInstance(shops);
 		shopsInst.SetMetrics(shopsInst.Metrics with { LastSuccess = DateTimeOffset.UtcNow });
 		instances.Add(shopsInst);
-		keyspace.Add("shops", "u1");
+		keyspace.Add("shops", EmptyKeys, "u1");
 
 		var resolved = DependencyResolver.AllDependenciesResolved(
 			pg, new Dictionary<string, string> { ["shops"] = "u1" }, instances, keyspace);
@@ -118,7 +121,7 @@ public sealed class DependencyResolverTests {
 		var shopsInst = MakeInstance(shops);
 		// LastSuccess = null — родитель ни разу не был успешен.
 		instances.Add(shopsInst);
-		keyspace.Add("shops", "u1");
+		keyspace.Add("shops", EmptyKeys, "u1");
 
 		var resolved = DependencyResolver.AllDependenciesResolved(
 			pg, new Dictionary<string, string> { ["shops"] = "u1" }, instances, keyspace);

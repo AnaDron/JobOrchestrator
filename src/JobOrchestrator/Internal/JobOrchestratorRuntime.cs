@@ -44,20 +44,39 @@ internal sealed class JobOrchestratorRuntime(
 		ArgumentException.ThrowIfNullOrEmpty(stageName);
 		ArgumentException.ThrowIfNullOrEmpty(key);
 		ThrowIfFaulted();
-		if (!registry.TryGet(stageName, out _)) {
-			throw new ArgumentException($"Стадия '{stageName}' не зарегистрирована в графе.", nameof(stageName));
-		}
-		channel.Writer.Publish(new KeyAddedEvent(stageName, key));
+		var source = ResolveKeylessSource(stageName);
+		channel.Writer.Publish(new KeyAddedEvent(source, key));
 	}
 
 	public void UnregisterKey(string stageName, string key) {
 		ArgumentException.ThrowIfNullOrEmpty(stageName);
 		ArgumentException.ThrowIfNullOrEmpty(key);
 		ThrowIfFaulted();
+		var source = ResolveKeylessSource(stageName);
+		channel.Writer.Publish(new KeyRemovedEvent(source, key));
+	}
+
+	/// <summary>
+	/// Резолвит keyless-инстанс стадии для внешнего <see cref="RegisterKey"/>/<see cref="UnregisterKey"/>.
+	/// Работает только для стадий без <c>DependsOnInstance</c>-зависимостей (там нет ambiguity, какой
+	/// инстанс-эмитер использовать как Source). Для ключевых стадий — InvalidOperationException
+	/// (BL должна использовать <see cref="JobContext.AddKey"/> изнутри сервиса).
+	/// </summary>
+	private StageInstance ResolveKeylessSource(string stageName) {
 		if (!registry.TryGet(stageName, out _)) {
 			throw new ArgumentException($"Стадия '{stageName}' не зарегистрирована в графе.", nameof(stageName));
 		}
-		channel.Writer.Publish(new KeyRemovedEvent(stageName, key));
+		if (registry.ExpectedKeyNames(stageName).Count != 0) {
+			throw new InvalidOperationException(
+				$"Стадия '{stageName}' имеет ключевые зависимости. Внешний RegisterKey/UnregisterKey работает только для keyless-эмитеров; используйте JobContext.AddKey/RemoveKey из ExecuteAsync.");
+		}
+		var empty = new Dictionary<string, string>(StringComparer.Ordinal);
+		var source = instances.Find(stageName, empty);
+		if (source is null) {
+			throw new InvalidOperationException(
+				$"Keyless-инстанс для стадии '{stageName}' ещё не создан (оркестратор не стартован?).");
+		}
+		return source;
 	}
 
 	public InstancesOverview GetOverview() {

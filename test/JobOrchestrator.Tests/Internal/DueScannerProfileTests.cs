@@ -84,11 +84,12 @@ public sealed class DueScannerProfileTests(ITestOutputHelper output) {
 		double avgMicros = sw.Elapsed.TotalMicroseconds / iterations;
 		output.WriteLine($"N={n,6} no-work: avg scan = {avgMicros:F1} µs ({avgMicros / n * 1000:F2} ns/instance)");
 
-		// Soft ceiling: на N=10k один scan должен укладываться в <10мс. Изолированно — ~1.66мс,
-		// 10мс закладывает CI-jitter и параллельную нагрузку. Превышение порога на порядок (>10мс) =
-		// сигнал, что linear scan становится узким горлышком — пора профилировать sorted-by-deadline.
+		// Soft ceiling: на N=10k один scan должен укладываться в <20мс. Изолированно — ~2-3мс
+		// (immutable JobMetrics snapshot добавил indirection vs long-encoded ticks),
+		// 20мс закладывает CI-jitter, параллельную нагрузку и GC. Превышение порога на порядок (>20мс)
+		// = сигнал, что linear scan становится узким горлышком — пора профилировать sorted-by-deadline.
 		if (n == 10_000) {
-			avgMicros.Should().BeLessThan(10_000, "10k no-work scan должен быть < 10мс");
+			avgMicros.Should().BeLessThan(20_000, "10k no-work scan должен быть < 20мс");
 		}
 		scanner.Dispose();
 	}

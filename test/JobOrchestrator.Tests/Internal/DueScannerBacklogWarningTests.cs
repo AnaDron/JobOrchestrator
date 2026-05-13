@@ -75,7 +75,22 @@ public sealed class DueScannerBacklogWarningTests {
 	}
 
 	private static OrchestratorEvent CreateDummyEvent() {
-		// Используем KeyAddedEvent с минимальным набором полей — он лёгкий, не требует StageInstance.
-		return new KeyAddedEvent("stage", "k");
+		// Все события orchestrator-loop'а привязаны к StageInstance. Создаём минимально валидный
+		// инстанс stub-стадии и используем StageCompletedEvent (без побочных эффектов в Channel.Reader).
+		var stage = new StageDescriptor {
+			Name = "stub",
+			ServiceType = typeof(object),
+			Interval = TimeSpan.FromMinutes(1),
+			RetryPolicy = RetryPolicy.NoRetry,
+			Debounce = TimeSpan.Zero,
+			Dependencies = [],
+		};
+		var inst = new StageInstance {
+			Stage = stage,
+			DependencyKeys = new Dictionary<string, string>(StringComparer.Ordinal),
+			FullyQualifiedName = "stub[]",
+			EncodedKey = "",
+		};
+		return new StageCompletedEvent(inst, DateTimeOffset.UtcNow);
 	}
 }

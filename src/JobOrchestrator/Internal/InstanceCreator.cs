@@ -96,9 +96,20 @@ internal sealed class InstanceCreator(InstanceManager instances, KeyspaceRegistr
 
 	private List<IReadOnlyDictionary<string, string>> ComputeDimension(StageDependency dep) {
 		if (dep.Mode == DependencyMode.Instance) {
-			return keyspace.Get(dep.TargetStageName)
-				.Select(k => (IReadOnlyDictionary<string, string>)new Dictionary<string, string>(StringComparer.Ordinal) { [dep.TargetStageName] = k })
-				.ToList();
+			// Per-emitter buckets: для каждого инстанса-эмитера X.bucket даёт пары (emitterKeys, keys).
+			// Candidate = emitter's keys ∪ { TargetStageName: k } per каждый k в bucket.Keys.
+			// Это корректно поддерживает multi-instance-эмитеров, поскольку каждый эмитер вносит ТОЛЬКО
+			// свои ключи (а не глобальный пул всех ключей стадии).
+			var result = new List<IReadOnlyDictionary<string, string>>();
+			foreach (var bucket in keyspace.SnapshotByStage(dep.TargetStageName)) {
+				foreach (var key in bucket.Keys) {
+					var combined = new Dictionary<string, string>(bucket.EmitterKeys.Count + 1, StringComparer.Ordinal);
+					foreach (var ek in bucket.EmitterKeys) combined[ek.Key] = ek.Value;
+					combined[dep.TargetStageName] = key;
+					result.Add(combined);
+				}
+			}
+			return result;
 		}
 		return instances.InstancesOf(dep.TargetStageName)
 			.Where(inst => inst.LastSuccess.HasValue)

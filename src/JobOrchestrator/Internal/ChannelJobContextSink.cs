@@ -13,10 +13,10 @@ internal sealed class ChannelJobContextSink(
 	StageInstance source
 ) : IJobContextSink {
 	public void AddKey(string key) {
-		writer.Publish(new KeyAddedEvent(source.Stage.Name, key, source));
+		writer.Publish(new KeyAddedEvent(source, key));
 	}
 
 	public void RemoveKey(string key) {
-		writer.Publish(new KeyRemovedEvent(source.Stage.Name, key, source));
+		writer.Publish(new KeyRemovedEvent(source, key));
 	}
 }

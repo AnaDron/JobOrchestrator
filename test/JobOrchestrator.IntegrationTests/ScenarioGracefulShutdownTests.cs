@@ -27,9 +27,11 @@ public sealed class ScenarioGracefulShutdownTests {
 
 	[Fact]
 	public async Task RegisterKey_AfterStop_ThrowsInvalidOperationOrSilent() {
-		// RegisterKey после shutdown: либо InvalidOperationException (если IsFaulted), либо silent TryWrite false.
-		// Текущая semantics: graceful shutdown НЕ выставляет IsFaulted, но Channel закрыт.
-		// TryWrite на closed channel вернёт false — silently игнорируется.
+		// RegisterKey после shutdown: возможны три исхода (зависит от тайминга bootstrap vs stop):
+		// - keyless-инстанс остался в InstanceManager → silent (TryWrite на closed channel → false).
+		// - keyless-инстанс ещё не создан bootstrap-ом до StopAsync → InvalidOperationException.
+		// - событие отправлено, но дальше игнорируется.
+		// Все три — корректный graceful-shutdown-behavior; контракт: НЕ ronqueve unexpected exception.
 		using var host = TestHostFactory.Build(
 			configure: jobs => jobs.Stage("a").HandledBy<FakeServiceA>().RunPeriodically(TimeSpan.FromHours(1)),
 			registerFakes: s => s.AddSingleton<FakeServiceA>());
@@ -38,9 +40,9 @@ public sealed class ScenarioGracefulShutdownTests {
 		await host.StartAsync().ConfigureAwait(false);
 		await host.StopAsync().ConfigureAwait(false);
 
-		// RegisterKey не упадёт с exception, но event не будет обработан — это OK для graceful shutdown.
 		Action act = () => orchestrator.RegisterKey("a", "key1");
-		act.Should().NotThrow();
+		// Либо silent (NotThrow), либо InvalidOperationException — оба ОК.
+		try { act(); } catch (InvalidOperationException) { /* допустимо */ }
 	}
 
 	[Fact]
