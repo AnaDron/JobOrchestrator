@@ -47,7 +47,7 @@ SDK оперирует тремя сущностями: **Stage** (immutable д�
 
 ## Архитектура
 
-Описание устройства SDK (single-threaded event loop, каскадное удаление с deferred cleanup, backtracking-merge при создании инстансов, lifecycle/IsFaulted, структурное логирование) — в [docs/architecture.md](docs/architecture.md).
+Описание устройства SDK (single-threaded event loop, dynamic-delay DueScanner, каскадное удаление с deferred cleanup, backtracking-merge при создании инстансов, lock-free `GetOverview()` через atomic-fields, lifecycle/IsFaulted, структурное логирование) — в [docs/architecture.md](docs/architecture.md).
 
 ## Сборка и тесты
 

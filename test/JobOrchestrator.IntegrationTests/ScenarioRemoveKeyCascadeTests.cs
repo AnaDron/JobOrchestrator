@@ -44,11 +44,11 @@ public sealed class ScenarioRemoveKeyCascadeTests {
 
 			// Signal-based wait: каскадное удаление завершилось, когда u1-инстансы исчезли из overview.
 			(await TestSync.WaitForAsync(async () => {
-				var snap = await orchestrator.GetOverviewAsync().ConfigureAwait(false);
+				var snap = orchestrator.GetOverview();
 				return !snap.Instances.Any(i => i.DependencyKeys.GetValueOrDefault("shops") == "u1");
 			}, Timeout).ConfigureAwait(false)).Should().BeTrue("каскадное удаление должно завершиться в Timeout");
 
-			var overview = await orchestrator.GetOverviewAsync().ConfigureAwait(false);
+			var overview = orchestrator.GetOverview();
 			var fqns = overview.Instances.Select(j => j.FullyQualifiedName).ToHashSet();
 
 			// u1-ветвь удалена:

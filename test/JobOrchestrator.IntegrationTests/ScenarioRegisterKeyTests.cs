@@ -44,8 +44,10 @@ public sealed class ScenarioRegisterKeyTests {
 	}
 
 	[Fact]
-	public async Task RegisterKey_UnknownStage_DoesNotThrowButLogsWarning() {
-		// Edge case: внешний RegisterKey для несуществующей стадии — должно быть silently no-op + warn.
+	public async Task RegisterKey_UnknownStage_ThrowsArgumentException() {
+		// Новый контракт: RegisterKey/UnregisterKey проверяют существование стадии и бросают ArgumentException
+		// сразу, не публикуя бессмысленное событие в event loop. Раньше тут было silently log-warn — мы
+		// сменили на throw, потому что неизвестная стадия — это всегда баг в коде вызывающего.
 		using var host = TestHostFactory.Build(
 			configure: jobs => jobs.Stage("a").HandledBy<FakeServiceA>().RunPeriodically(TimeSpan.FromMinutes(1)),
 			registerFakes: s => s.AddSingleton<FakeServiceA>());
@@ -54,9 +56,7 @@ public sealed class ScenarioRegisterKeyTests {
 		try {
 			var orchestrator = host.Services.GetRequiredService<IJobOrchestrator>();
 			Action act = () => orchestrator.RegisterKey("nonexistent-stage", "k1");
-			act.Should().NotThrow();
-			await Task.Delay(100).ConfigureAwait(false);
-			// Из тестов сложно проверить warn-лог без custom logger, но факт что не упало — уже OK.
+			act.Should().Throw<ArgumentException>().WithMessage("*nonexistent-stage*");
 		} finally {
 			await host.StopAsync().ConfigureAwait(false);
 		}

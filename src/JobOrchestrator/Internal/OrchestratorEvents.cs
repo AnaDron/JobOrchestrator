@@ -3,7 +3,7 @@ namespace JobOrchestrator.Internal;
 /// <summary>Внутренние события event loop'а оркестратора.</summary>
 internal abstract record OrchestratorEvent;
 
-/// <summary>Auto-тик для конкретного инстанса.</summary>
+/// <summary>Auto-тик для конкретного инстанса. Публикуется <see cref="DueScanner"/> при наступлении <c>NextAutoUtc</c>.</summary>
 internal sealed record TimerTickedEvent(StageInstance Instance) : OrchestratorEvent;
 
 /// <summary>Запрос ручного триггера снаружи (через <see cref="IJobOrchestrator.TriggerAsync"/>).</summary>
@@ -26,14 +26,8 @@ internal sealed record KeyAddedEvent(string StageName, string Key, StageInstance
 /// </summary>
 internal sealed record KeyRemovedEvent(string StageName, string Key, StageInstance? Source = null) : OrchestratorEvent;
 
-/// <summary>Итерация инстанса завершилась успешно (без исключения).</summary>
-internal sealed record StageCompletedEvent(StageInstance Instance) : OrchestratorEvent;
+/// <summary>Итерация инстанса завершилась успешно (без исключения). <paramref name="At"/> зафиксировано в runner-thread.</summary>
+internal sealed record StageCompletedEvent(StageInstance Instance, DateTimeOffset At) : OrchestratorEvent;
 
 /// <summary>Итерация инстанса завершилась неуспехом (исключение или watchdog cancel).</summary>
-internal sealed record StageFailedEvent(StageInstance Instance, Exception Exception) : OrchestratorEvent;
-
-/// <summary>
-/// Запрос снимка состояния от <see cref="IJobOrchestrator.GetOverviewAsync"/>. Event loop обрабатывает
-/// в свою очередь и заполняет <paramref name="Tcs"/> — это даёт thread-safe доступ без блокировок.
-/// </summary>
-internal sealed record OverviewRequestedEvent(TaskCompletionSource<InstancesOverview> Tcs) : OrchestratorEvent;
+internal sealed record StageFailedEvent(StageInstance Instance, Exception Exception, DateTimeOffset At) : OrchestratorEvent;

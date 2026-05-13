@@ -53,7 +53,7 @@ public sealed class ScenarioCrashIsolationTests {
 	}
 
 	[Fact]
-	public async Task AfterMarkFaulted_GetOverviewAsync_ThrowsInvalidOperation() {
+	public async Task AfterMarkFaulted_GetOverview_ThrowsInvalidOperation() {
 		using var host = TestHostFactory.Build(
 			configure: jobs => jobs.Stage("a").HandledBy<FakeServiceA>().RunPeriodically(TimeSpan.FromMinutes(1)),
 			registerFakes: s => s.AddSingleton<FakeServiceA>());
@@ -63,8 +63,8 @@ public sealed class ScenarioCrashIsolationTests {
 		try {
 			host.Services.GetRequiredService<OrchestratorLifecycle>().MarkFaulted();
 
-			Func<Task> act = async () => await orchestrator.GetOverviewAsync().ConfigureAwait(false);
-			await act.Should().ThrowAsync<InvalidOperationException>().ConfigureAwait(false);
+			var act = () => orchestrator.GetOverview();
+			act.Should().Throw<InvalidOperationException>();
 		} finally {
 			await host.StopAsync().ConfigureAwait(false);
 		}
@@ -95,7 +95,7 @@ public sealed class ScenarioCrashIsolationTests {
 			(await fake.WaitForCallCountAsync(2, Timeout).ConfigureAwait(false)).Should().BeTrue();
 
 			orchestrator.IsFaulted.Should().BeFalse("per-iteration исключения не валят event loop");
-			var overview = await orchestrator.GetOverviewAsync().ConfigureAwait(false);
+			var overview = orchestrator.GetOverview();
 			var info = overview.Instances.Single();
 			info.ConsecutiveFailures.Should().BeGreaterThan(0);
 			info.LastError.Should().Contain("failed");
@@ -136,7 +136,7 @@ public sealed class ScenarioCrashIsolationTests {
 
 			// Event loop жив, орchestratorфункционален несмотря на исключение store-а.
 			orchestrator.IsFaulted.Should().BeFalse();
-			var overview = await orchestrator.GetOverviewAsync().ConfigureAwait(false);
+			var overview = orchestrator.GetOverview();
 			overview.Instances.Select(i => i.FullyQualifiedName).Should().NotContain("pg[shops=u1]");
 		} finally {
 			await host.StopAsync().ConfigureAwait(false);

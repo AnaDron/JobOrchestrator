@@ -41,7 +41,7 @@ public sealed class ScenarioConcurrentStressTests {
 								case 0: orchestrator.RegisterKey("producer", key); break;
 								case 1: await orchestrator.TriggerAsync("producer", null, stopCts.Token).ConfigureAwait(false); break;
 								case 2: orchestrator.UnregisterKey("producer", key); break;
-								case 3: await orchestrator.GetOverviewAsync(stopCts.Token).ConfigureAwait(false); break;
+								case 3: orchestrator.GetOverview(); break;
 							}
 						} catch (OperationCanceledException) {
 							break;
@@ -62,7 +62,7 @@ public sealed class ScenarioConcurrentStressTests {
 			orchestrator.IsFaulted.Should().BeFalse("стресс не должен крашить event loop");
 
 			// Финальный smoke: GetOverview по-прежнему отвечает консистентным snapshot-ом.
-			var finalOverview = await orchestrator.GetOverviewAsync().ConfigureAwait(false);
+			var finalOverview = orchestrator.GetOverview();
 			finalOverview.Instances.Should().NotBeNull();
 			// producer-инстанс точно существует (создан в bootstrap, не удалялся).
 			finalOverview.Instances.Should().Contain(i => i.StageName == "producer" && i.FullyQualifiedName == "producer[]");
@@ -117,7 +117,7 @@ public sealed class ScenarioConcurrentStressTests {
 		// Финальное состояние keyspace недетерминированно (Register/Unregister в случайном порядке),
 		// НО оно должно быть консистентным: для каждого consumer-инстанса в overview его ключ
 		// должен быть в keyspace producer'а (через косвенный признак — finalCount instances <= 3).
-		var overview = await orchestrator.GetOverviewAsync().ConfigureAwait(false);
+		var overview = orchestrator.GetOverview();
 		var consumerInstances = overview.Instances.Where(i => i.StageName == "consumer").ToList();
 		consumerInstances.Should().HaveCountLessThanOrEqualTo(3, "consumer не может иметь больше инстансов, чем размер keyspace");
 		consumerInstances.Select(i => i.DependencyKeys["producer"]).Should().OnlyContain(k => keys.Contains(k));

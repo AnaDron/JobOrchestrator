@@ -37,6 +37,7 @@ public static class ServiceCollectionExtensions {
 		services.AddSingleton<KeyspaceRegistry>();
 		services.AddSingleton<InstanceCreator>();
 		services.AddSingleton<StageRunner>();
+		services.AddSingleton<DueScanner>();
 		services.AddSingleton<EventLoop>();
 		// Bounded channel: backpressure через Wait. При заполнении внешние писатели (Manual triggers,
 		// RegisterKey) подождут места; event loop как consumer обычно их быстро разгружает.
@@ -52,6 +53,30 @@ public static class ServiceCollectionExtensions {
 		// TimeProvider может быть уже зарегистрирован хостом; иначе используем системное время.
 		services.TryAddSingleton(TimeProvider.System);
 
+		// Валидация startup: каждая стадия ссылается на ServiceType, реально зарегистрированный в DI.
+		// Опускаем сюда snapshot уже-сформированной коллекции, чтобы не цеплять провайдер.
+		ValidateServiceRegistrations(registry, services);
+
 		return services;
+	}
+
+	/// <summary>
+	/// Проверяет, что для каждой стадии <see cref="StageDescriptor.ServiceType"/> присутствует в DI-контейнере.
+	/// SDK сам делает <see cref="ServiceCollectionDescriptorExtensions.TryAddScoped"/> для всех ServiceType,
+	/// поэтому реально провалиться эта проверка может только при ручном <c>services.Remove(...)</c>
+	/// между <c>AddJobOrchestrator</c> и хостом — но проще ловить такую ошибку громко.
+	/// </summary>
+	private static void ValidateServiceRegistrations(StageRegistry registry, IServiceCollection services) {
+		var registered = new HashSet<Type>();
+		foreach (var d in services) registered.Add(d.ServiceType);
+
+		var missing = registry.AllStages
+			.Where(s => !registered.Contains(s.ServiceType))
+			.Select(s => $"{s.Name}({s.ServiceType.FullName})")
+			.ToList();
+		if (missing.Count > 0) {
+			throw new JobConfigurationException(
+				$"IJobService-реализации не зарегистрированы в DI: {string.Join(", ", missing)}.");
+		}
 	}
 }

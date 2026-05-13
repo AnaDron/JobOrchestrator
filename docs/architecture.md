@@ -4,10 +4,11 @@ Job Orchestrator — SDK периодических задач с зависим
 
 ## Ключевые принципы
 
-1. **Single-threaded event loop.** Один consumer-поток в `Channel<OrchestratorEvent>` обрабатывает все события (TimerTicked, ManualTriggerRequested, KeyAdded, KeyRemoved, StageCompleted, StageFailed, OverviewRequested). Все state-transitions инстансов происходят на этом потоке без блокировок и без CAS-операций.
-2. **Multi-threaded publishers.** Внешние API (`IJobOrchestrator`), per-instance таймеры, fire-and-forget runner-ы публикуют события в Channel из любых потоков. Channel-Writer thread-safe by design.
-3. **DI scope per iteration.** На каждую итерацию `IJobService.ExecuteAsync` создаётся свежий `IServiceScope`. Scoped-сервисы (например, `DbContext`) уникальны для одной итерации — достаточно для большинства транзакционных требований.
-4. **In-memory only.** Граф стадий, состояние инстансов, keyspace, retry-счётчики — RAM. Рестарт = bootstrap с нуля. Состояние БЛ persists через `IJobState` (нейтральный key-value bag), backend через `IJobStateStore` (по умолчанию `InMemoryJobStateStore`; внешние backends — отдельные пакеты).
+1. **Single-threaded event loop.** Один consumer-поток в `Channel<OrchestratorEvent>` обрабатывает все события (TimerTicked, ManualTriggerRequested, KeyAdded, KeyRemoved, StageCompleted, StageFailed). Все state-transitions инстансов происходят на этом потоке без блокировок.
+2. **Multi-threaded publishers.** Внешние API (`IJobOrchestrator`), `DueScanner`, fire-and-forget runner-ы публикуют события в Channel из любых потоков. Channel-Writer thread-safe by design.
+3. **Lock-free read API.** `IJobOrchestrator.GetOverview()` — синхронный snapshot через atomic `Volatile.Read` всех мутирующихся полей `StageInstance` (UtcTicks-encoded). Не идёт через event loop, не блокирует и не аллоцирует CTS.
+4. **DI scope per iteration.** На каждую итерацию `IJobService.ExecuteAsync` создаётся свежий `IServiceScope`. Scoped-сервисы (например, `DbContext`) уникальны для одной итерации — достаточно для большинства транзакционных требований.
+5. **In-memory only.** Граф стадий, состояние инстансов, keyspace, retry-счётчики — RAM. Рестарт = bootstrap с нуля. Состояние БЛ persists через `IJobState` (нейтральный key-value bag), backend через `IJobStateStore` (по умолчанию `InMemoryJobStateStore`; внешние backends — отдельные пакеты).
 
 ## Поток событий
 
@@ -16,27 +17,38 @@ Job Orchestrator — SDK периодических задач с зависим
               ─────────────────────                 ───────────────────────
    IJobOrchestrator.TriggerAsync ──┐
    IJobOrchestrator.RegisterKey ───┤
-   IJobOrchestrator.GetOverview ───┤
                                    ├──► Channel<OrchestratorEvent> ──► EventLoop.RunAsync
-   ctx.AddKey  (из IJobService) ───┤        (bounded 10_000)            ├─ HandleKeyAdded
-   ctx.RemoveKey ──────────────────┤                                    ├─ HandleKeyRemoved
-   InstanceTimer callback ─────────┤                                    ├─ HandleStageCompleted
-   StageRunner finalize ───────────┘                                    ├─ HandleStageFailed
-                                                                        ├─ HandleTimerTick
-                                                                        ├─ HandleManualTrigger
-                                                                        └─ HandleOverviewRequested
+   ctx.AddKey  (из IJobService) ───┤        (bounded 10_000)            ├─ HandleTimerTick
+   ctx.RemoveKey ──────────────────┤                                    ├─ HandleManualTrigger
+   DueScanner.RunAsync ────────────┤                                    ├─ HandleKeyAdded
+   StageRunner finalize ───────────┘                                    ├─ HandleKeyRemoved
+                                                                        ├─ HandleStageCompleted
+                                                                        └─ HandleStageFailed
+
+   IJobOrchestrator.GetOverview() ──► (lock-free) InstanceManager.Snapshot()  — НЕ идёт в event loop
 ```
 
 Все публикации идут через `ChannelWriter<T>.Publish` (см. `ChannelWriterExtensions`) — fast-path TryWrite, fallback на sync-WriteAsync при заполнении bounded-channel. `ChannelClosedException` поглощается (после shutdown/crash).
+
+## DueScanner
+
+Единственный pull-based планировщик вместо per-инстансового `Timer`. Алгоритм:
+
+1. Снимок `InstanceManager.All` (lock-free, `ConcurrentDictionary.Values`).
+2. Для каждого Idle-инстанса с `NextAutoUtc ≤ now` — публикует `TimerTickedEvent`.
+3. Находит минимум `NextAutoUtc` среди оставшихся, спит до этого момента (или `MaxSleep` = 30 c для idle-режима).
+4. Сон прерывается через wake-up CTS — `Wake()` вызывается event loop'ом при изменении расписания (создание инстанса, schedule-next-tick после Completed/Failed, KeyAdded/Removed-каскады).
+
+Преимущества vs per-инстанс `Timer`: один аллокированный объект вместо N, линейный scan кеш-friendly при типичных N=10–100. Trade-off отражён в TODO: при N > 10k имеет смысл sorted-by-deadline collection.
 
 ## Каскадное удаление инстансов
 
 `ctx.RemoveKey(K)` или `IJobOrchestrator.UnregisterKey(stage, K)` инициирует двухэтапный cleanup:
 
 **Этап 1 (синхронно в `HandleKeyRemovedAsync`):**
-- Транзитивное замыкание стадий, чьи DependencyKeys могут содержать `{stage: K}`.
-- Топологически обратный порядок (листья перед корнями).
-- Для каждого аффектированного инстанса: удалить из `InstanceManager`, dispose `InstanceTimer`, если Running — `RunCts.Cancel()` + добавить в `_terminating` set. `RemoveScopeAsync` НЕ вызывается.
+- Транзитивное замыкание стадий через pre-computed `StageRegistry.StagesAffectedByKeyRemoval` (O(1)).
+- Сортировка по pre-computed `StageRegistry.CancellationRank` (листья имеют меньший ранг, отменяются первыми).
+- Для каждого аффектированного инстанса: удалить из `InstanceManager` (NextAutoUtc больше не виден DueScanner-у), если Running — `RunCts.Cancel()` + добавить в `_terminating` set. `RemoveScopeAsync` НЕ вызывается.
 
 **Этап 2 (асинхронно в `HandleStageCompletedAsync`/`HandleStageFailedAsync`):**
 - Когда runner cancelled-итерации публикует `StageCompletedEvent` или `StageFailedEvent`, handler видит инстанс в `_terminating` set, идёт в `FinalizeTerminatingAsync` — вызывает `RemoveScopeAsync`. Обычный путь (обновление LastSuccess / ConsecutiveFailures / перепланирование timer) пропускается.
@@ -109,13 +121,12 @@ TryAcceptTrigger(instance, source, now):
 - `CloseChannel` — `channel.Writer.Complete()` без cancel workers. Вызывается при graceful shutdown (workers уже cancel через `BackgroundService.stoppingToken`).
 
 После выхода из `EventLoop.RunAsync` любой причиной (cancel/exception/channel-closed) `finally`-блок:
-1. `DrainPendingRequests` — оставшиеся `OverviewRequestedEvent` получают `TrySetException`, `ManualTriggerRequestedEvent` — `TrySetResult(Faulted)`. Иначе caller-ы зависли бы на `await tcs.Task`.
+1. `DrainPendingRequests` — оставшиеся `ManualTriggerRequestedEvent` получают `TrySetResult(Faulted)`. Иначе caller-ы зависли бы на `await tcs.Task`.
 2. `FinalizeAllTerminatingAsync` — для застрявших terminating-инстансов вызывается `RemoveScopeAsync` (best-effort, исключения логируются).
 
 После Faulted внешний API (`IJobOrchestrator`):
 - `TriggerAsync` возвращает `TriggerResult.Faulted`.
-- `RegisterKey` / `UnregisterKey` бросают `InvalidOperationException`.
-- `GetOverviewAsync` бросает `InvalidOperationException`.
+- `RegisterKey` / `UnregisterKey` / `GetOverview` бросают `InvalidOperationException`.
 
 ## Структурное логирование
 
@@ -135,10 +146,21 @@ TryAcceptTrigger(instance, source, now):
 
 ## InstanceManager
 
-Owner всех `StageInstance`-объектов. Operations через event-loop consumer thread (single-threaded), без блокировок:
-- Primary index: `Dictionary<(StageName, EncodedKey), StageInstance>`.
-- Secondary index: `Dictionary<StageName, HashSet<StageInstance>>` — O(1) для `InstancesOf(stageName)` (часто используется в `InstanceCreator.ComputeDimension` и `DependencyResolver.FindPairedInstance`).
-- `ToOverview()` — snapshot всех инстансов в `InstancesOverview`. Вызывается из event-loop при `OverviewRequestedEvent`.
+Owner всех `StageInstance`-объектов. Writes — через event-loop consumer thread (single writer); reads — из любого потока (`DueScanner`, `GetOverview()`), thread-safe by `ConcurrentDictionary`:
+- Primary index: `ConcurrentDictionary<(StageName, EncodedKey), StageInstance>`.
+- Secondary index: `ConcurrentDictionary<StageName, ConcurrentDictionary<StageInstance, byte>>` — O(1) для `InstancesOf(stageName)` (используется в `InstanceCreator.ComputeDimension` и `DependencyResolver.FindPairedInstance`).
+- `Snapshot()` — eventually-consistent копия в `InstancesOverview` через atomic-reads `StageInstance`-полей. Lock-free.
+
+## StageInstance: atomic поля
+
+Мутирующие поля `StageInstance` (`LastSuccess`, `LastAttempt`, `NextAutoUtc`, `ConsecutiveFailures`, `LastError`, `State`) изменяются writer-потоком event loop'а, а reader-потоки (DueScanner, GetOverview) читают их без блокировок. Для `DateTimeOffset?` хранится `long`-encoded UtcTicks (0 = null), что даёт word-aligned atomic read/write на 64-bit платформах через `Volatile.Read/Write`. Это убирает risk torn-read многобайтных `DateTimeOffset` без оверхеда immutable-record allocation на каждое обновление.
+
+## Pre-computed StageRegistry
+
+В конструкторе `StageRegistry` один раз вычисляются:
+- `StagesDependingOn(name)` / `StagesDependingOnInstance(name)` — обратные индексы зависимостей, O(1) lookup.
+- `StagesAffectedByKeyRemoval(name)` — BFS-замыкание per стадия, кэшируется в словарь.
+- `CancellationRank(name)` — глубина «вниз по графу» (лист = 0, корень = max), используется для сортировки cascade-removal без повторного topo-sort-а каждый раз.
 
 ## Out of scope
 

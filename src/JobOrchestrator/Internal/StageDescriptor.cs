@@ -9,6 +9,13 @@ internal sealed class StageDescriptor {
 	public required TimeSpan Debounce { get; init; }
 	public TimeSpan? ExecutionTimeout { get; init; }
 
-	/// <summary>Зависимости в порядке объявления в Fluent API. Используется для форматирования <c>FullyQualifiedName</c> и порядка structured-полей в logger.BeginScope.</summary>
+	/// <summary>Зависимости в порядке объявления в Fluent API.</summary>
 	public required IReadOnlyList<StageDependency> Dependencies { get; init; }
+
+	/// <summary>
+	/// Имена ключей, которые ожидаются в <c>DependencyKeys</c> инстансов этой стадии — равны именам её
+	/// <c>DependsOnInstance</c>-зависимостей в порядке Fluent API. Pre-computed в момент сборки <see cref="StageRegistry"/>.
+	/// Для безключевой стадии (нет <c>DependsOnInstance</c>) — пустой список.
+	/// </summary>
+	public required IReadOnlyList<string> InstanceKeyNames { get; init; }
 }

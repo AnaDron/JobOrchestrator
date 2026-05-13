@@ -12,6 +12,11 @@ public enum TriggerResult {
 	NotFound,
 	/// <summary>Auto-триггер в окне retry-delay после неуспеха. Manual игнорирует это окно.</summary>
 	WaitingRetry,
+	/// <summary>
+	/// Набор имён в <c>DependencyKeys</c> не соответствует <c>DependsOnInstance</c>-зависимостям стадии.
+	/// Передан wrong-key-set (например, переданы ключи которых стадия не требует, или отсутствуют требуемые).
+	/// </summary>
+	InvalidKeys,
 	/// <summary>Event loop оркестратора крашнулся или не стартовал; вызов не может быть обслужен.</summary>
 	Faulted,
 }

@@ -21,7 +21,7 @@ namespace JobOrchestrator.Internal;
 /// от того, в каком порядке прилетали разрешающие события.
 /// </para>
 /// </summary>
-internal sealed class InstanceCreator(InstanceManager instances, KeyspaceRegistry keyspace) {
+internal sealed class InstanceCreator(InstanceManager instances, KeyspaceRegistry keyspace, TimeProvider time) {
 	public List<StageInstance> EvaluateAndCreate(StageDescriptor stage) {
 		if (stage.Dependencies.Count == 0) {
 			// Безключевая стадия → один инстанс с пустыми DependencyKeys.
@@ -153,8 +153,9 @@ internal sealed class InstanceCreator(InstanceManager instances, KeyspaceRegistr
 			DependencyKeys = keys,
 			FullyQualifiedName = fqn,
 			EncodedKey = encoded,
-			NextTickAtMs = Environment.TickCount64,    // готов к немедленному запуску
 		};
+		// NextAutoUtc = now → DueScanner подберёт инстанс при ближайшем проходе.
+		instance.NextAutoUtc = time.GetUtcNow();
 		instances.Add(instance);
 		return instance;
 	}

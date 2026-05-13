@@ -13,6 +13,7 @@ internal sealed class StageRunner(
 	IJobStateStore stateStore,
 	Channel<OrchestratorEvent> channel,
 	OrchestratorLifecycle lifecycle,
+	TimeProvider time,
 	ILoggerFactory loggerFactory
 ) {
 	private readonly ILogger _logger = loggerFactory.CreateLogger("JobOrchestrator.StageRunner");
@@ -49,7 +50,7 @@ internal sealed class StageRunner(
 			_logger.LogDebug("Старт итерации {Instance} (trigger={Trigger}).", instance.FullyQualifiedName, trigger);
 			await service.ExecuteAsync(jobContext, runCts.Token).ConfigureAwait(false);
 			_logger.LogDebug("Итерация {Instance} успешно завершена.", instance.FullyQualifiedName);
-			channel.Writer.Publish(new StageCompletedEvent(instance));
+			channel.Writer.Publish(new StageCompletedEvent(instance, time.GetUtcNow()));
 		} catch (Exception ex) {
 			// Cancellation тоже считается неуспехом (watchdog / shutdown). Эти случаи различаем в log-level.
 			if (ex is OperationCanceledException && stoppingToken.IsCancellationRequested) {
@@ -59,7 +60,7 @@ internal sealed class StageRunner(
 			} else {
 				_logger.LogWarning(ex, "Итерация {Instance} завершилась с ошибкой.", instance.FullyQualifiedName);
 			}
-			channel.Writer.Publish(new StageFailedEvent(instance, ex));
+			channel.Writer.Publish(new StageFailedEvent(instance, ex, time.GetUtcNow()));
 		} finally {
 			runCts.Dispose();
 			instance.RunCts = null;

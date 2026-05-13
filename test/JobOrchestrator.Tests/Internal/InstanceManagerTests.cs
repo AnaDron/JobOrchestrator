@@ -12,6 +12,7 @@ public sealed class InstanceManagerTests {
 		RetryPolicy = RetryPolicy.NoRetry,
 		Debounce = TimeSpan.Zero,
 		Dependencies = [],
+		InstanceKeyNames = [],
 	};
 
 	private static StageInstance MakeInstance(StageDescriptor stage, Dictionary<string, string> keys) {
@@ -81,7 +82,7 @@ public sealed class InstanceManagerTests {
 	}
 
 	[Fact]
-	public void ToOverview_ReflectsCurrentState() {
+	public void Snapshot_ReflectsCurrentState() {
 		var mgr = new InstanceManager();
 		var stage = MakeStage("shops");
 		var inst = MakeInstance(stage, new Dictionary<string, string>());
@@ -90,7 +91,7 @@ public sealed class InstanceManagerTests {
 		inst.LastError = "boom";
 		mgr.Add(inst);
 
-		var overview = mgr.ToOverview();
+		var overview = mgr.Snapshot();
 		overview.Instances.Should().ContainSingle();
 		var info = overview.Instances[0];
 		info.StageName.Should().Be("shops");

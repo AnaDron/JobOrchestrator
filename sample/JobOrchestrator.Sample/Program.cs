@@ -9,7 +9,7 @@ using Microsoft.Extensions.Logging;
 
 // Минимальный пример: producer-стадия эмитит три ключа, consumer-стадия параметризуется ими,
 // reporter-стадия наследует ключи consumer через DependsOn. Запускается ~5 секунд, выводит
-// snapshot через GetOverviewAsync и проверяет IsFaulted.
+// синхронный snapshot через GetOverview() и проверяет IsFaulted.
 
 var builder = Host.CreateApplicationBuilder(args);
 builder.Logging.AddSimpleConsole(o => {
@@ -40,10 +40,10 @@ await host.StartAsync();
 
 await Task.Delay(TimeSpan.FromSeconds(3));
 
-// Snapshot через event-loop RPC — thread-safe доступ из любого потока.
+// Snapshot — lock-free, читает atomic-fields инстансов без RPC через event loop.
 var orchestrator = host.Services.GetRequiredService<IJobOrchestrator>();
 Console.WriteLine($"\n=== Snapshot (IsFaulted={orchestrator.IsFaulted}) ===");
-var overview = await orchestrator.GetOverviewAsync();
+var overview = orchestrator.GetOverview();
 foreach (var info in overview.Instances.OrderBy(i => i.FullyQualifiedName, StringComparer.Ordinal)) {
 	Console.WriteLine($"  {info.FullyQualifiedName,-40} state={info.State}  lastSuccess={info.LastSuccess:HH:mm:ss}");
 }

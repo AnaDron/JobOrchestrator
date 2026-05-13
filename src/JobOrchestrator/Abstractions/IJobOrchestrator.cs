@@ -6,8 +6,8 @@ namespace JobOrchestrator.Abstractions;
 /// </summary>
 public interface IJobOrchestrator {
 	/// <summary>
-	/// <c>true</c>, если event loop крашнулся (Faulted), либо сервис ещё не стартовал. После Faulted-состояния
-	/// все методы либо возвращают <see cref="TriggerResult.Faulted"/>, либо бросают <see cref="InvalidOperationException"/>.
+	/// <c>true</c>, если event loop крашнулся (Faulted). После Faulted-состояния все методы либо возвращают
+	/// <see cref="TriggerResult.Faulted"/>, либо бросают <see cref="InvalidOperationException"/>.
 	/// </summary>
 	bool IsFaulted { get; }
 
@@ -18,6 +18,8 @@ public interface IJobOrchestrator {
 	/// <param name="stageName">Имя стадии (как задано в Fluent API).</param>
 	/// <param name="dependencyKeys">
 	/// Композитный ключ целевого инстанса. <c>null</c> или пустой словарь — для безключевых стадий.
+	/// Набор имён должен соответствовать набору <c>DependsOnInstance</c>-зависимостей стадии,
+	/// иначе возвращается <see cref="TriggerResult.InvalidKeys"/>.
 	/// </param>
 	Task<TriggerResult> TriggerAsync(
 		string stageName,
@@ -28,6 +30,7 @@ public interface IJobOrchestrator {
 	/// Регистрирует ключ в keyspace указанной стадии снаружи (вне её собственного <see cref="JobContext.AddKey"/>).
 	/// Идемпотентно. Используется для bootstrap (например, наполнение keyspace из БД при старте приложения).
 	/// </summary>
+	/// <exception cref="ArgumentException">Если <paramref name="stageName"/> не зарегистрирована в графе.</exception>
 	/// <exception cref="InvalidOperationException">Если оркестратор в Faulted-состоянии.</exception>
 	void RegisterKey(string stageName, string key);
 
@@ -35,12 +38,14 @@ public interface IJobOrchestrator {
 	/// Удаляет ключ из keyspace указанной стадии снаружи. Идемпотентно. Каскадно gracefully cancel-ит
 	/// инстансы зависимых стадий с этим компонентом ключа (топологически обратный порядок).
 	/// </summary>
+	/// <exception cref="ArgumentException">Если <paramref name="stageName"/> не зарегистрирована в графе.</exception>
 	/// <exception cref="InvalidOperationException">Если оркестратор в Faulted-состоянии.</exception>
 	void UnregisterKey(string stageName, string key);
 
 	/// <summary>
-	/// Снимок состояния всех существующих инстансов всех стадий. Запрос проходит через event loop —
-	/// возвращает консистентный снимок без race-conditions с конкурентными изменениями состояния.
+	/// Синхронный снимок состояния всех существующих инстансов всех стадий. Lock-free через atomic-reads
+	/// (<see cref="System.Threading.Volatile.Read{T}(ref T)"/>) — eventually consistent между полями одного инстанса,
+	/// но всегда без race-conditions на уровне snapshot collection.
 	/// </summary>
-	Task<InstancesOverview> GetOverviewAsync(CancellationToken ct = default);
+	InstancesOverview GetOverview();
 }

@@ -51,7 +51,7 @@ public sealed class ScenarioMonotonicLastSuccessTests {
 				"pg создан после первого успеха shops; LastSuccess монотонна и зависимость остаётся разрешённой");
 
 			var orchestrator = host.Services.GetRequiredService<IJobOrchestrator>();
-			var overview = await orchestrator.GetOverviewAsync().ConfigureAwait(false);
+			var overview = orchestrator.GetOverview();
 			var shopsInfo = overview.Instances.Single(i => i.StageName == "shops");
 			shopsInfo.LastSuccess.Should().NotBeNull("первый успех был — LastSuccess монотонна");
 			shopsInfo.ConsecutiveFailures.Should().BeGreaterThan(0, "сейчас в серии падений");

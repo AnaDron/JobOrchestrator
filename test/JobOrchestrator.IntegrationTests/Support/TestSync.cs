@@ -15,7 +15,7 @@ internal static class TestSync {
 		return predicate();
 	}
 
-	/// <summary>То же, но предикат асинхронный (например, обращающийся к <c>GetOverviewAsync</c>).</summary>
+	/// <summary>То же, но предикат асинхронный (например, читающий внешний счётчик через await).</summary>
 	public static async Task<bool> WaitForAsync(Func<Task<bool>> predicate, TimeSpan timeout) {
 		var sw = System.Diagnostics.Stopwatch.StartNew();
 		while (sw.Elapsed < timeout) {

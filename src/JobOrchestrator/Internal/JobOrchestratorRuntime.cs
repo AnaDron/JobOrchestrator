@@ -4,11 +4,16 @@ namespace JobOrchestrator.Internal;
 
 /// <summary>
 /// Реализация <see cref="IJobOrchestrator"/>: фасад поверх event loop'а.
-/// Все методы публикуют события в <c>Channel</c>; GetOverview читает снапшот тоже через event loop
-/// (для thread-safe доступа без блокировок).
+/// <list type="bullet">
+/// <item><c>TriggerAsync</c>: валидация ключей → публикация <see cref="ManualTriggerRequestedEvent"/> в Channel, await TCS.</item>
+/// <item><c>Register/UnregisterKey</c>: проверка существования стадии → публикация <see cref="KeyAddedEvent"/>/<see cref="KeyRemovedEvent"/>.</item>
+/// <item><c>GetOverview</c>: синхронный snapshot через atomic-reads <see cref="StageInstance"/>-полей. Lock-free, без RPC.</item>
+/// </list>
 /// </summary>
 internal sealed class JobOrchestratorRuntime(
 	Channel<OrchestratorEvent> channel,
+	StageRegistry registry,
+	InstanceManager instances,
 	OrchestratorLifecycle lifecycle
 ) : IJobOrchestrator {
 	public bool IsFaulted => lifecycle.IsFaulted;
@@ -20,8 +25,11 @@ internal sealed class JobOrchestratorRuntime(
 	) {
 		ArgumentException.ThrowIfNullOrEmpty(stageName);
 		if (lifecycle.IsFaulted) return TriggerResult.Faulted;
+		if (!registry.TryGet(stageName, out var stage)) return TriggerResult.NotFound;
 
 		var keys = dependencyKeys ?? new Dictionary<string, string>(StringComparer.Ordinal);
+		if (!ValidateKeys(stage!, keys)) return TriggerResult.InvalidKeys;
+
 		var tcs = new TaskCompletionSource<TriggerResult>(TaskCreationOptions.RunContinuationsAsynchronously);
 		var evt = new ManualTriggerRequestedEvent(stageName, keys, tcs);
 		try {
@@ -36,6 +44,9 @@ internal sealed class JobOrchestratorRuntime(
 		ArgumentException.ThrowIfNullOrEmpty(stageName);
 		ArgumentException.ThrowIfNullOrEmpty(key);
 		ThrowIfFaulted();
+		if (!registry.TryGet(stageName, out _)) {
+			throw new ArgumentException($"Стадия '{stageName}' не зарегистрирована в графе.", nameof(stageName));
+		}
 		channel.Writer.Publish(new KeyAddedEvent(stageName, key));
 	}
 
@@ -43,19 +54,28 @@ internal sealed class JobOrchestratorRuntime(
 		ArgumentException.ThrowIfNullOrEmpty(stageName);
 		ArgumentException.ThrowIfNullOrEmpty(key);
 		ThrowIfFaulted();
+		if (!registry.TryGet(stageName, out _)) {
+			throw new ArgumentException($"Стадия '{stageName}' не зарегистрирована в графе.", nameof(stageName));
+		}
 		channel.Writer.Publish(new KeyRemovedEvent(stageName, key));
 	}
 
-	public async Task<InstancesOverview> GetOverviewAsync(CancellationToken ct = default) {
+	public InstancesOverview GetOverview() {
 		ThrowIfFaulted();
-		var tcs = new TaskCompletionSource<InstancesOverview>(TaskCreationOptions.RunContinuationsAsynchronously);
-		var evt = new OverviewRequestedEvent(tcs);
-		try {
-			await channel.Writer.WriteAsync(evt, ct).ConfigureAwait(false);
-		} catch (ChannelClosedException) {
-			throw new InvalidOperationException("Оркестратор остановлен или находится в Faulted-состоянии.");
+		return instances.Snapshot();
+	}
+
+	/// <summary>
+	/// Проверяет, что набор имён ключей соответствует <c>DependsOnInstance</c>-зависимостям стадии.
+	/// Точное соответствие: те же имена в одинаковом наборе. Для безключевой стадии — пустой словарь.
+	/// </summary>
+	private static bool ValidateKeys(StageDescriptor stage, IReadOnlyDictionary<string, string> keys) {
+		var expected = stage.InstanceKeyNames;
+		if (keys.Count != expected.Count) return false;
+		foreach (var name in expected) {
+			if (!keys.ContainsKey(name)) return false;
 		}
-		return await tcs.Task.WaitAsync(ct).ConfigureAwait(false);
+		return true;
 	}
 
 	private void ThrowIfFaulted() {

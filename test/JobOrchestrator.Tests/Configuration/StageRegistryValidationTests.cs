@@ -13,6 +13,7 @@ public sealed class StageRegistryValidationTests {
 		Debounce = TimeSpan.Zero,
 		ExecutionTimeout = null,
 		Dependencies = deps,
+		InstanceKeyNames = [.. deps.Where(d => d.Mode == DependencyMode.Instance).Select(d => d.TargetStageName)],
 	};
 
 	[Fact]
@@ -103,18 +104,21 @@ public sealed class StageRegistryValidationTests {
 	}
 
 	[Fact]
-	public void TopologicalSortReverse_LeavesFirst() {
+	public void CancellationRank_LeavesAreLowest() {
 		var reg = new StageRegistry([
 			MakeStage("shops"),
 			MakeStage("productGroups", new StageDependency("shops", DependencyMode.Instance)),
 			MakeStage("products", new StageDependency("productGroups", DependencyMode.Whole)),
 			MakeStage("documents", new StageDependency("products", DependencyMode.Whole)),
 		]);
-		var stages = new[] { reg.Get("productGroups"), reg.Get("products"), reg.Get("documents") };
-		var ordered = reg.TopologicalSortReverse(stages);
-		// "Листья перед корнями" → documents должен быть раньше products, products раньше productGroups.
-		var names = ordered.Select(s => s.Name).ToList();
-		names.IndexOf("documents").Should().BeLessThan(names.IndexOf("products"));
-		names.IndexOf("products").Should().BeLessThan(names.IndexOf("productGroups"));
+		// documents — лист (никто не зависит), shops — корень.
+		// Сортируя по CancellationRank возрастанию: листья первыми (idx → cancel order).
+		var rankDocs = reg.CancellationRank("documents");
+		var rankProducts = reg.CancellationRank("products");
+		var rankPg = reg.CancellationRank("productGroups");
+		var rankShops = reg.CancellationRank("shops");
+		rankDocs.Should().BeLessThan(rankProducts);
+		rankProducts.Should().BeLessThan(rankPg);
+		rankPg.Should().BeLessThan(rankShops);
 	}
 }

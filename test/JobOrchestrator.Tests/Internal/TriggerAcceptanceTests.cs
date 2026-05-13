@@ -12,6 +12,7 @@ public sealed class TriggerAcceptanceTests {
 		RetryPolicy = retry,
 		Debounce = debounce,
 		Dependencies = [],
+		InstanceKeyNames = [],
 	};
 
 	private static StageInstance MakeInstance(StageDescriptor stage) => new() {
