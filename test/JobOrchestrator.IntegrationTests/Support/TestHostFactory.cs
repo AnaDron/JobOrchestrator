@@ -8,13 +8,22 @@ internal static class TestHostFactory {
 	/// Все <see cref="FakeJobServiceBase"/>-наследники, найденные через <paramref name="registerFakes"/>,
 	/// регистрируются как singletons (общий экземпляр для всех scope-ов итераций).
 	/// </summary>
+	/// <param name="timeProvider">
+	/// Если задан — регистрируется как singleton ДО <c>AddJobOrchestrator</c>, чтобы внутренний
+	/// <c>TryAddSingleton(TimeProvider.System)</c> стал no-op. Используется для детерминированных
+	/// тестов на основе <see cref="Microsoft.Extensions.Time.Testing.FakeTimeProvider"/>.
+	/// </param>
 	public static IHost Build(
 		Action<JobOrchestratorBuilder> configure,
-		Action<IServiceCollection>? registerFakes = null
+		Action<IServiceCollection>? registerFakes = null,
+		TimeProvider? timeProvider = null
 	) {
 		var builder = Host.CreateApplicationBuilder();
 		builder.Logging.ClearProviders();
 
+		if (timeProvider is not null) {
+			builder.Services.AddSingleton(timeProvider);
+		}
 		builder.Services.AddInMemoryJobStateStore();
 		builder.Services.AddJobOrchestrator(configure);
 		// registerFakes — после остальных регистраций, чтобы тест мог переопределить любую (последняя

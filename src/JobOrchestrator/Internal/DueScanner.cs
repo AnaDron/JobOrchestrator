@@ -17,8 +17,16 @@ namespace JobOrchestrator.Internal;
 /// </list>
 /// <para>
 /// Trade-off versus per-instance <see cref="Timer"/>: один аллокированный таймер вместо N, одна
-/// синхронизация per-tick (cheap volatile-read) вместо N callbacks через ThreadPool. При типичных N=10–100
-/// scan cost — микросекунды; рост до N=10k остаётся приемлемым (linear scan + Min — кэш-friendly).
+/// синхронизация per-tick (cheap volatile-read) вместо N callbacks через ThreadPool.
+/// </para>
+/// <para>
+/// <b>Profile-decision (см. <c>DueScannerProfileTests</c>):</b> linear scan на N=10k = ~1.66 мс
+/// (~165 нс/инстанс, кэш-friendly последовательный volatile-read). Sorted-by-deadline
+/// (<c>PriorityQueue&lt;TInst, DateTimeOffset&gt;</c>) даёт O(log N) на find-min, но ухудшает hot-path
+/// перепланирования (StageCompleted/Failed → O(log N) re-insert вместо одного atomic-write
+/// в <c>NextAutoUtc</c>) и не уменьшает доминирующую стоимость publish-pass (все due-инстансы
+/// в любом случае попадают в channel). Решение: linear scan; пересмотреть при N &gt; 50k или
+/// при появлении сценариев &gt; 100 due-events/сек.
 /// </para>
 /// </summary>
 internal sealed class DueScanner(
@@ -76,6 +84,13 @@ internal sealed class DueScanner(
 		}
 		logger.LogDebug("DueScanner stopped.");
 	}
+
+	/// <summary>
+	/// Test/profile hook: однократный синхронный scan + publish, без внешнего loop'а. Открыт как
+	/// <c>internal</c> для микробенчмарков и unit-тестов. Реальный path в production — через
+	/// <see cref="RunAsync"/> с динамической задержкой и wake-up CTS.
+	/// </summary>
+	internal DateTimeOffset? Tick(DateTimeOffset now) => ScanAndPublishDue(now);
 
 	/// <summary>
 	/// Сканирует все инстансы, публикует <see cref="TimerTickedEvent"/> для due-инстансов,

@@ -7,5 +7,3 @@
 - Условные зависимости (предикат в DependsOn*)
 - Distributed execution (multi-instance с внешним lease)
 - Concurrency limits (ConcurrencyPerStage, GlobalConcurrency)
-- Детерминированные тесты на FakeTimeProvider (Microsoft.Extensions.TimeProvider.Testing) — заменить sleep-based ожидания
-- Profile DueScanner на больших графах (N=10k+) — оценить переход на sorted-by-deadline collection
