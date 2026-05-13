@@ -4,15 +4,16 @@ namespace JobOrchestrator.Internal;
 /// Runtime-сущность одного инстанса стадии (long-lived). Несколько <see cref="StageInstance"/> могут
 /// разделять один <see cref="StageDescriptor"/> — один на каждый компонент композитного ключа.
 /// <para>
-/// Мутирующие поля (<c>_lastSuccessTicks</c>, <c>_lastAttemptTicks</c>, <c>_nextAutoTicks</c>,
-/// <c>_consecutiveFailures</c>, <c>_lastError</c>, <c>_state</c>) изменяются единственным writer-потоком
-/// (event-loop consumer). Reader-потоки (DueScanner, GetOverview из внешнего кода) читают значения
-/// через <see cref="Volatile.Read{T}(ref T)"/> — атомарно, без блокировок, без аллокаций.
+/// <b>Метрики</b> (LastSuccess/LastAttempt/ConsecutiveFailures/LastError/NextAutoUtc) хранятся
+/// как иммутабельный <see cref="JobMetrics"/> snapshot, заменяемый через
+/// <see cref="Interlocked.Exchange{T}(ref T, T)"/>. Это даёт <i>snapshot-consistency</i>: reader-поток
+/// (DueScanner, GetOverview) видит согласованную пятёрку полей из одной «эпохи» writer-а, а не
+/// торн-сборку из разных моментов между обновлениями. Цена — одна Gen-0 аллокация JobMetrics record
+/// на каждое обновление метрик.
 /// </para>
 /// <para>
-/// Для <c>DateTimeOffset?</c> хранится <c>long</c>-encoded UtcTicks (0 = null), что даёт word-aligned
-/// atomic read/write на 64-bit платформах. Это устраняет risk torn-read многобайтных <c>DateTimeOffset</c>
-/// при concurrent чтении из внешних потоков, без оверхеда immutable-record allocation на каждое обновление.
+/// <see cref="State"/> и <see cref="TryAcquirePendingTick"/> хранятся как отдельные atomic int —
+/// они меняются НЕЗАВИСИМО от метрик и должны иметь lock-free CAS (CompareExchange).
 /// </para>
 /// </summary>
 internal sealed class StageInstance {
@@ -24,63 +25,38 @@ internal sealed class StageInstance {
 	/// <summary>Scope для <see cref="IJobStateStore"/>: <c>"{StageName}:{EncodedKey}"</c>.</summary>
 	public string StateScope => $"{Stage.Name}:{EncodedKey}";
 
-	long _lastSuccessTicks;
-	long _lastAttemptTicks;
-	long _nextAutoTicks;
-	int _consecutiveFailures;
-	string? _lastError;
-	int _state; // 0 = Idle, 1 = Running
-	int _pendingTick; // 0 = свободно, 1 = TimerTickedEvent уже в очереди / обрабатывается
+	JobMetrics _metrics = JobMetrics.Empty;
+	int _state;        // 0 = Idle, 1 = Running
+	int _pendingTick;  // 0 = свободно, 1 = TimerTickedEvent уже в очереди / обрабатывается
 
-	/// <summary>Текущее состояние lifecycle.</summary>
+	/// <summary>Атомарный snapshot мутирующихся метрик. Безопасно вызывать из любого потока.</summary>
+	public JobMetrics Metrics => Volatile.Read(ref _metrics);
+
+	/// <summary>
+	/// Атомарная замена метрик. Используется только из event-loop-consumer-потока (single writer).
+	/// Типовой паттерн: <c>instance.SetMetrics(instance.Metrics with { LastSuccess = at, ... })</c>.
+	/// </summary>
+	public void SetMetrics(JobMetrics next) => Interlocked.Exchange(ref _metrics, next);
+
+	/// <summary>Read-side фасад. Полная семантика см. <see cref="JobMetrics.LastSuccess"/>.</summary>
+	public DateTimeOffset? LastSuccess => Metrics.LastSuccess;
+
+	/// <summary>Read-side фасад. Полная семантика см. <see cref="JobMetrics.LastAttempt"/>.</summary>
+	public DateTimeOffset? LastAttempt => Metrics.LastAttempt;
+
+	/// <summary>Read-side фасад. Полная семантика см. <see cref="JobMetrics.ConsecutiveFailures"/>.</summary>
+	public int ConsecutiveFailures => Metrics.ConsecutiveFailures;
+
+	/// <summary>Read-side фасад. Полная семантика см. <see cref="JobMetrics.LastError"/>.</summary>
+	public string? LastError => Metrics.LastError;
+
+	/// <summary>Read-side фасад. Полная семантика см. <see cref="JobMetrics.NextAutoUtc"/>.</summary>
+	public DateTimeOffset? NextAutoUtc => Metrics.NextAutoUtc;
+
+	/// <summary>Текущее состояние lifecycle. Хранится отдельно от <see cref="Metrics"/> — меняется независимо.</summary>
 	public InstanceLifecycleState State {
 		get => Volatile.Read(ref _state) == 0 ? InstanceLifecycleState.Idle : InstanceLifecycleState.Running;
 		set => Volatile.Write(ref _state, value == InstanceLifecycleState.Idle ? 0 : 1);
-	}
-
-	/// <summary>
-	/// Время последнего успешного завершения. Монотонно: после первого != null значение никогда не возвращается к null.
-	/// Atomic read/write через long-encoded UtcTicks.
-	/// </summary>
-	public DateTimeOffset? LastSuccess {
-		get {
-			long t = Volatile.Read(ref _lastSuccessTicks);
-			return t == 0 ? null : new DateTimeOffset(t, TimeSpan.Zero);
-		}
-		set => Volatile.Write(ref _lastSuccessTicks, value?.UtcTicks ?? 0);
-	}
-
-	/// <summary>Время последней попытки (успешной или неуспешной).</summary>
-	public DateTimeOffset? LastAttempt {
-		get {
-			long t = Volatile.Read(ref _lastAttemptTicks);
-			return t == 0 ? null : new DateTimeOffset(t, TimeSpan.Zero);
-		}
-		set => Volatile.Write(ref _lastAttemptTicks, value?.UtcTicks ?? 0);
-	}
-
-	/// <summary>
-	/// Время следующего Auto-тика. <c>null</c> = инстанс не запланирован (только что создан или Running).
-	/// Используется <c>DueScanner</c> для вычисления ближайшего due-времени.
-	/// </summary>
-	public DateTimeOffset? NextAutoUtc {
-		get {
-			long t = Volatile.Read(ref _nextAutoTicks);
-			return t == 0 ? null : new DateTimeOffset(t, TimeSpan.Zero);
-		}
-		set => Volatile.Write(ref _nextAutoTicks, value?.UtcTicks ?? 0);
-	}
-
-	/// <summary>Серия последовательных неуспехов с момента последнего успеха.</summary>
-	public int ConsecutiveFailures {
-		get => Volatile.Read(ref _consecutiveFailures);
-		set => Volatile.Write(ref _consecutiveFailures, value);
-	}
-
-	/// <summary>Сообщение последней ошибки или <c>null</c>.</summary>
-	public string? LastError {
-		get => Volatile.Read(ref _lastError);
-		set => Volatile.Write(ref _lastError, value);
 	}
 
 	/// <summary>
@@ -93,9 +69,9 @@ internal sealed class StageInstance {
 		Interlocked.CompareExchange(ref _pendingTick, 1, 0) == 0;
 
 	/// <summary>
-	/// Сбрасывает pending-tick флаг. Используется DueScanner-ом, если запись в Channel не удалась
-	/// (back-pressure / shutdown), и event-loop-ом по завершению обработки события — в обоих случаях
-	/// «открывается» следующее due-окно для публикации очередного TimerTicked.
+	/// Сбрасывает pending-tick флаг. Используется DueScanner-ом, если запись в Channel не удалась,
+	/// и event-loop-ом по завершению обработки события — в обоих случаях «открывается» следующее
+	/// due-окно для публикации очередного TimerTicked.
 	/// </summary>
 	public void ReleasePendingTick() =>
 		Volatile.Write(ref _pendingTick, 0);

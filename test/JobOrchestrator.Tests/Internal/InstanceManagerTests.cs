@@ -85,9 +85,9 @@ public sealed class InstanceManagerTests {
 		var mgr = new InstanceManager();
 		var stage = MakeStage("shops");
 		var inst = MakeInstance(stage, new Dictionary<string, string>());
-		inst.LastSuccess = DateTimeOffset.UtcNow;
-		inst.ConsecutiveFailures = 2;
-		inst.LastError = "boom";
+		inst.SetMetrics(inst.Metrics with { LastSuccess = DateTimeOffset.UtcNow });
+		inst.SetMetrics(inst.Metrics with { ConsecutiveFailures = 2 });
+		inst.SetMetrics(inst.Metrics with { LastError = "boom" });
 		mgr.Add(inst);
 
 		var overview = mgr.Snapshot();

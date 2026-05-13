@@ -41,7 +41,7 @@ public sealed class DueScannerPendingTickTests {
 			FullyQualifiedName = "x[]",
 			EncodedKey = "",
 		};
-		inst.NextAutoUtc = DateTimeOffset.UtcNow.AddMilliseconds(-1);   // due
+		inst.SetMetrics(inst.Metrics with { NextAutoUtc = DateTimeOffset.UtcNow.AddMilliseconds(-1) });   // due
 		manager.Add(inst);
 
 		var scanner = new DueScanner(manager, channel, TimeProvider.System, NullLogger<DueScanner>.Instance);
@@ -74,7 +74,7 @@ public sealed class DueScannerPendingTickTests {
 			FullyQualifiedName = "x[]",
 			EncodedKey = "",
 		};
-		inst.NextAutoUtc = DateTimeOffset.UtcNow.AddMilliseconds(-1);
+		inst.SetMetrics(inst.Metrics with { NextAutoUtc = DateTimeOffset.UtcNow.AddMilliseconds(-1) });
 		manager.Add(inst);
 
 		var scanner = new DueScanner(manager, channel, TimeProvider.System, NullLogger<DueScanner>.Instance);
@@ -86,10 +86,10 @@ public sealed class DueScannerPendingTickTests {
 		// 3) StageCompleted: State=Idle, новый NextAutoUtc.
 		inst.ReleasePendingTick();
 		inst.State = InstanceLifecycleState.Running;
-		inst.NextAutoUtc = null;
+		inst.SetMetrics(inst.Metrics with { NextAutoUtc = null });
 		while (channel.Reader.TryRead(out _)) { }
 		inst.State = InstanceLifecycleState.Idle;
-		inst.NextAutoUtc = DateTimeOffset.UtcNow.AddMilliseconds(-1);
+		inst.SetMetrics(inst.Metrics with { NextAutoUtc = DateTimeOffset.UtcNow.AddMilliseconds(-1) });
 
 		scanner.Tick(DateTimeOffset.UtcNow);
 

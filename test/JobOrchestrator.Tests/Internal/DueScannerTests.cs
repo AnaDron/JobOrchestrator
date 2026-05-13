@@ -25,7 +25,7 @@ public sealed class DueScannerTests {
 			FullyQualifiedName = DependencyKey.FormatFullyQualifiedName(stage.Name, empty),
 			EncodedKey = DependencyKey.Encode(empty),
 		};
-		inst.NextAutoUtc = nextAuto;
+		inst.SetMetrics(inst.Metrics with { NextAutoUtc = nextAuto });
 		inst.State = state;
 		return inst;
 	}
@@ -39,15 +39,15 @@ public sealed class DueScannerTests {
 		// Один идле-инстанс уже due, один — в будущем, один — Running (должен быть пропущен).
 		var dueInstance = MakeInstance(stage, DateTimeOffset.UtcNow.AddMilliseconds(-10));
 		dueInstance = new StageInstance { Stage = stage, DependencyKeys = dueInstance.DependencyKeys, FullyQualifiedName = "x[due]", EncodedKey = "due" };
-		dueInstance.NextAutoUtc = DateTimeOffset.UtcNow.AddMilliseconds(-10);
+		dueInstance.SetMetrics(dueInstance.Metrics with { NextAutoUtc = DateTimeOffset.UtcNow.AddMilliseconds(-10) });
 		manager.Add(dueInstance);
 
 		var futureInstance = new StageInstance { Stage = stage, DependencyKeys = dueInstance.DependencyKeys, FullyQualifiedName = "x[future]", EncodedKey = "future" };
-		futureInstance.NextAutoUtc = DateTimeOffset.UtcNow.AddMinutes(5);
+		futureInstance.SetMetrics(futureInstance.Metrics with { NextAutoUtc = DateTimeOffset.UtcNow.AddMinutes(5) });
 		manager.Add(futureInstance);
 
 		var runningInstance = new StageInstance { Stage = stage, DependencyKeys = dueInstance.DependencyKeys, FullyQualifiedName = "x[running]", EncodedKey = "running" };
-		runningInstance.NextAutoUtc = DateTimeOffset.UtcNow.AddMilliseconds(-10);
+		runningInstance.SetMetrics(runningInstance.Metrics with { NextAutoUtc = DateTimeOffset.UtcNow.AddMilliseconds(-10) });
 		runningInstance.State = InstanceLifecycleState.Running;
 		manager.Add(runningInstance);
 
@@ -85,7 +85,7 @@ public sealed class DueScannerTests {
 			FullyQualifiedName = "x[far]",
 			EncodedKey = "far",
 		};
-		farFuture.NextAutoUtc = DateTimeOffset.UtcNow.AddMinutes(10);
+		farFuture.SetMetrics(farFuture.Metrics with { NextAutoUtc = DateTimeOffset.UtcNow.AddMinutes(10) });
 		manager.Add(farFuture);
 
 		var scanner = new DueScanner(manager, channel, TimeProvider.System, NullLogger<DueScanner>.Instance);
@@ -94,7 +94,7 @@ public sealed class DueScannerTests {
 
 		await Task.Delay(100, cts.Token).ConfigureAwait(false);
 		// Меняем NextAutoUtc и будим — сканер должен сразу пересчитать и опубликовать tick.
-		farFuture.NextAutoUtc = DateTimeOffset.UtcNow.AddMilliseconds(-1);
+		farFuture.SetMetrics(farFuture.Metrics with { NextAutoUtc = DateTimeOffset.UtcNow.AddMilliseconds(-1) });
 		scanner.Wake();
 
 		// Подождём публикацию.

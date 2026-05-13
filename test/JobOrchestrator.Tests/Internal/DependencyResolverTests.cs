@@ -84,7 +84,7 @@ public sealed class DependencyResolverTests {
 		var instances = new InstanceManager();
 		var keyspace = new KeyspaceRegistry();
 		var shopsInst = MakeInstance(shops);
-		shopsInst.LastSuccess = DateTimeOffset.UtcNow;
+		shopsInst.SetMetrics(shopsInst.Metrics with { LastSuccess = DateTimeOffset.UtcNow });
 		instances.Add(shopsInst);
 		// keyspace shops пуст — DependsOnInstance не разрешается.
 
@@ -100,7 +100,7 @@ public sealed class DependencyResolverTests {
 		var instances = new InstanceManager();
 		var keyspace = new KeyspaceRegistry();
 		var shopsInst = MakeInstance(shops);
-		shopsInst.LastSuccess = DateTimeOffset.UtcNow;
+		shopsInst.SetMetrics(shopsInst.Metrics with { LastSuccess = DateTimeOffset.UtcNow });
 		instances.Add(shopsInst);
 		keyspace.Add("shops", "u1");
 
@@ -144,7 +144,7 @@ public sealed class DependencyResolverTests {
 		var instances = new InstanceManager();
 		var keyspace = new KeyspaceRegistry();
 		var xInst = MakeInstance(x);
-		xInst.LastSuccess = DateTimeOffset.UtcNow;
+		xInst.SetMetrics(xInst.Metrics with { LastSuccess = DateTimeOffset.UtcNow });
 		instances.Add(xInst);
 
 		var resolved = DependencyResolver.AllDependenciesResolved(y, new Dictionary<string, string>(), instances, keyspace);
@@ -160,9 +160,9 @@ public sealed class DependencyResolverTests {
 		var instances = new InstanceManager();
 		var keyspace = new KeyspaceRegistry();
 		var xInst = MakeInstance(x);
-		xInst.LastSuccess = DateTimeOffset.UtcNow.AddMinutes(-30);  // успех 30 минут назад
-		xInst.ConsecutiveFailures = 5;                                // и потом 5 неуспехов
-		xInst.LastError = "boom";
+		xInst.SetMetrics(xInst.Metrics with { LastSuccess = DateTimeOffset.UtcNow.AddMinutes(-30) });  // успех 30 минут назад
+		xInst.SetMetrics(xInst.Metrics with { ConsecutiveFailures = 5 });                                // и потом 5 неуспехов
+		xInst.SetMetrics(xInst.Metrics with { LastError = "boom" });
 		instances.Add(xInst);
 
 		var resolved = DependencyResolver.AllDependenciesResolved(y, new Dictionary<string, string>(), instances, keyspace);

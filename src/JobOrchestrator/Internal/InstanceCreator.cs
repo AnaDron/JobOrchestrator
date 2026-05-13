@@ -155,7 +155,7 @@ internal sealed class InstanceCreator(InstanceManager instances, KeyspaceRegistr
 			EncodedKey = encoded,
 		};
 		// NextAutoUtc = now → DueScanner подберёт инстанс при ближайшем проходе.
-		instance.NextAutoUtc = time.GetUtcNow();
+		instance.SetMetrics(JobMetrics.Empty with { NextAutoUtc = time.GetUtcNow() });
 		instances.Add(instance);
 		return instance;
 	}

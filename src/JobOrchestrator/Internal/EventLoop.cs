@@ -141,7 +141,7 @@ internal sealed class EventLoop(
 
 	private void BeginIteration(StageInstance instance, TriggerSource trigger, CancellationToken ct) {
 		instance.State = InstanceLifecycleState.Running;
-		instance.NextAutoUtc = null;
+		instance.SetMetrics(instance.Metrics with { NextAutoUtc = null });
 		Log.BeginIteration(logger, instance.FullyQualifiedName, trigger, null);
 		instance.RunningTask = Task.Run(async () => await runner.RunIterationAsync(instance, trigger, ct).ConfigureAwait(false), ct);
 	}
@@ -216,13 +216,17 @@ internal sealed class EventLoop(
 			return;
 		}
 
-		bool wasFirstSuccess = !instance.LastSuccess.HasValue;
-		instance.LastAttempt = at;
-		instance.LastSuccess = at;
-		instance.ConsecutiveFailures = 0;
-		instance.LastError = null;
+		var current = instance.Metrics;
+		bool wasFirstSuccess = !current.LastSuccess.HasValue;
+		// Атомарная замена всей пятёрки + перепланирование NextAutoUtc в одном snapshot —
+		// reader (DueScanner / GetOverview) увидит согласованное состояние.
+		instance.SetMetrics(new JobMetrics(
+			LastSuccess: at,                    // монотонно: не сбрасывается на последующих неуспехах
+			LastAttempt: at,
+			ConsecutiveFailures: 0,
+			LastError: null,
+			NextAutoUtc: time.GetUtcNow() + instance.Stage.Interval));
 		instance.State = InstanceLifecycleState.Idle;
-		ScheduleNextTick(instance, instance.Stage.Interval);
 
 		if (wasFirstSuccess) {
 			Log.FirstSuccessCascade(logger, instance.FullyQualifiedName, null);
@@ -240,14 +244,18 @@ internal sealed class EventLoop(
 			return;
 		}
 
-		instance.LastAttempt = at;
-		instance.ConsecutiveFailures++;
-		instance.LastError = ex.Message;
-		instance.State = InstanceLifecycleState.Idle;
-
-		var retryDelay = instance.Stage.RetryPolicy.ComputeDelay(instance.ConsecutiveFailures);
+		var current = instance.Metrics;
+		var failures = current.ConsecutiveFailures + 1;
+		var retryDelay = instance.Stage.RetryPolicy.ComputeDelay(failures);
 		var nextDelay = retryDelay > TimeSpan.Zero ? retryDelay : instance.Stage.Interval;
-		ScheduleNextTick(instance, nextDelay);
+		// LastSuccess НЕ меняется — монотонная метка («хоть раз был успех» сохраняется через неуспехи).
+		instance.SetMetrics(current with {
+			LastAttempt = at,
+			ConsecutiveFailures = failures,
+			LastError = ex.Message,
+			NextAutoUtc = time.GetUtcNow() + nextDelay,
+		});
+		instance.State = InstanceLifecycleState.Idle;
 		scanner.Wake();
 	}
 
@@ -257,10 +265,6 @@ internal sealed class EventLoop(
 		} catch (Exception ex) {
 			Log.FinalizeFailed(logger, instance.FullyQualifiedName, ex);
 		}
-	}
-
-	private void ScheduleNextTick(StageInstance instance, TimeSpan delay) {
-		instance.NextAutoUtc = time.GetUtcNow() + delay;
 	}
 
 	private void CreateAndStart(StageDescriptor stage) {

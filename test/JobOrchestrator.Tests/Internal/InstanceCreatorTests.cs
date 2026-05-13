@@ -16,13 +16,14 @@ public sealed class InstanceCreatorTests {
 
 	private static StageInstance MakeInstanceWithSuccess(StageDescriptor stage, Dictionary<string, string>? keys = null) {
 		keys ??= new Dictionary<string, string>(StringComparer.Ordinal);
-		return new StageInstance {
+		var inst = new StageInstance {
 			Stage = stage,
 			DependencyKeys = keys,
 			FullyQualifiedName = DependencyKey.FormatFullyQualifiedName(stage.Name, keys),
 			EncodedKey = DependencyKey.Encode(keys),
-			LastSuccess = DateTimeOffset.UtcNow,
 		};
+		inst.SetMetrics(inst.Metrics with { LastSuccess = DateTimeOffset.UtcNow });
+		return inst;
 	}
 
 	[Fact]
