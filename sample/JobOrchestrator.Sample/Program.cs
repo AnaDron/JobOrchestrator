@@ -7,9 +7,11 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
-// Минимальный пример: producer-стадия эмитит три ключа, consumer-стадия параметризуется ими,
-// reporter-стадия наследует ключи consumer через DependsOn. Запускается ~5 секунд, выводит
-// синхронный snapshot через GetOverview() и проверяет IsFaulted.
+// Production-style пример: демонстрирует
+//   • RegisterKey для bootstrap keyspace из «БД» (имитируется массивом);
+//   • RetryAfterFailure + Debounce + WithExecutionTimeout + WithConcurrencyLimit;
+//   • DependsOnInstance для multi-instance параметризации;
+//   • Synchronous GetOverview() для post-mortem snapshot.
 
 var builder = Host.CreateApplicationBuilder(args);
 builder.Logging.AddSimpleConsole(o => {
@@ -20,34 +22,61 @@ builder.Logging.AddSimpleConsole(o => {
 
 builder.Services.AddInMemoryJobStateStore();
 builder.Services.AddJobOrchestrator(jobs => {
+	jobs.Defaults = new JobDefaults {
+		Debounce = TimeSpan.FromSeconds(1),
+		RetryAfterFailure = RetryPolicy.ExponentialBackoff(
+			initial: TimeSpan.FromSeconds(2),
+			max: TimeSpan.FromMinutes(1)),
+	};
+
+	// producer: keyless, эмитит ключи внутри ExecuteAsync.
 	var producer = jobs.Stage("producer")
 		.HandledBy<ProducerService>()
-		.RunPeriodically(TimeSpan.FromSeconds(10));
+		.RunPeriodically(TimeSpan.FromMinutes(5))
+		.WithExecutionTimeout(TimeSpan.FromSeconds(30));    // watchdog
 
+	// consumer: на каждый ключ producer'а — отдельный инстанс. Limit=2 — не более 2-х параллельно.
 	var consumer = jobs.Stage("consumer")
 		.HandledBy<ConsumerService>()
 		.DependsOnInstance(producer)
-		.RunPeriodically(TimeSpan.FromSeconds(2));
+		.RunPeriodically(TimeSpan.FromSeconds(10))
+		.RetryAfterFailure(RetryPolicy.FixedDelay(TimeSpan.FromSeconds(5)))
+		.WithConcurrencyLimit(2);
 
+	// reporter: наследует ключи consumer'а через DependsOn (fan-out с inheritance).
 	jobs.Stage("reporter")
 		.HandledBy<ReporterService>()
 		.DependsOn(consumer)
-		.RunPeriodically(TimeSpan.FromSeconds(3));
+		.RunPeriodically(TimeSpan.FromSeconds(15));
 });
 
 using var host = builder.Build();
+var orchestrator = host.Services.GetRequiredService<IJobOrchestrator>();
+
 await host.StartAsync();
 
-await Task.Delay(TimeSpan.FromSeconds(3));
+// Bootstrap keyspace из «БД» — типовой production-сценарий, когда оркестратор подхватывает
+// набор объектов, который уже существует, и не ждёт первого producer-успеха для their обнаружения.
+Console.WriteLine("\n=== Bootstrap: RegisterKey для существующих объектов ===");
+foreach (var shopId in new[] { "shop-100", "shop-200", "shop-300" }) {
+	orchestrator.RegisterKey("producer", shopId);
+}
 
-// Snapshot — lock-free, читает atomic-fields инстансов без RPC через event loop.
-var orchestrator = host.Services.GetRequiredService<IJobOrchestrator>();
+await Task.Delay(TimeSpan.FromSeconds(5));
+
+// Synchronous lock-free snapshot — доступен даже в IsFaulted (post-mortem-диагностика).
 Console.WriteLine($"\n=== Snapshot (IsFaulted={orchestrator.IsFaulted}) ===");
 var overview = orchestrator.GetOverview();
 foreach (var info in overview.Instances.OrderBy(i => i.FullyQualifiedName, StringComparer.Ordinal)) {
-	Console.WriteLine($"  {info.FullyQualifiedName,-40} state={info.State}  lastSuccess={info.LastSuccess:HH:mm:ss}");
+	Console.WriteLine($"  {info.FullyQualifiedName,-50} state={info.State}  ok={info.LastSuccess:HH:mm:ss}  fails={info.ConsecutiveFailures}");
 }
 Console.WriteLine();
 
-await Task.Delay(TimeSpan.FromSeconds(2));
+// Manual trigger конкретного инстанса.
+Console.WriteLine("=== Manual trigger reporter[producer=shop-100] ===");
+var result = await orchestrator.TriggerAsync("reporter",
+	new Dictionary<string, string>(StringComparer.Ordinal) { ["producer"] = "shop-100" });
+Console.WriteLine($"  result = {result}");
+
+await Task.Delay(TimeSpan.FromSeconds(3));
 await host.StopAsync();

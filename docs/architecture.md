@@ -126,7 +126,51 @@ TryAcceptTrigger(instance, source, now):
 
 После Faulted внешний API (`IJobOrchestrator`):
 - `TriggerAsync` возвращает `TriggerResult.Faulted`.
-- `RegisterKey` / `UnregisterKey` / `GetOverview` бросают `InvalidOperationException`.
+- `RegisterKey` / `UnregisterKey` бросают `InvalidOperationException`.
+- `GetOverview` доступен (для post-mortem snapshot'а — что было в InstanceManager на момент краша).
+
+## Restart-behavior
+
+SDK хранит весь runtime-state in-memory: `InstanceManager`, `KeyspaceRegistry`, `JobMetrics`. При перезапуске процесса всё сбрасывается:
+
+- `LastSuccess` всех инстансов → `null` (никто не имеет «истории успеха»).
+- `KeyspaceRegistry` пуст.
+- `InstanceManager` содержит только bootstrap-keyless-стадии (через `BootstrapInitialInstances`).
+- Ключевые/dependent-стадии не существуют, пока их родители не наберут первый success.
+
+**Что переживает рестарт:** только данные в `IJobStateStore` (per-instance JSON-bag) — в дефолтной реализации `InMemoryJobStateStore` они тоже сбрасываются, но кастомные backend-ы (SQL, Redis) могут сохранять.
+
+**Следствия для БЛ:**
+- `JobContext.LastSuccessAt == null` на первой итерации после рестарта → БЛ должна различать full-sync vs delta-sync через эту метку.
+- `RegisterKey` для bootstrap keyspace из БД — типовой production-pattern (см. Sample).
+- Каскад «first success» прорастает заново через всю цепочку DependsOn-зависимостей.
+
+## InstanceLifecycleState
+
+Три состояния:
+- **Idle** — инстанс существует, ждёт следующего тика или истечения retry-delay.
+- **Running** — итерация выполняется. DueScanner и Manual-триггеры пропускают (return `AlreadyRunning`).
+- **Terminating** — cascade-removal в процессе. RunCts отменён (для бывших Running). Инстанс остаётся в `InstanceManager` до finalize. Триггеры и DueScanner пропускают (return `NotFound` для Manual).
+
+**State-transition diagram:**
+
+```
+                ┌───────────────┐
+   bootstrap →  │     Idle      │ ←──── StageCompleted/Failed
+                └───┬───────┬───┘
+                    │       │
+        Begin       │       │ cascade-removal
+        Iteration   │       │ (Idle → finalize sync)
+                    ↓       ↓
+                ┌───────────────┐       ┌──────────────────┐
+                │    Running    │ ────→ │   Terminating    │ ──→ FinalizeTerminating
+                └───────────────┘  c-c  └──────────────────┘     (Remove + RemoveScope)
+                                                ↑
+                                        cascade ↑
+                                  (Running → wait StageCompleted/Failed)
+```
+
+Переход в Terminating атомарен (`Volatile.Write` int-поля); читается лениво атомарно (`Volatile.Read`).
 
 ## Структурное логирование
 
@@ -151,9 +195,22 @@ Owner всех `StageInstance`-объектов. Writes — через event-loo
 - Secondary index: `ConcurrentDictionary<StageName, ConcurrentDictionary<StageInstance, byte>>` — O(1) для `InstancesOf(stageName)` (используется в `InstanceCreator.ComputeDimension` и `DependencyResolver.FindPairedInstance`).
 - `Snapshot()` — eventually-consistent копия в `InstancesOverview` через atomic-reads `StageInstance`-полей. Lock-free.
 
-## StageInstance: atomic поля
+## StageInstance: snapshot-consistent метрики
 
-Мутирующие поля `StageInstance` (`LastSuccess`, `LastAttempt`, `NextAutoUtc`, `ConsecutiveFailures`, `LastError`, `State`) изменяются writer-потоком event loop'а, а reader-потоки (DueScanner, GetOverview) читают их без блокировок. Для `DateTimeOffset?` хранится `long`-encoded UtcTicks (0 = null), что даёт word-aligned atomic read/write на 64-bit платформах через `Volatile.Read/Write`. Это убирает risk torn-read многобайтных `DateTimeOffset` без оверхеда immutable-record allocation на каждое обновление.
+Мутирующие метрики (`LastSuccess`, `LastAttempt`, `NextAutoUtc`, `ConsecutiveFailures`, `LastError`) хранятся как immutable-record `JobMetrics`, заменяемый атомарно через `Interlocked.Exchange`. Read-side получает консистентный snapshot всей пятёрки полей из одной «эпохи» writer'а (через `instance.Metrics` → один `Volatile.Read`).
+
+**Без facade-полей:** `instance.LastSuccess` и аналоги намеренно отсутствуют — call-sites обязаны делать `instance.Metrics` явно. Это сразу показывает места, где Metrics читается несколько раз → optimization-hotspots (один snapshot + локальная переменная).
+
+`State` (Idle/Running/Terminating) — отдельный atomic int (меняется независимо от метрик). `RunCts` — `volatile`-reference для memory-ordering между runner-thread и event-loop-thread. `pendingTick` — CAS-флаг для idempotency DueScanner-а.
+
+## InstanceIdentity
+
+Иммутабельный композитный идентификатор `(StageDescriptor, ImmutableDictionary<string,string>)`. Pre-computed:
+- `EncodedKey` — canonical encoding (sort by name, escaped `|=\`-символы) для словарных lookup'ов.
+- `FullyQualifiedName` — human-readable для логов.
+- `StateScope` — `"{StageName}:{EncodedKey}"` для `IJobStateStore`.
+
+Equality по `(StageName, EncodedKey)`. Используется как primary-ключ в `InstanceManager`. Один Identity-объект живёт всю lifetime инстанса.
 
 ## Pre-computed StageRegistry
 
@@ -161,14 +218,14 @@ Owner всех `StageInstance`-объектов. Writes — через event-loo
 - `StagesDependingOn(name)` / `StagesDependingOnInstance(name)` — обратные индексы зависимостей, O(1) lookup.
 - `StagesAffectedByKeyRemoval(name)` — BFS-замыкание per стадия, кэшируется в словарь.
 - `CancellationRank(name)` — глубина «вниз по графу» (лист = 0, корень = max), используется для сортировки cascade-removal без повторного topo-sort-а каждый раз.
+- `ExpectedKeyNames(name)` — транзитивно унаследованные имена ключей через цепочку `DependsOn`/`DependsOnInstance`, используется в `ValidateKeys` (TriggerAsync).
+
+## ConcurrencyLimits
+
+Per-stage `SemaphoreSlim` для ограничения параллельных итераций одной стадии. Acquire — в `EventLoop.BeginIteration` ДО запуска runner-а; если лимит выбран — re-schedule инстанс через 1 sec, DueScanner подберёт его снова. Release — в `StageRunner.RunIterationAsync` finally — гарантирует release при любом исходе.
+
+Стадии без лимита не имеют семафора (TryAcquire — no-op true). Конфигурируется через `IStageBuilder.WithConcurrencyLimit(int)`.
 
 ## Out of scope
 
-Список отложенных features в [TODO.md](../TODO.md):
-- `DependsOnAll(X)` — universal-блокировка (все инстансы X успешны).
-- ActivitySource / OpenTelemetry-инструментация стадий.
-- REST-обёртка `IJobOrchestrator`.
-- Внешние backend-ы `IJobStateStore` (SQL/Redis/file).
-- Условные зависимости (предикат в `DependsOn*`).
-- Distributed execution (multi-instance с внешним lease).
-- Concurrency limits.
+Список отложенных features в [TODO.md](../TODO.md).
