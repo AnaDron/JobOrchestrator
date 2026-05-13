@@ -35,17 +35,17 @@ internal sealed class StageRunner(
 		try {
 			var service = (IJobService)scope.ServiceProvider.GetRequiredService(instance.Stage.ServiceType);
 			var jobState = new DefaultJobState(stateStore, instance.StateScope);
+			var sink = new ChannelJobContextSink(channel.Writer, instance);
 
-			var jobContext = new JobContext(
-				correlationId: correlationId,
-				trigger: trigger,
-				state: jobState,
-				lastSuccessAt: instance.LastSuccess,
-				dependencyKeys: instance.DependencyKeys,
-				fullyQualifiedName: instance.FullyQualifiedName,
-				addKey: k => channel.Writer.Publish(new KeyAddedEvent(instance.Stage.Name, k, instance)),
-				removeKey: k => channel.Writer.Publish(new KeyRemovedEvent(instance.Stage.Name, k, instance))
-			);
+			var jobContext = new JobContext {
+				CorrelationId = correlationId,
+				Trigger = trigger,
+				State = jobState,
+				LastSuccessAt = instance.LastSuccess,
+				DependencyKeys = instance.DependencyKeys,
+				FullyQualifiedName = instance.FullyQualifiedName,
+				Sink = sink,
+			};
 
 			_logger.LogDebug("Старт итерации {Instance} (trigger={Trigger}).", instance.FullyQualifiedName, trigger);
 			await service.ExecuteAsync(jobContext, runCts.Token).ConfigureAwait(false);
