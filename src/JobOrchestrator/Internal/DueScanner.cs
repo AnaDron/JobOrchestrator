@@ -118,6 +118,12 @@ internal sealed class DueScanner(
 	/// <summary>
 	/// Сканирует все инстансы, публикует <see cref="TimerTickedEvent"/> для due-инстансов,
 	/// возвращает ближайший <c>NextAutoUtc</c> в будущем (или <c>null</c>, если расписаний нет).
+	/// <para>
+	/// Идемпотентность гарантируется через <see cref="StageInstance.TryAcquirePendingTick"/>:
+	/// если флаг уже взведён (предыдущий tick ещё в Channel или обрабатывается consumer-ом),
+	/// scan пропускает инстанс. Флаг сбрасывается event-loop-ом в <c>BeginIteration</c> (через
+	/// <see cref="StageInstance.ReleasePendingTick"/>) после завершения обработки события.
+	/// </para>
 	/// </summary>
 	private DateTimeOffset? ScanAndPublishDue(DateTimeOffset now) {
 		DateTimeOffset? nextDue = null;
@@ -127,7 +133,17 @@ internal sealed class DueScanner(
 			var next = instance.NextAutoUtc;
 			if (next is null) continue;
 			if (next.Value <= now) {
-				channel.Writer.Publish(new TimerTickedEvent(instance));
+				// CAS-acquire: ровно одна публикация на due-окно. Без этого race-window между
+				// первой публикацией и реакцией consumer'а (State=Running) даёт дубль-tick.
+				if (!instance.TryAcquirePendingTick()) continue;
+				try {
+					channel.Writer.Publish(new TimerTickedEvent(instance));
+				} catch {
+					// Publish никогда не должен throw'ить (Publish сам глотает ChannelClosedException),
+					// но на всякий случай: если что-то пошло не так — освобождаем флаг.
+					instance.ReleasePendingTick();
+					throw;
+				}
 				continue;
 			}
 			if (nextDue is null || next.Value < nextDue.Value) nextDue = next;

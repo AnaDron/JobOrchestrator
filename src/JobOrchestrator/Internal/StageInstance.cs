@@ -30,6 +30,7 @@ internal sealed class StageInstance {
 	int _consecutiveFailures;
 	string? _lastError;
 	int _state; // 0 = Idle, 1 = Running
+	int _pendingTick; // 0 = свободно, 1 = TimerTickedEvent уже в очереди / обрабатывается
 
 	/// <summary>Текущее состояние lifecycle.</summary>
 	public InstanceLifecycleState State {
@@ -81,6 +82,23 @@ internal sealed class StageInstance {
 		get => Volatile.Read(ref _lastError);
 		set => Volatile.Write(ref _lastError, value);
 	}
+
+	/// <summary>
+	/// Idempotency-CAS для <see cref="DueScanner"/>: <c>true</c> возвращается ровно один раз,
+	/// пока <see cref="ReleasePendingTick"/> не сбросит флаг. Защищает от публикации дублирующего
+	/// <see cref="TimerTickedEvent"/> на одно и то же due-окно при повторных scan-pass'ах между
+	/// первой публикацией и реакцией consumer'а (BeginIteration → State=Running + NextAutoUtc=null).
+	/// </summary>
+	public bool TryAcquirePendingTick() =>
+		Interlocked.CompareExchange(ref _pendingTick, 1, 0) == 0;
+
+	/// <summary>
+	/// Сбрасывает pending-tick флаг. Используется DueScanner-ом, если запись в Channel не удалась
+	/// (back-pressure / shutdown), и event-loop-ом по завершению обработки события — в обоих случаях
+	/// «открывается» следующее due-окно для публикации очередного TimerTicked.
+	/// </summary>
+	public void ReleasePendingTick() =>
+		Volatile.Write(ref _pendingTick, 0);
 
 	/// <summary>CTS текущей итерации (если State == Running), иначе null.</summary>
 	public CancellationTokenSource? RunCts { get; set; }

@@ -112,6 +112,11 @@ internal sealed class EventLoop(
 	}
 
 	private void HandleTimerTick(StageInstance instance, CancellationToken ct) {
+		// pendingTick освобождается ВСЕГДА при обработке tick-события — независимо от того,
+		// запустим ли мы итерацию (Started) или отбросим (AlreadyRunning/WaitingRetry).
+		// В случае Started — следующий due-tick будет после успешного перепланирования NextAutoUtc;
+		// в случае AlreadyRunning — pendingTick освободит будущие due-окна, когда они появятся.
+		instance.ReleasePendingTick();
 		if (instances.Find(instance.Stage.Name, instance.DependencyKeys) != instance) return;
 		var now = time.GetUtcNow();
 		var decision = TriggerAcceptance.TryAccept(instance, TriggerSource.Auto, now);
