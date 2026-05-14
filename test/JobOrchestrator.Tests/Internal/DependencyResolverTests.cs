@@ -40,7 +40,7 @@ public sealed class DependencyResolverTests {
 		var inst = MakeInstance(stage, new Dictionary<string, string> { ["shops"] = "u1" });
 		instances.Add(inst);
 
-		var found = DependencyResolver.FindPairedInstance(instances, "shops", new Dictionary<string, string> { ["shops"] = "u1" });
+		var found = DependencyResolver.FindPairedInstance(instances, stage, new Dictionary<string, string> { ["shops"] = "u1" });
 		found.Should().BeSameAs(inst);
 	}
 
@@ -53,7 +53,7 @@ public sealed class DependencyResolverTests {
 		var inst = MakeInstance(stage);
 		instances.Add(inst);
 
-		var found = DependencyResolver.FindPairedInstance(instances, "shops", new Dictionary<string, string> { ["shops"] = "u1" });
+		var found = DependencyResolver.FindPairedInstance(instances, stage, new Dictionary<string, string> { ["shops"] = "u1" });
 		found.Should().BeSameAs(inst);
 	}
 

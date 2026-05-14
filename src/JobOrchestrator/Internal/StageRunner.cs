@@ -91,7 +91,7 @@ internal sealed class StageRunner(
 			watchdogCts?.Dispose();
 			cascadeCts.Dispose();
 			// Release ВСЕГДА: семафор был Acquire'нут в EventLoop.BeginIteration перед запуском runner-а.
-			concurrency.Release(instance.Stage.Name);
+			concurrency.Release(instance.Stage);
 			// EndRunning делает ТОЛЬКО event-loop handler (StageCompleted/Failed) — это единый источник
 			// истины для _running-флага. Если вызвать здесь — будет race с уже стартовавшим следующим
 			// runner-ом (мы сбросим его свежевзведённый _running=1).

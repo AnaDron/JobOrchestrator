@@ -63,11 +63,11 @@ internal sealed class KeyspaceRegistry {
 	/// каждый bucket даёт набор ключей одного эмитера, и InstanceCreator материализует инстансы зависимой
 	/// стадии с merged DependencyKeys из emitter.Identity.DependencyKeys + ключ.
 	/// </summary>
-	public IEnumerable<EmitterBucket> SnapshotByStage(string stageName) {
-		if (!_byStage.TryGetValue(stageName, out var encSet)) yield break;
+	public IEnumerable<EmitterBucket> SnapshotByStage(StageDescriptor stage) {
+		if (!_byStage.TryGetValue(stage.Name, out var encSet)) yield break;
 		// Копируем encSet, чтобы итерация была безопасна при мутациях того же event-loop-thread'а.
 		foreach (var enc in encSet.ToArray()) {
-			if (_buckets.TryGetValue((stageName, enc), out var bucket)) yield return bucket;
+			if (_buckets.TryGetValue((stage.Name, enc), out var bucket)) yield return bucket;
 		}
 	}
 

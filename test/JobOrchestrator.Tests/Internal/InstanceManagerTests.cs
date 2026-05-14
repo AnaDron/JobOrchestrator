@@ -58,16 +58,17 @@ public sealed class InstanceManagerTests {
 	}
 
 	[Fact]
-	public void InstancesOf_FiltersByStageName() {
+	public void InstancesOf_FiltersByStage() {
 		var mgr = new InstanceManager();
 		var stageA = MakeStage("a");
 		var stageB = MakeStage("b");
+		var nonexistent = MakeStage("nonexistent");
 		mgr.Add(MakeInstance(stageA, new Dictionary<string, string> { ["k"] = "1" }));
 		mgr.Add(MakeInstance(stageA, new Dictionary<string, string> { ["k"] = "2" }));
 		mgr.Add(MakeInstance(stageB, new Dictionary<string, string>()));
-		mgr.InstancesOf("a").Should().HaveCount(2);
-		mgr.InstancesOf("b").Should().ContainSingle();
-		mgr.InstancesOf("nonexistent").Should().BeEmpty();
+		mgr.InstancesOf(stageA).Should().HaveCount(2);
+		mgr.InstancesOf(stageB).Should().ContainSingle();
+		mgr.InstancesOf(nonexistent).Should().BeEmpty();
 	}
 
 	[Fact]

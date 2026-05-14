@@ -105,7 +105,7 @@ internal sealed class InstanceCreator(
 			// Это корректно поддерживает multi-instance-эмитеров, поскольку каждый эмитер вносит ТОЛЬКО
 			// свои ключи (а не глобальный пул всех ключей стадии).
 			var result = new List<IReadOnlyDictionary<string, string>>();
-			foreach (var bucket in keyspace.SnapshotByStage(dep.Target.Name)) {
+			foreach (var bucket in keyspace.SnapshotByStage(dep.Target)) {
 				foreach (var key in bucket.Keys) {
 					var emitterKeys = bucket.Emitter.DependencyKeys;
 					var combined = new Dictionary<string, string>(emitterKeys.Count + 1, StringComparer.Ordinal);
@@ -116,7 +116,7 @@ internal sealed class InstanceCreator(
 			}
 			return result;
 		}
-		return instances.InstancesOf(dep.Target.Name)
+		return instances.InstancesOf(dep.Target)
 			.Where(inst => inst.Metrics.LastSuccess.HasValue)
 			.Select(inst => inst.DependencyKeys)
 			.ToList();

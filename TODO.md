@@ -7,3 +7,4 @@
 - Условные зависимости (предикат в DependsOn*)
 - Distributed execution (multi-instance с внешним lease)
 - GlobalConcurrency limit (поверх per-stage WithConcurrencyLimit)
+- Сортировать входящий словарь по ExpectedKeyNames при создании Identity, далее Encode/FormatFqn без OrderBy

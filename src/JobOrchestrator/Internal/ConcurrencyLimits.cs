@@ -29,13 +29,13 @@ internal sealed class ConcurrencyLimits {
 	/// caller'у нужно отложить запуск (в случае Auto-тика — пометить инстанс как WaitingRetry с коротким
 	/// re-schedule; в случае Manual — вернуть пользователю Debounced/similar).
 	/// </summary>
-	public bool TryAcquire(string stageName) =>
-		!_byStage.TryGetValue(stageName, out var sem) || sem.Wait(0);
+	public bool TryAcquire(StageDescriptor stage) =>
+		!_byStage.TryGetValue(stage.Name, out var sem) || sem.Wait(0);
 
 	/// <summary>
 	/// Освобождает токен. Безопасно вызывать для стадий без лимита (no-op).
 	/// </summary>
-	public void Release(string stageName) {
-		if (_byStage.TryGetValue(stageName, out var sem)) sem.Release();
+	public void Release(StageDescriptor stage) {
+		if (_byStage.TryGetValue(stage.Name, out var sem)) sem.Release();
 	}
 }

@@ -49,7 +49,7 @@ public sealed class KeyspaceRegistryTests {
 		reg.Add(shops, "u1");
 		reg.Add(shops, "u2");
 		reg.Add(shops, "u3");
-		var buckets = reg.SnapshotByStage("shops").ToList();
+		var buckets = reg.SnapshotByStage(Shops).ToList();
 		buckets.Should().ContainSingle();
 		buckets[0].Emitter.DependencyKeys.Should().BeEmpty();
 		buckets[0].Keys.Should().BeEquivalentTo(["u1", "u2", "u3"]);
@@ -97,7 +97,7 @@ public sealed class KeyspaceRegistryTests {
 		orphans.Should().BeEquivalentTo(["eu-1", "eu-2", "eu-3"]);
 
 		reg.Contains(emitter, "eu-1").Should().BeFalse();
-		reg.SnapshotByStage("shops").Should().BeEmpty();
+		reg.SnapshotByStage(Shops).Should().BeEmpty();
 	}
 
 	[Fact]

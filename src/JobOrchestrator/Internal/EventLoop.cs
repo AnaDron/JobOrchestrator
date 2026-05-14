@@ -151,7 +151,7 @@ internal sealed class EventLoop(
 	private void BeginIteration(Instance instance, TriggerSource trigger, CancellationToken ct) {
 		// ConcurrencyLimit: если стадия уже на лимите — re-schedule инстанс через короткое окно
 		// (1 sec), не меняя State (остаётся Idle). DueScanner подберёт его снова, когда лимит откроется.
-		if (!concurrency.TryAcquire(instance.Stage.Name)) {
+		if (!concurrency.TryAcquire(instance.Stage)) {
 			Log.ConcurrencyDeferred(logger, instance.FullyQualifiedName, instance.Stage.Name, null);
 			instance.SetMetrics(instance.Metrics with { NextAutoUtc = time.GetUtcNow() + TimeSpan.FromSeconds(1) });
 			scanner.Wake();
@@ -160,7 +160,7 @@ internal sealed class EventLoop(
 		// CAS-перевод в Running. Идемпотентно: если кто-то уже стартанул этот инстанс (race на dup
 		// TimerTickedEvent) — TryBeginRunning вернёт false и мы отпустим semaphore.
 		if (!instance.TryBeginRunning()) {
-			concurrency.Release(instance.Stage.Name);
+			concurrency.Release(instance.Stage);
 			return;
 		}
 		instance.SetMetrics(instance.Metrics with { NextAutoUtc = null });
@@ -223,7 +223,7 @@ internal sealed class EventLoop(
 		while (queue.Count > 0) {
 			var seed = queue.Dequeue();
 			var affected = seed.Emitter.Stage.AffectedByKeyRemoval
-				.SelectMany(s => instances.InstancesOf(s.Name))
+				.SelectMany(s => instances.InstancesOf(s))
 				.Where(inst => !inst.IsTerminating)
 				.Where(inst => MatchesEmitter(inst, seed.Emitter, seed.Key))
 				.ToList();

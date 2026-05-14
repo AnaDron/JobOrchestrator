@@ -9,13 +9,13 @@ internal static class DependencyResolver {
 		!a.Any(kv => b.TryGetValue(kv.Key, out var bv) && !string.Equals(bv, kv.Value, StringComparison.Ordinal));
 
 	/// <summary>
-	/// Найти инстанс <paramref name="targetStageName"/>, чьи <c>DependencyKeys</c> являются проекцией
+	/// Найти инстанс <paramref name="target"/>, чьи <c>DependencyKeys</c> являются проекцией
 	/// <paramref name="candidateKeys"/> на множество имён ключей target-стадии (то есть все компоненты
 	/// target присутствуют в candidate с теми же значениями). Для безключевой target — единственный
 	/// инстанс с пустыми DependencyKeys.
 	/// </summary>
-	public static Instance? FindPairedInstance(InstanceManager instances, string targetStageName, IReadOnlyDictionary<string, string> candidateKeys) =>
-		instances.InstancesOf(targetStageName)
+	public static Instance? FindPairedInstance(InstanceManager instances, StageDescriptor target, IReadOnlyDictionary<string, string> candidateKeys) =>
+		instances.InstancesOf(target)
 			.FirstOrDefault(inst => inst.DependencyKeys.All(kv =>
 				candidateKeys.TryGetValue(kv.Key, out var v) && string.Equals(v, kv.Value, StringComparison.Ordinal)));
 
@@ -33,7 +33,7 @@ internal static class DependencyResolver {
 		InstanceManager instances,
 		KeyspaceRegistry keyspace
 	) => stage.Dependencies.All(dep => {
-		var paired = FindPairedInstance(instances, dep.Target.Name, keys);
+		var paired = FindPairedInstance(instances, dep.Target, keys);
 		if (paired is null || paired.Metrics.LastSuccess is null) return false;
 		if (dep.Mode == DependencyMode.Instance) {
 			// Per-emitter check: bucket именно ЭТОГО paired-инстанса как эмитера должен содержать ключ.

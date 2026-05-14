@@ -9,63 +9,66 @@ public sealed class ConcurrencyLimitsTests {
 
 	[Fact]
 	public void StageWithoutLimit_TryAcquireAlwaysTrue() {
-		var registry = new StageRegistry([MakeStage("a")]);
+		var a = MakeStage("a");
+		var registry = new StageRegistry([a]);
 		var limits = new ConcurrencyLimits(registry);
 
 		// Сколько бы ни вызывали — всегда true (нет семафора).
 		for (int i = 0; i < 10; i++) {
-			limits.TryAcquire("a").Should().BeTrue();
+			limits.TryAcquire(a).Should().BeTrue();
 		}
 	}
 
 	[Fact]
 	public void StageWithLimit_AcquireUpToLimit_ThenFalse() {
-		var registry = new StageRegistry([MakeStage("a", concurrencyLimit: 3)]);
+		var a = MakeStage("a", concurrencyLimit: 3);
+		var registry = new StageRegistry([a]);
 		var limits = new ConcurrencyLimits(registry);
 
-		limits.TryAcquire("a").Should().BeTrue();    // 1/3
-		limits.TryAcquire("a").Should().BeTrue();    // 2/3
-		limits.TryAcquire("a").Should().BeTrue();    // 3/3
-		limits.TryAcquire("a").Should().BeFalse("лимит выбран");
-		limits.TryAcquire("a").Should().BeFalse();
+		limits.TryAcquire(a).Should().BeTrue();    // 1/3
+		limits.TryAcquire(a).Should().BeTrue();    // 2/3
+		limits.TryAcquire(a).Should().BeTrue();    // 3/3
+		limits.TryAcquire(a).Should().BeFalse("лимит выбран");
+		limits.TryAcquire(a).Should().BeFalse();
 	}
 
 	[Fact]
 	public void StageWithLimit_ReleaseRestoresToken() {
-		var registry = new StageRegistry([MakeStage("a", concurrencyLimit: 2)]);
+		var a = MakeStage("a", concurrencyLimit: 2);
+		var registry = new StageRegistry([a]);
 		var limits = new ConcurrencyLimits(registry);
 
-		limits.TryAcquire("a").Should().BeTrue();
-		limits.TryAcquire("a").Should().BeTrue();
-		limits.TryAcquire("a").Should().BeFalse();
+		limits.TryAcquire(a).Should().BeTrue();
+		limits.TryAcquire(a).Should().BeTrue();
+		limits.TryAcquire(a).Should().BeFalse();
 
-		limits.Release("a");
-		limits.TryAcquire("a").Should().BeTrue("после release токен снова доступен");
-		limits.TryAcquire("a").Should().BeFalse();
+		limits.Release(a);
+		limits.TryAcquire(a).Should().BeTrue("после release токен снова доступен");
+		limits.TryAcquire(a).Should().BeFalse();
 	}
 
 	[Fact]
 	public void Release_StageWithoutLimit_IsNoOp() {
-		var registry = new StageRegistry([MakeStage("a")]);
+		var a = MakeStage("a");
+		var registry = new StageRegistry([a]);
 		var limits = new ConcurrencyLimits(registry);
 
 		// Не должно throws.
-		Action act = () => limits.Release("a");
+		Action act = () => limits.Release(a);
 		act.Should().NotThrow();
 	}
 
 	[Fact]
 	public void Limits_DifferentStages_AreIsolated() {
-		var registry = new StageRegistry([
-			MakeStage("a", concurrencyLimit: 1),
-			MakeStage("b", concurrencyLimit: 1),
-		]);
+		var a = MakeStage("a", concurrencyLimit: 1);
+		var b = MakeStage("b", concurrencyLimit: 1);
+		var registry = new StageRegistry([a, b]);
 		var limits = new ConcurrencyLimits(registry);
 
-		limits.TryAcquire("a").Should().BeTrue();
-		limits.TryAcquire("a").Should().BeFalse();
+		limits.TryAcquire(a).Should().BeTrue();
+		limits.TryAcquire(a).Should().BeFalse();
 		// b — отдельный семафор.
-		limits.TryAcquire("b").Should().BeTrue();
-		limits.TryAcquire("b").Should().BeFalse();
+		limits.TryAcquire(b).Should().BeTrue();
+		limits.TryAcquire(b).Should().BeFalse();
 	}
 }
