@@ -2,57 +2,57 @@ namespace JobOrchestrator.Internal;
 
 /// <summary>
 /// Реестр keyspace, привязанного к <b>конкретному инстансу-эмитеру</b> через его <see cref="InstanceIdentity"/>.
-/// Bucket-key = <c>(StageName, EncodedKey)</c> из Identity; каждый bucket хранит ключи, опубликованные
-/// данным инстансом-эмитером через <see cref="JobContext.AddKey"/> или внешний
+/// Bucket-key — <see cref="InstanceIdentity"/>; каждый bucket хранит ключи, опубликованные данным
+/// инстансом-эмитером через <see cref="JobContext.AddKey"/> или внешний
 /// <see cref="IJobOrchestrator.RegisterKey"/>.
 /// <para>
-/// API принимает <see cref="InstanceIdentity"/>, а не сырые <c>(stageName, keys)</c>: encoded-key
-/// pre-computed на Identity-объекте, один раз на lifetime инстанса. Это устраняет per-call Encode.
+/// API принимает <see cref="InstanceIdentity"/>, и внутреннее хранилище тоже ключуется по Identity
+/// (через Equals/GetHashCode по <c>(Stage.Name, EncodedKey)</c>). Это даёт консистентность со всеми
+/// другими реестрами SDK (<see cref="InstanceManager"/>, <see cref="SuccessWaiters"/>,
+/// <see cref="OutcomeWaiters"/>) — единый паттерн «реестр инстансов ключуется по Identity».
 /// </para>
 /// <para>
 /// Multi-instance эмитер: если стадия с <c>DependsOnInstance(parent)</c> сама эмитит ключи, оба её
-/// инстанса пишут в РАЗНЫЕ bucket-ы (разные Identity → разные EncodedKey). При удалении одного
-/// его bucket исчезает атомарно (<see cref="RemoveInstance"/>); ключи других инстансов той же
-/// стадии не затрагиваются.
+/// инстанса пишут в РАЗНЫЕ bucket-ы (разные Identity). При удалении одного его bucket исчезает
+/// атомарно (<see cref="RemoveInstance"/>); ключи других инстансов той же стадии не затрагиваются.
 /// </para>
 /// </summary>
 internal sealed class KeyspaceRegistry {
-	private readonly Dictionary<(string Stage, string Emitter), EmitterBucket> _buckets = new();
-	// Per-stage index: stageName → набор encoded emitter-keys, для быстрой итерации bucket-ов стадии.
-	private readonly Dictionary<string, HashSet<string>> _byStage = new(StringComparer.Ordinal);
+	private readonly Dictionary<InstanceIdentity, EmitterBucket> _buckets = new();
+	// Per-stage index: stageName → набор Identity-эмитеров, для быстрой итерации bucket-ов стадии.
+	private readonly Dictionary<string, HashSet<InstanceIdentity>> _byStage = new(StringComparer.Ordinal);
 
 	/// <summary>Добавляет ключ в bucket эмитера. <c>true</c>, если ключ был новый; <c>false</c> — идемпотентно.</summary>
 	public bool Add(InstanceIdentity emitter, string key) {
-		var bucketKey = (emitter.Stage.Name, emitter.EncodedKey);
-		if (!_buckets.TryGetValue(bucketKey, out var bucket)) {
+		if (!_buckets.TryGetValue(emitter, out var bucket)) {
 			bucket = new EmitterBucket(emitter, new HashSet<string>(StringComparer.Ordinal));
-			_buckets[bucketKey] = bucket;
-			if (!_byStage.TryGetValue(emitter.Stage.Name, out var encSet)) {
-				encSet = new HashSet<string>(StringComparer.Ordinal);
-				_byStage[emitter.Stage.Name] = encSet;
+			_buckets[emitter] = bucket;
+			if (!_byStage.TryGetValue(emitter.Stage.Name, out var emitters)) {
+				emitters = [];
+				_byStage[emitter.Stage.Name] = emitters;
 			}
-			encSet.Add(emitter.EncodedKey);
+			emitters.Add(emitter);
 		}
 		return bucket.Keys.Add(key);
 	}
 
 	/// <summary>Удаляет ключ из bucket эмитера.</summary>
 	public bool Remove(InstanceIdentity emitter, string key) =>
-		_buckets.TryGetValue((emitter.Stage.Name, emitter.EncodedKey), out var bucket) && bucket.Keys.Remove(key);
+		_buckets.TryGetValue(emitter, out var bucket) && bucket.Keys.Remove(key);
 
 	/// <summary>True, если bucket эмитера существует И содержит <paramref name="key"/>.</summary>
 	public bool Contains(InstanceIdentity emitter, string key) =>
-		_buckets.TryGetValue((emitter.Stage.Name, emitter.EncodedKey), out var bucket) && bucket.Keys.Contains(key);
+		_buckets.TryGetValue(emitter, out var bucket) && bucket.Keys.Contains(key);
 
 	/// <summary>
 	/// Удаляет bucket эмитера целиком (вызывается при cascade-удалении инстанса). Возвращает orphan-ключи
 	/// для рекурсивного cascade потомков.
 	/// </summary>
 	public IReadOnlyCollection<string> RemoveInstance(InstanceIdentity emitter) {
-		if (!_buckets.Remove((emitter.Stage.Name, emitter.EncodedKey), out var bucket)) return [];
-		if (_byStage.TryGetValue(emitter.Stage.Name, out var encSet)) {
-			encSet.Remove(emitter.EncodedKey);
-			if (encSet.Count == 0) _byStage.Remove(emitter.Stage.Name);
+		if (!_buckets.Remove(emitter, out var bucket)) return [];
+		if (_byStage.TryGetValue(emitter.Stage.Name, out var emitters)) {
+			emitters.Remove(emitter);
+			if (emitters.Count == 0) _byStage.Remove(emitter.Stage.Name);
 		}
 		return bucket.Keys;
 	}
@@ -64,10 +64,10 @@ internal sealed class KeyspaceRegistry {
 	/// стадии с merged DependencyKeys из emitter.Identity.DependencyKeys + ключ.
 	/// </summary>
 	public IEnumerable<EmitterBucket> SnapshotByStage(StageDescriptor stage) {
-		if (!_byStage.TryGetValue(stage.Name, out var encSet)) yield break;
-		// Копируем encSet, чтобы итерация была безопасна при мутациях того же event-loop-thread'а.
-		foreach (var enc in encSet.ToArray()) {
-			if (_buckets.TryGetValue((stage.Name, enc), out var bucket)) yield return bucket;
+		if (!_byStage.TryGetValue(stage.Name, out var emitters)) yield break;
+		// Копируем set, чтобы итерация была безопасна при мутациях того же event-loop-thread'а.
+		foreach (var emitter in emitters.ToArray()) {
+			if (_buckets.TryGetValue(emitter, out var bucket)) yield return bucket;
 		}
 	}
 

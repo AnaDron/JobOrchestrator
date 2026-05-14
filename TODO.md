@@ -10,3 +10,4 @@
 - Сортировать входящий словарь по ExpectedKeyNames при создании Identity, далее Encode/FormatFqn без OrderBy
 - StageDescriptor вместо string как ключ в internal-словарях (ConcurrencyLimits, KeyspaceRegistry, InstanceManager)
 - SnapshotByStage → IReadOnlyList<EmitterBucket> вместо yield-IEnumerable
+- Кешировать GetHashCode в InstanceIdentity (lazy на первое чтение) — частый Dictionary-lookup ключ
