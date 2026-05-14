@@ -1,3 +1,4 @@
+using JobOrchestrator.Configuration.Internal;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace JobOrchestrator.Tests.Configuration;
@@ -18,14 +19,8 @@ public sealed class ValidateServiceRegistrationsTests {
 		public Task ExecuteAsync(JobContext ctx, CancellationToken ct) => Task.CompletedTask;
 	}
 
-	private static StageDescriptor MakeStage(string name, Type serviceType) => new() {
-		Name = name,
-		ServiceType = serviceType,
-		Interval = TimeSpan.FromMinutes(1),
-		RetryPolicy = RetryPolicy.NoRetry,
-		Debounce = TimeSpan.Zero,
-		Dependencies = [],
-	};
+	private static StageDescriptor MakeStage(string name, Type serviceType) =>
+		TestStages.Make(name, new() { ServiceType = serviceType });
 
 	[Fact]
 	public void Validate_AllServicesProperlyRegistered_DoesNotThrow() {
@@ -34,7 +29,7 @@ public sealed class ValidateServiceRegistrationsTests {
 		services.AddScoped<GoodService>();
 		using var provider = services.BuildServiceProvider();
 
-		Action act = () => registry.ValidateServiceRegistrations(provider);
+		Action act = () => ConfigurationValidator.ValidateServiceRegistrations(registry.AllStages, provider);
 		act.Should().NotThrow();
 	}
 
@@ -45,7 +40,7 @@ public sealed class ValidateServiceRegistrationsTests {
 		// GoodService НЕ зарегистрирован.
 		using var provider = services.BuildServiceProvider();
 
-		Action act = () => registry.ValidateServiceRegistrations(provider);
+		Action act = () => ConfigurationValidator.ValidateServiceRegistrations(registry.AllStages, provider);
 		act.Should().Throw<JobConfigurationException>()
 			.WithMessage("*не зарегистрирован*");
 	}
@@ -58,7 +53,7 @@ public sealed class ValidateServiceRegistrationsTests {
 		services.AddScoped<NotAJobService>();
 		using var provider = services.BuildServiceProvider();
 
-		Action act = () => registry.ValidateServiceRegistrations(provider);
+		Action act = () => ConfigurationValidator.ValidateServiceRegistrations(registry.AllStages, provider);
 		act.Should().Throw<JobConfigurationException>()
 			.WithMessage("*не реализует IJobService*");
 	}
@@ -71,7 +66,7 @@ public sealed class ValidateServiceRegistrationsTests {
 		// string-параметр конструктора НЕ зарегистрирован — DI должен бросить.
 		using var provider = services.BuildServiceProvider();
 
-		Action act = () => registry.ValidateServiceRegistrations(provider);
+		Action act = () => ConfigurationValidator.ValidateServiceRegistrations(registry.AllStages, provider);
 		act.Should().Throw<JobConfigurationException>()
 			.WithMessage("*резолв*");
 	}

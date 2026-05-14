@@ -1,11 +1,12 @@
 using System.Collections.Immutable;
+using System.Text;
 
 namespace JobOrchestrator.Internal;
 
 /// <summary>
 /// Иммутабельный композитный идентификатор инстанса стадии: <c>(Stage, DependencyKeys)</c>.
-/// Внутри пред-вычисляет <see cref="EncodedKey"/> (canonical для словарных lookup-ов) и
-/// <see cref="FullyQualifiedName"/> (human-readable для логов).
+/// Single source of truth для encoded-key и FullyQualifiedName — никто снаружи не должен строить
+/// эти строки по своим правилам (риск рассинхронизации форматов между call-sites).
 /// <para>
 /// Используется как «ключ-идентификатор» инстанса по всему SDK:
 /// </para>
@@ -30,47 +31,60 @@ internal sealed class InstanceIdentity : IEquatable<InstanceIdentity> {
 	public string EncodedKey { get; }
 
 	/// <summary>
-	/// Human-readable идентификатор: <c>"stage[dep1=v1,dep2=v2,...]"</c> в порядке объявления зависимостей.
+	/// Human-readable идентификатор: <c>"stage[dep1=v1,dep2=v2,...]"</c> в порядке
+	/// <see cref="StageDescriptor.ExpectedKeyNames"/> (= порядок Fluent-API объявлений транзитивно
+	/// через цепочку зависимостей). Стабилен и детерминирован независимо от hash-order
+	/// <see cref="DependencyKeys"/>.
 	/// </summary>
 	public string FullyQualifiedName { get; }
 
 	/// <summary>Scope для <see cref="IJobStateStore"/>: <c>"{StageName}:{EncodedKey}"</c>.</summary>
 	public string StateScope => $"{Stage.Name}:{EncodedKey}";
 
-	/// <summary>
-	/// Конструктор. <paramref name="orderedKeyNames"/> задаёт детерминированный порядок компонентов
-	/// в <see cref="FullyQualifiedName"/> (обычно — <c>StageRegistry.ExpectedKeyNames(stage.Name)</c>),
-	/// чтобы FQN не зависел от hash-table-order'а <see cref="DependencyKeys"/>. Если <c>null</c> —
-	/// используется порядок прямых <c>DependsOnInstance</c>-зависимостей этой стадии (fallback для
-	/// тестов; в production code путь через <see cref="StageRegistry"/>).
-	/// </summary>
-	public InstanceIdentity(
-		StageDescriptor stage,
-		IReadOnlyDictionary<string, string> dependencyKeys,
-		IReadOnlyList<string>? orderedKeyNames = null
-	) {
+	public InstanceIdentity(StageDescriptor stage, IReadOnlyDictionary<string, string> dependencyKeys) {
 		ArgumentNullException.ThrowIfNull(stage);
 		ArgumentNullException.ThrowIfNull(dependencyKeys);
 		Stage = stage;
 		DependencyKeys = dependencyKeys as ImmutableDictionary<string, string>
 			?? ImmutableDictionary.CreateRange(StringComparer.Ordinal, dependencyKeys);
-		EncodedKey = DependencyKey.Encode(DependencyKeys);
-		// Fallback на direct DependsOnInstance, если ordered не передан. Для invariant'a достаточно
-		// для unit-тестов и keyless-стадий. В production InstanceCreator передаёт transitive-list.
-		var ordered = orderedKeyNames ?? [.. stage.Dependencies.Where(d => d.Mode == DependencyMode.Instance).Select(d => d.TargetStageName)];
-		FullyQualifiedName = FormatFqn(stage.Name, DependencyKeys, ordered);
+		EncodedKey = Encode(DependencyKeys);
+		FullyQualifiedName = FormatFqn(stage.Name, DependencyKeys, stage.ExpectedKeyNames);
+	}
+
+	/// <summary>
+	/// Канонический encoding: компоненты отсортированы по имени; спецсимволы (<c>|</c>, <c>=</c>, <c>\</c>) экранируются
+	/// обратным слэшем, чтобы исключить collision-возможность вида <c>{a: "1|b=2"}</c> vs <c>{a: "1", b: "2"}</c>.
+	/// <para>
+	/// Приватная деталь Identity: encoded-key — это hash-key для <see cref="InstanceManager"/> и
+	/// <see cref="KeyspaceRegistry"/>. После Phase C рефакторинга это единственная точка кодирования —
+	/// внешний <c>DependencyKey.Encode</c>-utility удалён.
+	/// </para>
+	/// </summary>
+	internal static string Encode(IReadOnlyDictionary<string, string> keys) {
+		if (keys.Count == 0) return string.Empty;
+		var sb = new StringBuilder();
+		foreach (var kv in keys.OrderBy(kv => kv.Key, StringComparer.Ordinal)) {
+			if (sb.Length > 0) sb.Append('|');
+			AppendEscaped(sb, kv.Key);
+			sb.Append('=');
+			AppendEscaped(sb, kv.Value);
+		}
+		return sb.ToString();
+	}
+
+	private static void AppendEscaped(StringBuilder sb, string value) {
+		foreach (char c in value) {
+			if (c is '\\' or '|' or '=') sb.Append('\\');
+			sb.Append(c);
+		}
 	}
 
 	/// <summary>
 	/// Human-readable FQN: <c>"stage[dep1=v1,dep2=v2,...]"</c>. Порядок компонентов задаётся
-	/// <paramref name="orderedKeyNames"/> (transitive ExpectedKeyNames из <see cref="StageRegistry"/>) —
+	/// <paramref name="orderedKeyNames"/> (= <see cref="StageDescriptor.ExpectedKeyNames"/>) —
 	/// детерминированный независимо от hash-table-order'а <c>ImmutableDictionary</c>.
-	/// <para>
-	/// Приватная деталь Identity: никто снаружи не должен строить FQN по своим правилам, иначе риск
-	/// рассинхронизации форматов между call-sites.
-	/// </para>
 	/// </summary>
-	private static string FormatFqn(string stageName, IReadOnlyDictionary<string, string> keys, IReadOnlyList<string> orderedKeyNames) {
+	private static string FormatFqn(string stageName, ImmutableDictionary<string, string> keys, IReadOnlyList<string> orderedKeyNames) {
 		if (keys.Count == 0) return $"{stageName}[]";
 		var seen = new HashSet<string>(StringComparer.Ordinal);
 		var parts = new List<string>(keys.Count);

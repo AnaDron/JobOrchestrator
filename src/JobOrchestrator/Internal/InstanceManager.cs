@@ -13,18 +13,7 @@ internal sealed class InstanceManager {
 	private readonly ConcurrentDictionary<string, ConcurrentDictionary<Instance, byte>> _byStage = new(StringComparer.Ordinal);
 	private static readonly ConcurrentDictionary<Instance, byte> EmptySet = new();
 
-	public bool Exists(string stageName, IReadOnlyDictionary<string, string> keys) =>
-		Find(stageName, keys) is not null;
-
-	public Instance? Find(string stageName, IReadOnlyDictionary<string, string> keys) {
-		// Сначала пробуем через secondary index — избегаем создания временного InstanceIdentity для lookup.
-		if (!_byStage.TryGetValue(stageName, out var set)) return null;
-		var enc = DependencyKey.Encode(keys);
-		foreach (var inst in set.Keys) {
-			if (string.Equals(inst.Identity.EncodedKey, enc, StringComparison.Ordinal)) return inst;
-		}
-		return null;
-	}
+	public bool Exists(InstanceIdentity identity) => _instances.ContainsKey(identity);
 
 	public Instance? Find(InstanceIdentity identity) =>
 		_instances.TryGetValue(identity, out var inst) ? inst : null;

@@ -1,3 +1,4 @@
+using JobOrchestrator.Configuration.Internal;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
@@ -26,7 +27,7 @@ internal sealed class JobOrchestratorHostedService(
 
 	public override async Task StartAsync(CancellationToken cancellationToken) {
 		// Fail-fast: ловим misconfiguration на старте, а не на первой итерации стадии.
-		registry.ValidateServiceRegistrations(services);
+		ConfigurationValidator.ValidateServiceRegistrations(registry.AllStages, services);
 		logger.LogInformation("JobOrchestratorHostedService starting, instance={InstanceId}", _instanceId);
 		await base.StartAsync(cancellationToken).ConfigureAwait(false);
 	}

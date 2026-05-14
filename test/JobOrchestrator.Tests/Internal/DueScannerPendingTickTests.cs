@@ -16,18 +16,7 @@ namespace JobOrchestrator.Tests.Internal;
 /// </para>
 /// </summary>
 public sealed class DueScannerPendingTickTests {
-	private sealed class FakeService : IJobService {
-		public Task ExecuteAsync(JobContext ctx, CancellationToken ct) => Task.CompletedTask;
-	}
-
-	private static StageDescriptor MakeStage() => new() {
-		Name = "x",
-		ServiceType = typeof(FakeService),
-		Interval = TimeSpan.FromMinutes(1),
-		RetryPolicy = RetryPolicy.NoRetry,
-		Debounce = TimeSpan.Zero,
-		Dependencies = [],
-	};
+	private static StageDescriptor MakeStage() => TestStages.Make("x");
 
 	[Fact]
 	public void Tick_TwicedWithSameDueInstance_PublishesOnlyOneTimerTicked() {

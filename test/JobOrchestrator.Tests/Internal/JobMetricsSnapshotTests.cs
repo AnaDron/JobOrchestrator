@@ -5,19 +5,8 @@ namespace JobOrchestrator.Tests.Internal;
 /// согласованную пятёрку полей из одной «эпохи» writer'а, не торн-сборку.
 /// </summary>
 public sealed class JobMetricsSnapshotTests {
-	private sealed class FakeService : IJobService {
-		public Task ExecuteAsync(JobContext ctx, CancellationToken ct) => Task.CompletedTask;
-	}
-
 	private static Instance MakeInstance() {
-		var stage = new StageDescriptor {
-			Name = "x",
-			ServiceType = typeof(FakeService),
-			Interval = TimeSpan.FromMinutes(1),
-			RetryPolicy = RetryPolicy.NoRetry,
-			Debounce = TimeSpan.Zero,
-			Dependencies = [],
-		};
+		var stage = TestStages.Make("x");
 		var keys = new Dictionary<string, string>(StringComparer.Ordinal);
 		return new Instance { Identity = new InstanceIdentity(stage, keys) };
 	}

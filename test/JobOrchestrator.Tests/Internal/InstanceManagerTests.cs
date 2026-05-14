@@ -1,26 +1,19 @@
 namespace JobOrchestrator.Tests.Internal;
 
 public sealed class InstanceManagerTests {
-	private sealed class FakeService : IJobService {
-		public Task ExecuteAsync(JobContext ctx, CancellationToken ct) => Task.CompletedTask;
-	}
-
-	private static StageDescriptor MakeStage(string name) => new() {
-		Name = name,
-		ServiceType = typeof(FakeService),
-		Interval = TimeSpan.FromMinutes(1),
-		RetryPolicy = RetryPolicy.NoRetry,
-		Debounce = TimeSpan.Zero,
-		Dependencies = [],
-	};
+	private static StageDescriptor MakeStage(string name) => TestStages.Make(name);
 
 	private static Instance MakeInstance(StageDescriptor stage, Dictionary<string, string> keys) =>
 		new() { Identity = new InstanceIdentity(stage, keys) };
 
+	private static InstanceIdentity Id(StageDescriptor stage, Dictionary<string, string>? keys = null) =>
+		new(stage, keys ?? new Dictionary<string, string>(StringComparer.Ordinal));
+
 	[Fact]
 	public void Exists_NewManager_Empty() {
 		var mgr = new InstanceManager();
-		mgr.Exists("a", new Dictionary<string, string>()).Should().BeFalse();
+		var stage = MakeStage("a");
+		mgr.Exists(Id(stage)).Should().BeFalse();
 	}
 
 	[Fact]
@@ -29,8 +22,8 @@ public sealed class InstanceManagerTests {
 		var stage = MakeStage("shops");
 		var inst = MakeInstance(stage, new Dictionary<string, string>());
 		mgr.Add(inst);
-		mgr.Find("shops", new Dictionary<string, string>()).Should().BeSameAs(inst);
-		mgr.Exists("shops", new Dictionary<string, string>()).Should().BeTrue();
+		mgr.Find(Id(stage)).Should().BeSameAs(inst);
+		mgr.Exists(Id(stage)).Should().BeTrue();
 	}
 
 	[Fact]
@@ -44,14 +37,14 @@ public sealed class InstanceManagerTests {
 
 	[Fact]
 	public void Find_DifferentKeyOrder_FindsSameInstance() {
-		// Канонический encoding сортирует ключи — два словаря с разным insertion order должны найти одну запись.
+		// Identity equality по (StageName, EncodedKey) — два словаря с разным insertion order должны найти одну запись.
 		var mgr = new InstanceManager();
 		var stage = MakeStage("documents");
 		var keys1 = new Dictionary<string, string> { ["a"] = "1", ["b"] = "2" };
 		var keys2 = new Dictionary<string, string> { ["b"] = "2", ["a"] = "1" };
 		var inst = MakeInstance(stage, keys1);
 		mgr.Add(inst);
-		mgr.Find("documents", keys2).Should().BeSameAs(inst);
+		mgr.Find(Id(stage, keys2)).Should().BeSameAs(inst);
 	}
 
 	[Fact]
@@ -61,7 +54,7 @@ public sealed class InstanceManagerTests {
 		var inst = MakeInstance(stage, new Dictionary<string, string>());
 		mgr.Add(inst);
 		mgr.Remove(inst).Should().BeTrue();
-		mgr.Exists("shops", new Dictionary<string, string>()).Should().BeFalse();
+		mgr.Exists(Id(stage)).Should().BeFalse();
 	}
 
 	[Fact]

@@ -3,7 +3,7 @@ using JobOrchestrator.Internal;
 namespace JobOrchestrator.Configuration.Internal;
 
 internal sealed class StageBuilder(string name, JobDefaults defaults) : IStageBuilder {
-	private readonly List<StageDependency> _dependencies = [];
+	private readonly List<(string TargetName, DependencyMode Mode)> _dependencies = [];
 
 	public string Name { get; } = name;
 	public Type? ServiceType { get; private set; }
@@ -13,6 +13,13 @@ internal sealed class StageBuilder(string name, JobDefaults defaults) : IStageBu
 	public TimeSpan Debounce { get; private set; } = defaults.Debounce;
 	public TimeSpan? ExecutionTimeout { get; private set; } = defaults.ExecutionTimeout;
 	public int? ConcurrencyLimit { get; private set; }
+
+	/// <summary>
+	/// Сырые зависимости (by-name) в порядке объявления в Fluent API. Используется
+	/// <see cref="ConfigurationValidator"/> (cycle / dangling-checks) и <c>JobOrchestratorBuilder.BuildRegistry</c>
+	/// (resolve в <see cref="StageDependency"/> через <see cref="Internal.StageInitializer"/>).
+	/// </summary>
+	internal IReadOnlyList<(string TargetName, DependencyMode Mode)> Dependencies => _dependencies;
 
 	public IStageBuilder HandledBy<TService>() where TService : class, IJobService {
 		ServiceType = typeof(TService);
@@ -75,29 +82,6 @@ internal sealed class StageBuilder(string name, JobDefaults defaults) : IStageBu
 		if (ReferenceEquals(dep, this)) {
 			throw new JobConfigurationException($"Стадия '{Name}' не может зависеть от самой себя.");
 		}
-		// Сохраняем порядок объявления — IReadOnlyList в StageDescriptor.
-		_dependencies.Add(new StageDependency(dep.Name, mode));
-	}
-
-	internal StageDescriptor BuildDescriptor() {
-		if (ServiceType is null) {
-			throw new JobConfigurationException($"Стадия '{Name}': HandledBy<TService>() не задано.");
-		}
-		if (Interval <= TimeSpan.Zero) {
-			throw new JobConfigurationException($"Стадия '{Name}': RunPeriodically(...) не задано.");
-		}
-		var deps = _dependencies.ToArray();
-		// Имена ожидаемых ключей вычисляются позже в StageRegistry — там доступны транзитивные
-		// зависимости (имена, унаследованные через цепочку DependsOn-родителей).
-		return new StageDescriptor {
-			Name = Name,
-			ServiceType = ServiceType,
-			Interval = Interval,
-			RetryPolicy = RetryPolicy,
-			Debounce = Debounce,
-			ExecutionTimeout = ExecutionTimeout,
-			ConcurrencyLimit = ConcurrencyLimit,
-			Dependencies = deps,
-		};
+		_dependencies.Add((dep.Name, mode));
 	}
 }

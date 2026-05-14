@@ -180,7 +180,7 @@ internal sealed class EventLoop(
 			return;
 		}
 		Log.AddKeyAdded(logger, source.Stage.Name, key, null);
-		foreach (var dependent in registry.StagesDependingOnInstance(source.Stage.Name)) {
+		foreach (var dependent in source.Stage.DependentsInstance) {
 			CreateAndStart(dependent);
 		}
 		scanner.Wake();
@@ -222,8 +222,7 @@ internal sealed class EventLoop(
 
 		while (queue.Count > 0) {
 			var seed = queue.Dequeue();
-			var affectedStages = registry.StagesAffectedByKeyRemoval(seed.Emitter.Stage.Name);
-			var affected = affectedStages
+			var affected = seed.Emitter.Stage.AffectedByKeyRemoval
 				.SelectMany(s => instances.InstancesOf(s.Name))
 				.Where(inst => !inst.IsTerminating)
 				.Where(inst => MatchesEmitter(inst, seed.Emitter, seed.Key))
@@ -231,7 +230,7 @@ internal sealed class EventLoop(
 			if (affected.Count == 0) continue;
 
 			// Сортировка по pre-computed cancellation rank (листья — меньший ранг — отменяются первыми).
-			affected.Sort((a, b) => registry.CancellationRank(a.Stage.Name).CompareTo(registry.CancellationRank(b.Stage.Name)));
+			affected.Sort((a, b) => a.Stage.CancellationRank.CompareTo(b.Stage.CancellationRank));
 			Log.RemoveKeyCascade(logger, seed.Emitter.Stage.Name, seed.Key, affected.Count, null);
 
 			foreach (var instance in affected) {
@@ -307,7 +306,7 @@ internal sealed class EventLoop(
 
 			if (wasFirstSuccess) {
 				Log.FirstSuccessCascade(logger, instance.FullyQualifiedName, null);
-				foreach (var dependent in EnumerateDirectDependents(instance.Stage.Name)) {
+				foreach (var dependent in EnumerateDirectDependents(instance.Stage)) {
 					CreateAndStart(dependent);
 				}
 			}
@@ -379,9 +378,9 @@ internal sealed class EventLoop(
 		}
 	}
 
-	private IEnumerable<StageDescriptor> EnumerateDirectDependents(string stageName) =>
-		registry.StagesDependingOn(stageName)
-			.Concat(registry.StagesDependingOnInstance(stageName))
+	private static IEnumerable<StageDescriptor> EnumerateDirectDependents(StageDescriptor stage) =>
+		stage.DependentsWhole
+			.Concat(stage.DependentsInstance)
 			.DistinctBy(s => s.Name, StringComparer.Ordinal);
 
 	/// <summary>

@@ -37,20 +37,20 @@ internal sealed class JobOrchestratorRuntime(
 			Log.TriggerFaulted(logger, stageName, null);
 			return TriggerResult.Faulted;
 		}
-		if (!registry.TryGet(stageName, out _)) {
+		if (!registry.TryGet(stageName, out var stage)) {
 			Log.TriggerNotFound(logger, stageName, null);
 			return TriggerResult.NotFound;
 		}
 
 		var keys = dependencyKeys ?? EmptyKeys;
-		if (!ValidateKeys(registry.ExpectedKeyNames(stageName), keys)) {
+		if (!ValidateKeys(stage!.ExpectedKeyNames, keys)) {
 			Log.TriggerInvalidKeys(logger, stageName, null);
 			return TriggerResult.InvalidKeys;
 		}
 
 		// Identity строится ОДИН РАЗ здесь (после валидации) — encode + format происходят на этом
 		// единственном вызове, а не в каждом EventLoop.HandleManualTrigger через Find(stage, keys).
-		var identity = new InstanceIdentity(registry.Get(stageName), keys, registry.ExpectedKeyNames(stageName));
+		var identity = new InstanceIdentity(stage, keys);
 		var tcs = new TaskCompletionSource<TriggerResult>(TaskCreationOptions.RunContinuationsAsynchronously);
 		var evt = new ManualTriggerRequestedEvent(identity, tcs);
 		try {
@@ -88,14 +88,14 @@ internal sealed class JobOrchestratorRuntime(
 	/// (BL должна использовать <see cref="JobContext.AddKey"/> изнутри сервиса).
 	/// </summary>
 	private Instance ResolveKeylessSource(string stageName) {
-		if (!registry.TryGet(stageName, out _)) {
+		if (!registry.TryGet(stageName, out var stage)) {
 			throw new ArgumentException($"Стадия '{stageName}' не зарегистрирована в графе.", nameof(stageName));
 		}
-		if (registry.ExpectedKeyNames(stageName).Count != 0) {
+		if (stage!.ExpectedKeyNames.Count != 0) {
 			throw new InvalidOperationException(
 				$"Стадия '{stageName}' имеет ключевые зависимости. Внешний RegisterKey/UnregisterKey работает только для keyless-эмитеров; используйте JobContext.AddKey/RemoveKey из ExecuteAsync.");
 		}
-		var source = instances.Find(stageName, EmptyKeys);
+		var source = instances.Find(new InstanceIdentity(stage, EmptyKeys));
 		if (source is null) {
 			throw new InvalidOperationException(
 				$"Keyless-инстанс для стадии '{stageName}' ещё не создан (оркестратор не стартован?).");
@@ -152,12 +152,12 @@ internal sealed class JobOrchestratorRuntime(
 			throw new ArgumentException($"Стадия '{stageName}' не зарегистрирована в графе.", nameof(stageName));
 		}
 		var keys = dependencyKeys ?? EmptyKeys;
-		if (!ValidateKeys(registry.ExpectedKeyNames(stageName), keys)) {
+		if (!ValidateKeys(stage!.ExpectedKeyNames, keys)) {
 			throw new ArgumentException(
 				$"Набор ключей для стадии '{stageName}' не соответствует ExpectedKeyNames.",
 				nameof(dependencyKeys));
 		}
-		return new InstanceIdentity(stage!, keys, registry.ExpectedKeyNames(stageName));
+		return new InstanceIdentity(stage, keys);
 	}
 
 	/// <summary>

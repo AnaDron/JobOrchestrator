@@ -1,5 +1,4 @@
 using JobOrchestrator.Configuration.Internal;
-using JobOrchestrator.Internal;
 
 namespace JobOrchestrator.Configuration;
 
@@ -28,6 +27,52 @@ public sealed class JobOrchestratorBuilder {
 		return sb;
 	}
 
-	internal StageRegistry BuildRegistry() =>
-		new StageRegistry(_stages.Values.Select(sb => sb.BuildDescriptor()).ToList());
+	/// <summary>
+	/// Собирает финальный <see cref="StageRegistry"/>. Pipeline:
+	/// <list type="number">
+	/// <item><see cref="ConfigurationValidator"/>.Validate(builders): per-stage + graph structural validation.</item>
+	/// <item>Inline construction bare-дескрипторов (только raw user-fields, computed = null! / -1).</item>
+	/// <item><see cref="StageRegistry"/> над bare-дескрипторами (промежуточное состояние, окно не видно снаружи).</item>
+	/// <item><see cref="StageInitializer"/>: pre-computes все computed-мапы один раз.</item>
+	/// <item>Каждый дескриптор инициализирует себя через initializer.</item>
+	/// </list>
+	/// Возврат: registry с fully-initialized дескрипторами.
+	/// </summary>
+	internal StageRegistry BuildRegistry() {
+		// Step 1: structural validation. Бросает JobConfigurationException на ошибках.
+		ConfigurationValidator.Validate([.. _stages.Values]);
+
+		// Step 2: raw-deps map для Initializer. Живёт только в этой scope.
+		var rawDeps = new Dictionary<string, IReadOnlyList<(string TargetName, DependencyMode Mode)>>(
+			_stages.Count, StringComparer.Ordinal);
+		foreach (var sb in _stages.Values) {
+			rawDeps[sb.Name] = sb.Dependencies;
+		}
+
+		// Step 3: bare-дескрипторы — только raw user-fields. ServiceType! безопасен,
+		// ConfigurationValidator уже проверил, что задан.
+		var descriptors = new List<StageDescriptor>(_stages.Count);
+		foreach (var sb in _stages.Values) {
+			descriptors.Add(new StageDescriptor {
+				Name = sb.Name,
+				ServiceType = sb.ServiceType!,
+				Interval = sb.Interval,
+				RetryPolicy = sb.RetryPolicy,
+				Debounce = sb.Debounce,
+				ExecutionTimeout = sb.ExecutionTimeout,
+				ConcurrencyLimit = sb.ConcurrencyLimit,
+			});
+		}
+
+		// Step 4: registry. Дескрипторы пока с computed=null! — окно видимо только внутри этого метода.
+		var registry = new StageRegistry(descriptors);
+
+		// Step 5: initializer pre-computes все мапы (граф валиден, см. Step 1).
+		var initializer = new StageInitializer(registry, rawDeps);
+
+		// Step 6: каждый дескриптор себя инициализирует. После этого registry — fully-initialized.
+		foreach (var d in descriptors) d.Initialize(initializer);
+
+		return registry;
+	}
 }

@@ -18,23 +18,23 @@ namespace JobOrchestrator.Internal;
 /// что критично для графов с общим ключом через все зависимости (например, shops=u_i проходит сквозь весь Эвотор-граф).
 /// </para>
 /// <para>
-/// Insertion order компонентов в результирующем словаре нормализуется по <c>stage.Dependencies</c>
-/// (= порядок объявления в Fluent API), что обеспечивает стабильный FullyQualifiedName независимо
-/// от того, в каком порядке прилетали разрешающие события.
+/// Insertion order компонентов в результирующем словаре нормализуется по
+/// <see cref="StageDescriptor.ExpectedKeyNames"/> (= порядок Fluent API объявлений транзитивно),
+/// что обеспечивает стабильный FullyQualifiedName независимо от того, в каком порядке прилетали
+/// разрешающие события.
 /// </para>
 /// </summary>
 internal sealed class InstanceCreator(
 	InstanceManager instances,
 	KeyspaceRegistry keyspace,
-	StageRegistry registry,
 	TimeProvider time,
 	Channel<OrchestratorEvent> channel
 ) {
 	public List<Instance> EvaluateAndCreate(StageDescriptor stage) {
 		if (stage.Dependencies.Count == 0) {
 			// Безключевая стадия → один инстанс с пустыми DependencyKeys.
-			var empty = new Dictionary<string, string>(StringComparer.Ordinal);
-			return instances.Exists(stage.Name, empty) ? [] : [MaterializeInstance(stage, empty)];
+			var emptyId = new InstanceIdentity(stage, new Dictionary<string, string>(StringComparer.Ordinal));
+			return instances.Exists(emptyId) ? [] : [MaterializeInstance(emptyId)];
 		}
 
 		// Собираем измерения candidate-ключей.
@@ -48,12 +48,9 @@ internal sealed class InstanceCreator(
 			dimensions.Add(dim);
 		}
 
-		// Имена ключей в порядке Fluent API — для нормализации insertion order финального словаря.
-		var orderedKeyNames = ComputeOrderedKeyNames(stage, dimensions);
-
 		var created = new List<Instance>();
 		var workingMerged = new Dictionary<string, string>(StringComparer.Ordinal);
-		Recurse(stage, dimensions, 0, workingMerged, orderedKeyNames, created);
+		Recurse(stage, dimensions, 0, workingMerged, created);
 		return created;
 	}
 
@@ -62,15 +59,14 @@ internal sealed class InstanceCreator(
 		List<List<IReadOnlyDictionary<string, string>>> dimensions,
 		int dimIdx,
 		Dictionary<string, string> current,
-		IReadOnlyList<string> orderedKeyNames,
 		List<Instance> output
 	) {
 		if (dimIdx == dimensions.Count) {
 			// Все измерения совмещены — проверяем существование и зависимости.
-			if (instances.Exists(stage.Name, current)) return;
+			var identity = new InstanceIdentity(stage, current);
+			if (instances.Exists(identity)) return;
 			if (!DependencyResolver.AllDependenciesResolved(stage, current, instances, keyspace)) return;
-			var ordered = NormalizeOrder(current, orderedKeyNames);
-			output.Add(MaterializeInstance(stage, ordered));
+			output.Add(MaterializeInstance(identity));
 			return;
 		}
 
@@ -92,7 +88,7 @@ internal sealed class InstanceCreator(
 			}
 
 			if (!incompatible) {
-				Recurse(stage, dimensions, dimIdx + 1, current, orderedKeyNames, output);
+				Recurse(stage, dimensions, dimIdx + 1, current, output);
 			}
 
 			// Откат всего, что добавили этим candidate-ом.
@@ -105,70 +101,28 @@ internal sealed class InstanceCreator(
 	private List<IReadOnlyDictionary<string, string>> ComputeDimension(StageDependency dep) {
 		if (dep.Mode == DependencyMode.Instance) {
 			// Per-emitter buckets: для каждого инстанса-эмитера X.bucket даёт пары (emitterKeys, keys).
-			// Candidate = emitter's keys ∪ { TargetStageName: k } per каждый k в bucket.Keys.
+			// Candidate = emitter's keys ∪ { Target.Name: k } per каждый k в bucket.Keys.
 			// Это корректно поддерживает multi-instance-эмитеров, поскольку каждый эмитер вносит ТОЛЬКО
 			// свои ключи (а не глобальный пул всех ключей стадии).
 			var result = new List<IReadOnlyDictionary<string, string>>();
-			foreach (var bucket in keyspace.SnapshotByStage(dep.TargetStageName)) {
+			foreach (var bucket in keyspace.SnapshotByStage(dep.Target.Name)) {
 				foreach (var key in bucket.Keys) {
 					var emitterKeys = bucket.Emitter.DependencyKeys;
 					var combined = new Dictionary<string, string>(emitterKeys.Count + 1, StringComparer.Ordinal);
 					foreach (var ek in emitterKeys) combined[ek.Key] = ek.Value;
-					combined[dep.TargetStageName] = key;
+					combined[dep.Target.Name] = key;
 					result.Add(combined);
 				}
 			}
 			return result;
 		}
-		return instances.InstancesOf(dep.TargetStageName)
+		return instances.InstancesOf(dep.Target.Name)
 			.Where(inst => inst.Metrics.LastSuccess.HasValue)
 			.Select(inst => inst.DependencyKeys)
 			.ToList();
 	}
 
-	/// <summary>
-	/// Вычисляет порядок имён ключей: проходим по stage.Dependencies в Fluent-порядке, для каждой dep
-	/// добавляем имена компонентов, которые она вносит. Для DependsOnInstance это её собственное имя,
-	/// для DependsOn — имена компонентов её candidate-dimensions (берём из первого candidate как пример,
-	/// т. к. все элементы измерения имеют один и тот же набор ключей).
-	/// </summary>
-	private static List<string> ComputeOrderedKeyNames(
-		StageDescriptor stage,
-		List<List<IReadOnlyDictionary<string, string>>> dimensions
-	) {
-		var ordered = new List<string>();
-		var seen = new HashSet<string>(StringComparer.Ordinal);
-		for (int i = 0; i < stage.Dependencies.Count; i++) {
-			var sample = dimensions[i].Count > 0 ? dimensions[i][0] : null;
-			if (sample is null) continue;
-			foreach (var kv in sample) {
-				if (seen.Add(kv.Key)) ordered.Add(kv.Key);
-			}
-		}
-		return ordered;
-	}
-
-	private static Dictionary<string, string> NormalizeOrder(
-		Dictionary<string, string> merged,
-		IReadOnlyList<string> orderedKeyNames
-	) {
-		var ordered = new Dictionary<string, string>(merged.Count, StringComparer.Ordinal);
-		foreach (var name in orderedKeyNames) {
-			if (merged.TryGetValue(name, out var value)) {
-				ordered[name] = value;
-			}
-		}
-		// Защита от ключей, которых нет в orderedKeyNames (теоретически невозможно, но safety).
-		foreach (var kv in merged) {
-			if (!ordered.ContainsKey(kv.Key)) ordered[kv.Key] = kv.Value;
-		}
-		return ordered;
-	}
-
-	private Instance MaterializeInstance(StageDescriptor stage, IReadOnlyDictionary<string, string> keys) {
-		// Передаём transitive-ordered names из registry — гарантирует детерминированный FQN
-		// (insertion order ImmutableDictionary не сохраняет).
-		var identity = new InstanceIdentity(stage, keys, registry.ExpectedKeyNames(stage.Name));
+	private Instance MaterializeInstance(InstanceIdentity identity) {
 		var instance = new Instance { Identity = identity };
 		// Pre-allocated Sink: один объект на lifetime инстанса (Source/Writer постоянны), переиспользуется
 		// всеми итерациями StageRunner-а — экономим аллокацию per-iteration.

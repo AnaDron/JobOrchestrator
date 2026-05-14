@@ -4,18 +4,8 @@ public sealed class InstanceCreatorTests {
 	private static readonly IReadOnlyDictionary<string, string> EmptyKeys =
 		new Dictionary<string, string>(StringComparer.Ordinal);
 
-	private sealed class FakeService : IJobService {
-		public Task ExecuteAsync(JobContext ctx, CancellationToken ct) => Task.CompletedTask;
-	}
-
-	private static StageDescriptor MakeStage(string name, params StageDependency[] deps) => new() {
-		Name = name,
-		ServiceType = typeof(FakeService),
-		Interval = TimeSpan.FromMinutes(1),
-		RetryPolicy = RetryPolicy.NoRetry,
-		Debounce = TimeSpan.Zero,
-		Dependencies = deps,
-	};
+	private static StageDescriptor MakeStage(string name, params StageDependency[] deps) =>
+		TestStages.Make(name, new() { Dependencies = deps });
 
 	private static Instance MakeInstanceWithSuccess(StageDescriptor stage, Dictionary<string, string>? keys = null) {
 		keys ??= new Dictionary<string, string>(StringComparer.Ordinal);
@@ -24,19 +14,22 @@ public sealed class InstanceCreatorTests {
 		return inst;
 	}
 
+	private static InstanceCreator NewCreator(InstanceManager instances, KeyspaceRegistry keyspace) =>
+		new(instances, keyspace, TimeProvider.System, System.Threading.Channels.Channel.CreateUnbounded<OrchestratorEvent>());
+
 	[Fact]
 	public void EvaluateAndCreate_KeylessStage_CreatesOneInstanceWithEmptyKeys() {
 		var stage = MakeStage("shops");
 		var instances = new InstanceManager();
 		var keyspace = new KeyspaceRegistry();
-		var creator = new InstanceCreator(instances, keyspace, new StageRegistry([]), TimeProvider.System, System.Threading.Channels.Channel.CreateUnbounded<OrchestratorEvent>());
+		var creator = NewCreator(instances, keyspace);
 
 		var created = creator.EvaluateAndCreate(stage);
 		created.Should().ContainSingle();
 		created[0].Stage.Should().Be(stage);
 		created[0].DependencyKeys.Should().BeEmpty();
 		created[0].FullyQualifiedName.Should().Be("shops[]");
-		instances.Exists("shops", new Dictionary<string, string>()).Should().BeTrue();
+		instances.Exists(new InstanceIdentity(stage, new Dictionary<string, string>())).Should().BeTrue();
 	}
 
 	[Fact]
@@ -44,7 +37,7 @@ public sealed class InstanceCreatorTests {
 		var stage = MakeStage("shops");
 		var instances = new InstanceManager();
 		var keyspace = new KeyspaceRegistry();
-		var creator = new InstanceCreator(instances, keyspace, new StageRegistry([]), TimeProvider.System, System.Threading.Channels.Channel.CreateUnbounded<OrchestratorEvent>());
+		var creator = NewCreator(instances, keyspace);
 
 		creator.EvaluateAndCreate(stage).Should().ContainSingle();
 		creator.EvaluateAndCreate(stage).Should().BeEmpty();  // идемпотентно
@@ -54,11 +47,11 @@ public sealed class InstanceCreatorTests {
 	[Fact]
 	public void EvaluateAndCreate_DependsOnInstance_NoKeyspace_NoInstance() {
 		var shops = MakeStage("shops");
-		var pg = MakeStage("productGroups", new StageDependency("shops", DependencyMode.Instance));
+		var pg = MakeStage("productGroups", new StageDependency(shops, DependencyMode.Instance));
 		var instances = new InstanceManager();
 		var keyspace = new KeyspaceRegistry();
 		instances.Add(MakeInstanceWithSuccess(shops));  // shops успешен, но keyspace пуст
-		var creator = new InstanceCreator(instances, keyspace, new StageRegistry([]), TimeProvider.System, System.Threading.Channels.Channel.CreateUnbounded<OrchestratorEvent>());
+		var creator = NewCreator(instances, keyspace);
 
 		creator.EvaluateAndCreate(pg).Should().BeEmpty();
 	}
@@ -66,14 +59,14 @@ public sealed class InstanceCreatorTests {
 	[Fact]
 	public void EvaluateAndCreate_DependsOnInstance_KeyspaceHasKeys_CreatesPerKey() {
 		var shops = MakeStage("shops");
-		var pg = MakeStage("productGroups", new StageDependency("shops", DependencyMode.Instance));
+		var pg = MakeStage("productGroups", new StageDependency(shops, DependencyMode.Instance));
 		var instances = new InstanceManager();
 		var keyspace = new KeyspaceRegistry();
 		instances.Add(MakeInstanceWithSuccess(shops));
 		keyspace.Add(new InstanceIdentity(shops, EmptyKeys), "u1");
 		keyspace.Add(new InstanceIdentity(shops, EmptyKeys), "u2");
 		keyspace.Add(new InstanceIdentity(shops, EmptyKeys), "u3");
-		var creator = new InstanceCreator(instances, keyspace, new StageRegistry([]), TimeProvider.System, System.Threading.Channels.Channel.CreateUnbounded<OrchestratorEvent>());
+		var creator = NewCreator(instances, keyspace);
 
 		var created = creator.EvaluateAndCreate(pg);
 		created.Should().HaveCount(3);
@@ -88,12 +81,12 @@ public sealed class InstanceCreatorTests {
 	public void EvaluateAndCreate_DependsOn_InheritsKeys() {
 		// pg[shops=u1] успешен → products[shops=u1] должен быть создан с теми же ключами.
 		var shops = MakeStage("shops");
-		var pg = MakeStage("productGroups", new StageDependency("shops", DependencyMode.Instance));
-		var products = MakeStage("products", new StageDependency("productGroups", DependencyMode.Whole));
+		var pg = MakeStage("productGroups", new StageDependency(shops, DependencyMode.Instance));
+		var products = MakeStage("products", new StageDependency(pg, DependencyMode.Whole));
 		var instances = new InstanceManager();
 		var keyspace = new KeyspaceRegistry();
 		instances.Add(MakeInstanceWithSuccess(pg, new Dictionary<string, string> { ["shops"] = "u1" }));
-		var creator = new InstanceCreator(instances, keyspace, new StageRegistry([]), TimeProvider.System, System.Threading.Channels.Channel.CreateUnbounded<OrchestratorEvent>());
+		var creator = NewCreator(instances, keyspace);
 
 		var created = creator.EvaluateAndCreate(products);
 		created.Should().ContainSingle();
@@ -105,14 +98,14 @@ public sealed class InstanceCreatorTests {
 	public void EvaluateAndCreate_MultipleDependsOn_FanOutPerSuccessfulInstance() {
 		// 3 успешных pg → 3 products.
 		var shops = MakeStage("shops");
-		var pg = MakeStage("productGroups", new StageDependency("shops", DependencyMode.Instance));
-		var products = MakeStage("products", new StageDependency("productGroups", DependencyMode.Whole));
+		var pg = MakeStage("productGroups", new StageDependency(shops, DependencyMode.Instance));
+		var products = MakeStage("products", new StageDependency(pg, DependencyMode.Whole));
 		var instances = new InstanceManager();
 		var keyspace = new KeyspaceRegistry();
 		instances.Add(MakeInstanceWithSuccess(pg, new Dictionary<string, string> { ["shops"] = "u1" }));
 		instances.Add(MakeInstanceWithSuccess(pg, new Dictionary<string, string> { ["shops"] = "u2" }));
 		instances.Add(MakeInstanceWithSuccess(pg, new Dictionary<string, string> { ["shops"] = "u3" }));
-		var creator = new InstanceCreator(instances, keyspace, new StageRegistry([]), TimeProvider.System, System.Threading.Channels.Channel.CreateUnbounded<OrchestratorEvent>());
+		var creator = NewCreator(instances, keyspace);
 
 		var created = creator.EvaluateAndCreate(products);
 		created.Select(j => j.DependencyKeys["shops"]).Should().BeEquivalentTo("u1", "u2", "u3");
@@ -121,13 +114,13 @@ public sealed class InstanceCreatorTests {
 	[Fact]
 	public void EvaluateAndCreate_DependsOnNotYetSucceeded_NoInstance() {
 		var pg = MakeStage("productGroups");
-		var products = MakeStage("products", new StageDependency("productGroups", DependencyMode.Whole));
+		var products = MakeStage("products", new StageDependency(pg, DependencyMode.Whole));
 		var instances = new InstanceManager();
 		var keyspace = new KeyspaceRegistry();
 		// LastSuccess = null — ещё не был успешен.
 		var pgInst = new Instance { Identity = new InstanceIdentity(pg, new Dictionary<string, string>(StringComparer.Ordinal)) };
 		instances.Add(pgInst);
-		var creator = new InstanceCreator(instances, keyspace, new StageRegistry([]), TimeProvider.System, System.Threading.Channels.Channel.CreateUnbounded<OrchestratorEvent>());
+		var creator = NewCreator(instances, keyspace);
 
 		creator.EvaluateAndCreate(products).Should().BeEmpty();
 	}
@@ -138,8 +131,8 @@ public sealed class InstanceCreatorTests {
 		var a = MakeStage("a");
 		var b = MakeStage("b");
 		var c = MakeStage("c",
-			new StageDependency("a", DependencyMode.Instance),
-			new StageDependency("b", DependencyMode.Instance));
+			new StageDependency(a, DependencyMode.Instance),
+			new StageDependency(b, DependencyMode.Instance));
 		var instances = new InstanceManager();
 		var keyspace = new KeyspaceRegistry();
 		instances.Add(MakeInstanceWithSuccess(a));
@@ -148,7 +141,7 @@ public sealed class InstanceCreatorTests {
 		keyspace.Add(new InstanceIdentity(a, EmptyKeys), "2");
 		keyspace.Add(new InstanceIdentity(b, EmptyKeys), "x");
 		keyspace.Add(new InstanceIdentity(b, EmptyKeys), "y");
-		var creator = new InstanceCreator(instances, keyspace, new StageRegistry([]), TimeProvider.System, System.Threading.Channels.Channel.CreateUnbounded<OrchestratorEvent>());
+		var creator = NewCreator(instances, keyspace);
 
 		var created = creator.EvaluateAndCreate(c);
 		// 2 × 2 = 4 комбинации
@@ -164,13 +157,13 @@ public sealed class InstanceCreatorTests {
 		var a = MakeStage("a");
 		var b = MakeStage("b");
 		var x = MakeStage("x",
-			new StageDependency("a", DependencyMode.Whole),
-			new StageDependency("b", DependencyMode.Whole));
+			new StageDependency(a, DependencyMode.Whole),
+			new StageDependency(b, DependencyMode.Whole));
 		var instances = new InstanceManager();
 		var keyspace = new KeyspaceRegistry();
 		instances.Add(MakeInstanceWithSuccess(a, new Dictionary<string, string> { ["k"] = "1" }));
 		instances.Add(MakeInstanceWithSuccess(b, new Dictionary<string, string> { ["k"] = "2" }));
-		var creator = new InstanceCreator(instances, keyspace, new StageRegistry([]), TimeProvider.System, System.Threading.Channels.Channel.CreateUnbounded<OrchestratorEvent>());
+		var creator = NewCreator(instances, keyspace);
 
 		creator.EvaluateAndCreate(x).Should().BeEmpty();
 	}
@@ -181,13 +174,13 @@ public sealed class InstanceCreatorTests {
 		var a = MakeStage("a");
 		var b = MakeStage("b");
 		var x = MakeStage("x",
-			new StageDependency("a", DependencyMode.Whole),
-			new StageDependency("b", DependencyMode.Whole));
+			new StageDependency(a, DependencyMode.Whole),
+			new StageDependency(b, DependencyMode.Whole));
 		var instances = new InstanceManager();
 		var keyspace = new KeyspaceRegistry();
 		instances.Add(MakeInstanceWithSuccess(a, new Dictionary<string, string> { ["k"] = "1" }));
 		instances.Add(MakeInstanceWithSuccess(b, new Dictionary<string, string> { ["k"] = "1" }));
-		var creator = new InstanceCreator(instances, keyspace, new StageRegistry([]), TimeProvider.System, System.Threading.Channels.Channel.CreateUnbounded<OrchestratorEvent>());
+		var creator = NewCreator(instances, keyspace);
 
 		var created = creator.EvaluateAndCreate(x);
 		created.Should().ContainSingle();

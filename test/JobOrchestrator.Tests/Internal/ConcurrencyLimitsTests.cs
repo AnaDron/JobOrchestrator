@@ -4,19 +4,8 @@ namespace JobOrchestrator.Tests.Internal;
 /// Per-stage семафоры: TryAcquire возвращает true, пока не выбран лимит, дальше false; Release возвращает токен.
 /// </summary>
 public sealed class ConcurrencyLimitsTests {
-	private sealed class FakeService : IJobService {
-		public Task ExecuteAsync(JobContext ctx, CancellationToken ct) => Task.CompletedTask;
-	}
-
-	private static StageDescriptor MakeStage(string name, int? concurrencyLimit = null) => new() {
-		Name = name,
-		ServiceType = typeof(FakeService),
-		Interval = TimeSpan.FromMinutes(1),
-		RetryPolicy = RetryPolicy.NoRetry,
-		Debounce = TimeSpan.Zero,
-		Dependencies = [],
-		ConcurrencyLimit = concurrencyLimit,
-	};
+	private static StageDescriptor MakeStage(string name, int? concurrencyLimit = null) =>
+		TestStages.Make(name, new() { ConcurrencyLimit = concurrencyLimit });
 
 	[Fact]
 	public void StageWithoutLimit_TryAcquireAlwaysTrue() {

@@ -1,18 +1,8 @@
 namespace JobOrchestrator.Tests.Internal;
 
 public sealed class TriggerAcceptanceTests {
-	private sealed class FakeService : IJobService {
-		public Task ExecuteAsync(JobContext ctx, CancellationToken ct) => Task.CompletedTask;
-	}
-
-	private static StageDescriptor MakeStage(TimeSpan debounce, RetryPolicy retry) => new() {
-		Name = "x",
-		ServiceType = typeof(FakeService),
-		Interval = TimeSpan.FromMinutes(1),
-		RetryPolicy = retry,
-		Debounce = debounce,
-		Dependencies = [],
-	};
+	private static StageDescriptor MakeStage(TimeSpan debounce, RetryPolicy retry) =>
+		TestStages.Make("x", new() { Debounce = debounce, RetryPolicy = retry });
 
 	private static Instance MakeInstance(StageDescriptor stage) =>
 		new() { Identity = new InstanceIdentity(stage, new Dictionary<string, string>(StringComparer.Ordinal)) };

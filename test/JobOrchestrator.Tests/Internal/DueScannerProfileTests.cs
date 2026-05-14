@@ -27,18 +27,7 @@ namespace JobOrchestrator.Tests.Internal;
 /// </summary>
 [Collection("DueScannerProfile")]
 public sealed class DueScannerProfileTests(ITestOutputHelper output) {
-	private sealed class FakeService : IJobService {
-		public Task ExecuteAsync(JobContext ctx, CancellationToken ct) => Task.CompletedTask;
-	}
-
-	private static StageDescriptor MakeStage() => new() {
-		Name = "stage",
-		ServiceType = typeof(FakeService),
-		Interval = TimeSpan.FromMinutes(1),
-		RetryPolicy = RetryPolicy.NoRetry,
-		Debounce = TimeSpan.Zero,
-		Dependencies = [],
-	};
+	private static StageDescriptor MakeStage() => TestStages.Make("stage");
 
 	private static (DueScanner Scanner, InstanceManager Manager, Channel<OrchestratorEvent> Channel) Setup(int n, bool allDue) {
 		var stage = MakeStage();

@@ -1,21 +1,8 @@
 namespace JobOrchestrator.Tests.Internal;
 
 public sealed class KeyspaceRegistryTests {
-	private sealed class FakeService : IJobService {
-		public Task ExecuteAsync(JobContext ctx, CancellationToken ct) => Task.CompletedTask;
-	}
-
-	private static readonly StageDescriptor Shops = MakeStage("shops");
-	private static readonly StageDescriptor Employees = MakeStage("employees");
-
-	private static StageDescriptor MakeStage(string name) => new() {
-		Name = name,
-		ServiceType = typeof(FakeService),
-		Interval = TimeSpan.FromMinutes(1),
-		RetryPolicy = RetryPolicy.NoRetry,
-		Debounce = TimeSpan.Zero,
-		Dependencies = [],
-	};
+	private static readonly StageDescriptor Shops = TestStages.Make("shops");
+	private static readonly StageDescriptor Employees = TestStages.Make("employees");
 
 	private static InstanceIdentity Keyless(StageDescriptor stage) =>
 		new(stage, new Dictionary<string, string>(StringComparer.Ordinal));

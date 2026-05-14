@@ -4,18 +4,8 @@ public sealed class DependencyResolverTests {
 	private static readonly IReadOnlyDictionary<string, string> EmptyKeys =
 		new Dictionary<string, string>(StringComparer.Ordinal);
 
-	private sealed class FakeService : IJobService {
-		public Task ExecuteAsync(JobContext ctx, CancellationToken ct) => Task.CompletedTask;
-	}
-
-	private static StageDescriptor MakeStage(string name, params StageDependency[] deps) => new() {
-		Name = name,
-		ServiceType = typeof(FakeService),
-		Interval = TimeSpan.FromMinutes(1),
-		RetryPolicy = RetryPolicy.NoRetry,
-		Debounce = TimeSpan.Zero,
-		Dependencies = deps,
-	};
+	private static StageDescriptor MakeStage(string name, params StageDependency[] deps) =>
+		TestStages.Make(name, new() { Dependencies = deps });
 
 	private static Instance MakeInstance(StageDescriptor stage, Dictionary<string, string>? keys = null) {
 		keys ??= new Dictionary<string, string>(StringComparer.Ordinal);
@@ -78,7 +68,7 @@ public sealed class DependencyResolverTests {
 	[Fact]
 	public void AllDependenciesResolved_InstanceDep_KeyspaceMissingKey_False() {
 		var shops = MakeStage("shops");
-		var pg = MakeStage("productGroups", new StageDependency("shops", DependencyMode.Instance));
+		var pg = MakeStage("productGroups", new StageDependency(shops, DependencyMode.Instance));
 		var instances = new InstanceManager();
 		var keyspace = new KeyspaceRegistry();
 		var shopsInst = MakeInstance(shops);
@@ -94,7 +84,7 @@ public sealed class DependencyResolverTests {
 	[Fact]
 	public void AllDependenciesResolved_InstanceDep_AllOk_True() {
 		var shops = MakeStage("shops");
-		var pg = MakeStage("productGroups", new StageDependency("shops", DependencyMode.Instance));
+		var pg = MakeStage("productGroups", new StageDependency(shops, DependencyMode.Instance));
 		var instances = new InstanceManager();
 		var keyspace = new KeyspaceRegistry();
 		var shopsInst = MakeInstance(shops);
@@ -110,7 +100,7 @@ public sealed class DependencyResolverTests {
 	[Fact]
 	public void AllDependenciesResolved_InstanceDep_ParentNeverSucceeded_False() {
 		var shops = MakeStage("shops");
-		var pg = MakeStage("productGroups", new StageDependency("shops", DependencyMode.Instance));
+		var pg = MakeStage("productGroups", new StageDependency(shops, DependencyMode.Instance));
 		var instances = new InstanceManager();
 		var keyspace = new KeyspaceRegistry();
 		var shopsInst = MakeInstance(shops);
@@ -126,7 +116,7 @@ public sealed class DependencyResolverTests {
 	[Fact]
 	public void AllDependenciesResolved_WholeDep_NoParentInstance_False() {
 		var x = MakeStage("x");
-		var y = MakeStage("y", new StageDependency("x", DependencyMode.Whole));
+		var y = MakeStage("y", new StageDependency(x, DependencyMode.Whole));
 		var instances = new InstanceManager();
 		var keyspace = new KeyspaceRegistry();
 		// Нет инстансов x.
@@ -138,7 +128,7 @@ public sealed class DependencyResolverTests {
 	[Fact]
 	public void AllDependenciesResolved_WholeDep_ParentSucceededOnce_True() {
 		var x = MakeStage("x");
-		var y = MakeStage("y", new StageDependency("x", DependencyMode.Whole));
+		var y = MakeStage("y", new StageDependency(x, DependencyMode.Whole));
 		var instances = new InstanceManager();
 		var keyspace = new KeyspaceRegistry();
 		var xInst = MakeInstance(x);
@@ -154,7 +144,7 @@ public sealed class DependencyResolverTests {
 		// Инвариант монотонности LastSuccess: парный инстанс родителя имел успех хотя бы раз,
 		// потом ушёл в серию неуспехов — зависимая стадия должна продолжать резолвиться.
 		var x = MakeStage("x");
-		var y = MakeStage("y", new StageDependency("x", DependencyMode.Whole));
+		var y = MakeStage("y", new StageDependency(x, DependencyMode.Whole));
 		var instances = new InstanceManager();
 		var keyspace = new KeyspaceRegistry();
 		var xInst = MakeInstance(x);
