@@ -1,11 +1,9 @@
 namespace JobOrchestrator.Tests.Internal;
 
 /// <summary>
-/// Тесты canonical encoding (<see cref="InstanceIdentity.Encode"/>) и формирования
-/// <c>FullyQualifiedName</c> через <see cref="InstanceIdentity"/>. После Phase A/B рефакторинга
-/// порядок компонентов FQN задаётся <see cref="StageDescriptor.ExpectedKeyNames"/> — а не отдельным
-/// параметром конструктора Identity. Тесты конструируют дескрипторы со «вручную заданным»
-/// ExpectedKeyNames, имитируя то, что в production сделал бы <see cref="StageDescriptorGraph.Build"/>.
+/// Тесты <c>FullyQualifiedName</c> и canonical <c>EncodedKey</c> через <see cref="InstanceIdentity"/>.
+/// Порядок компонентов задаётся <see cref="StageDescriptor.ExpectedKeyNames"/> — pre-sorted один раз
+/// в Identity-ctor, и Encode и FormatFqn используют тот же ordered-список.
 /// </summary>
 public sealed class DependencyKeyFormatTests {
 	private static StageDescriptor MakeStage(string name = "x", params string[] expectedKeyNames) =>
@@ -36,9 +34,7 @@ public sealed class DependencyKeyFormatTests {
 
 	[Fact]
 	public void Identity_ExpectedKeyNamesDeterminesOrder_NotInsertionOrder() {
-		// FQN-порядок ОПРЕДЕЛЯЕТСЯ stage.ExpectedKeyNames (transitively-computed в StageDescriptorGraph.Build).
-		// Insertion order словаря НЕ участвует: Identity конвертирует в ImmutableDictionary, который
-		// insertion order не сохраняет.
+		// FQN-порядок ОПРЕДЕЛЯЕТСЯ stage.ExpectedKeyNames; insertion order словаря НЕ участвует.
 		var keys = new Dictionary<string, string> {
 			["currencies"] = "USD",      // вставлен первым
 			["shops"] = "u1",
@@ -58,44 +54,33 @@ public sealed class DependencyKeyFormatTests {
 	}
 
 	[Fact]
-	public void Encode_EmptyKeys_ReturnsEmpty() {
-		var enc = InstanceIdentity.Encode(new Dictionary<string, string>());
-		enc.Should().Be(string.Empty);
+	public void EncodedKey_EmptyKeys_ReturnsEmpty() {
+		new InstanceIdentity(MakeStage("x")).EncodedKey.Should().Be(string.Empty);
 	}
 
 	[Fact]
-	public void Encode_IsCanonical_OrderIndependent() {
-		var a = new Dictionary<string, string> { ["shops"] = "u1", ["currencies"] = "USD" };
-		var b = new Dictionary<string, string> { ["currencies"] = "USD", ["shops"] = "u1" };
-		InstanceIdentity.Encode(a).Should().Be(InstanceIdentity.Encode(b));
-	}
-
-	[Fact]
-	public void Encode_DifferentValues_DifferentResult() {
+	public void EncodedKey_DifferentValues_DifferentResult() {
+		var stage = MakeStage("x", "shops");
 		var a = new Dictionary<string, string> { ["shops"] = "u1" };
 		var b = new Dictionary<string, string> { ["shops"] = "u2" };
-		InstanceIdentity.Encode(a).Should().NotBe(InstanceIdentity.Encode(b));
+		new InstanceIdentity(stage, a).EncodedKey.Should().NotBe(new InstanceIdentity(stage, b).EncodedKey);
 	}
 
 	[Fact]
-	public void Encode_EscapesSpecialCharacters_NoCollision() {
-		var collision1 = new Dictionary<string, string> { ["a"] = "1|b=2" };
-		var collision2 = new Dictionary<string, string> { ["a"] = "1", ["b"] = "2" };
-		InstanceIdentity.Encode(collision1).Should().NotBe(InstanceIdentity.Encode(collision2));
-	}
-
-	[Fact]
-	public void Encode_EscapesBackslash() {
+	public void EncodedKey_EscapesBackslash() {
+		var stage = MakeStage("x", "a");
 		var withBackslash = new Dictionary<string, string> { ["a"] = "value\\with\\backslash" };
 		var simple = new Dictionary<string, string> { ["a"] = "value" };
-		InstanceIdentity.Encode(withBackslash).Should().NotBe(InstanceIdentity.Encode(simple));
+		new InstanceIdentity(stage, withBackslash).EncodedKey
+			.Should().NotBe(new InstanceIdentity(stage, simple).EncodedKey);
 	}
 
 	[Fact]
-	public void Encode_RoundTripStability_SameDictionary_SameEncoded() {
+	public void EncodedKey_RoundTripStability_SameDictionary_SameEncoded() {
+		var stage = MakeStage("x", "shops", "currencies");
 		var keys = new Dictionary<string, string> { ["shops"] = "u|1=v", ["currencies"] = "USD" };
-		var first = InstanceIdentity.Encode(keys);
-		var second = InstanceIdentity.Encode(keys);
+		var first = new InstanceIdentity(stage, keys).EncodedKey;
+		var second = new InstanceIdentity(stage, keys).EncodedKey;
 		first.Should().Be(second);
 	}
 }

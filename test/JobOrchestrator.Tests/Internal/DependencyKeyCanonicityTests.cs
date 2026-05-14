@@ -1,19 +1,18 @@
 namespace JobOrchestrator.Tests.Internal;
 
 /// <summary>
-/// 3.3: encoder canonicity — <see cref="InstanceIdentity.Encode"/> должен давать одинаковую строку
-/// для одинаковых key-value-пар независимо от порядка вставки. Это критическое инвариант для
-/// hash-equality в <see cref="InstanceManager"/> и <see cref="KeyspaceRegistry"/>:
-/// без него один и тот же логический инстанс мог бы получить разные encoded-ключи в разных вызовах
-/// и попасть в разные bucket-ы.
-/// <para>
-/// После Phase C рефакторинга <c>DependencyKey</c>-utility удалён — Encode стал приватной деталью
-/// Identity, видимой тестам через <c>InternalsVisibleTo</c>.
-/// </para>
+/// Encoder canonicity через <see cref="InstanceIdentity"/>: для одинаковых key-value-пар в пределах
+/// одной стадии (= одинаковый <see cref="StageDescriptor.ExpectedKeyNames"/>) <c>EncodedKey</c>
+/// одинаков независимо от insertion-order словаря. Это критический инвариант для hash-equality в
+/// <see cref="InstanceManager"/>, <see cref="KeyspaceRegistry"/> и waiters.
 /// </summary>
 public sealed class DependencyKeyCanonicityTests {
+	private static StageDescriptor StageWithKeys(params string[] expectedKeyNames) =>
+		TestStages.Make("x", new() { ServiceType = typeof(object), ExpectedKeyNames = expectedKeyNames });
+
 	[Fact]
-	public void Encode_DifferentInsertionOrder_ProducesSameEncoding() {
+	public void EncodedKey_DifferentInsertionOrder_ProducesSameEncoding() {
+		var stage = StageWithKeys("shops", "currency", "region");
 		var dict1 = new Dictionary<string, string>(StringComparer.Ordinal) {
 			["shops"] = "u1",
 			["currency"] = "USD",
@@ -29,26 +28,37 @@ public sealed class DependencyKeyCanonicityTests {
 			["shops"] = "u1",
 			["region"] = "EU",
 		};
-		InstanceIdentity.Encode(dict1).Should().Be(InstanceIdentity.Encode(dict2));
-		InstanceIdentity.Encode(dict2).Should().Be(InstanceIdentity.Encode(dict3));
+
+		var enc1 = new InstanceIdentity(stage, dict1).EncodedKey;
+		var enc2 = new InstanceIdentity(stage, dict2).EncodedKey;
+		var enc3 = new InstanceIdentity(stage, dict3).EncodedKey;
+		enc1.Should().Be(enc2);
+		enc2.Should().Be(enc3);
 	}
 
 	[Fact]
-	public void Encode_EscapesSpecialChars() {
+	public void EncodedKey_EscapesSpecialChars_NoCollision() {
 		// Без экранирования {a:"1|b=2"} vs {a:"1", b:"2"} дали бы одинаковую encoded-строку.
+		var stageA = StageWithKeys("a");
+		var stageAB = StageWithKeys("a", "b");
+
 		var ambiguous = new Dictionary<string, string>(StringComparer.Ordinal) { ["a"] = "1|b=2" };
 		var twoKeys = new Dictionary<string, string>(StringComparer.Ordinal) { ["a"] = "1", ["b"] = "2" };
-		InstanceIdentity.Encode(ambiguous).Should().NotBe(InstanceIdentity.Encode(twoKeys));
+
+		var encAmbiguous = new InstanceIdentity(stageA, ambiguous).EncodedKey;
+		var encTwoKeys = new InstanceIdentity(stageAB, twoKeys).EncodedKey;
+		encAmbiguous.Should().NotBe(encTwoKeys);
 	}
 
 	[Fact]
-	public void Encode_EmptyDictionary_ReturnsEmptyString() {
-		InstanceIdentity.Encode(new Dictionary<string, string>()).Should().Be(string.Empty);
+	public void EncodedKey_EmptyDictionary_ReturnsEmptyString() {
+		var stage = TestStages.Make("x", new() { ServiceType = typeof(object) });
+		new InstanceIdentity(stage).EncodedKey.Should().Be(string.Empty);
 	}
 
 	[Fact]
 	public void InstanceIdentity_DifferentInsertionOrder_AreEqual() {
-		var stage = TestStages.Make("x", new() { ServiceType = typeof(object) });
+		var stage = StageWithKeys("a", "b");
 		var keys1 = new Dictionary<string, string>(StringComparer.Ordinal) { ["a"] = "1", ["b"] = "2" };
 		var keys2 = new Dictionary<string, string>(StringComparer.Ordinal) { ["b"] = "2", ["a"] = "1" };
 		var id1 = new InstanceIdentity(stage, keys1);
