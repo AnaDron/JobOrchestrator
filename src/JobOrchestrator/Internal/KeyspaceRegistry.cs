@@ -19,17 +19,17 @@ namespace JobOrchestrator.Internal;
 /// </summary>
 internal sealed class KeyspaceRegistry {
 	private readonly Dictionary<InstanceIdentity, EmitterBucket> _buckets = new();
-	// Per-stage index: stageName → набор Identity-эмитеров, для быстрой итерации bucket-ов стадии.
-	private readonly Dictionary<string, HashSet<InstanceIdentity>> _byStage = new(StringComparer.Ordinal);
+	// Per-stage index: StageDescriptor → набор Identity-эмитеров, для быстрой итерации bucket-ов стадии.
+	private readonly Dictionary<StageDescriptor, HashSet<InstanceIdentity>> _byStage = [];
 
 	/// <summary>Добавляет ключ в bucket эмитера. <c>true</c>, если ключ был новый; <c>false</c> — идемпотентно.</summary>
 	public bool Add(InstanceIdentity emitter, string key) {
 		if (!_buckets.TryGetValue(emitter, out var bucket)) {
 			bucket = new EmitterBucket(emitter, new HashSet<string>(StringComparer.Ordinal));
 			_buckets[emitter] = bucket;
-			if (!_byStage.TryGetValue(emitter.Stage.Name, out var emitters)) {
+			if (!_byStage.TryGetValue(emitter.Stage, out var emitters)) {
 				emitters = [];
-				_byStage[emitter.Stage.Name] = emitters;
+				_byStage[emitter.Stage] = emitters;
 			}
 			emitters.Add(emitter);
 		}
@@ -50,9 +50,9 @@ internal sealed class KeyspaceRegistry {
 	/// </summary>
 	public IReadOnlyCollection<string> RemoveInstance(InstanceIdentity emitter) {
 		if (!_buckets.Remove(emitter, out var bucket)) return [];
-		if (_byStage.TryGetValue(emitter.Stage.Name, out var emitters)) {
+		if (_byStage.TryGetValue(emitter.Stage, out var emitters)) {
 			emitters.Remove(emitter);
-			if (emitters.Count == 0) _byStage.Remove(emitter.Stage.Name);
+			if (emitters.Count == 0) _byStage.Remove(emitter.Stage);
 		}
 		return bucket.Keys;
 	}
@@ -62,13 +62,19 @@ internal sealed class KeyspaceRegistry {
 	/// <see cref="InstanceCreator"/> для построения candidate-измерений при <c>DependsOnInstance(stage)</c>:
 	/// каждый bucket даёт набор ключей одного эмитера, и InstanceCreator материализует инстансы зависимой
 	/// стадии с merged DependencyKeys из emitter.Identity.DependencyKeys + ключ.
+	/// <para>
+	/// Возвращает materialized-список (а не yield-IEnumerable): caller итерирует один раз, нет
+	/// state-machine-overhead на iterator. Внутри уже делается snapshot через копирование emitters-set.
+	/// </para>
 	/// </summary>
-	public IEnumerable<EmitterBucket> SnapshotByStage(StageDescriptor stage) {
-		if (!_byStage.TryGetValue(stage.Name, out var emitters)) yield break;
-		// Копируем set, чтобы итерация была безопасна при мутациях того же event-loop-thread'а.
+	public IReadOnlyList<EmitterBucket> SnapshotByStage(StageDescriptor stage) {
+		if (!_byStage.TryGetValue(stage, out var emitters) || emitters.Count == 0) return [];
+		// Snapshot emitter-set, чтобы итерация была безопасна при мутациях того же event-loop-thread'а.
+		var result = new List<EmitterBucket>(emitters.Count);
 		foreach (var emitter in emitters.ToArray()) {
-			if (_buckets.TryGetValue(emitter, out var bucket)) yield return bucket;
+			if (_buckets.TryGetValue(emitter, out var bucket)) result.Add(bucket);
 		}
+		return result;
 	}
 
 	/// <summary>

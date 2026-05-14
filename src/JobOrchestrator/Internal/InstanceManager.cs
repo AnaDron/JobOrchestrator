@@ -10,7 +10,7 @@ namespace JobOrchestrator.Internal;
 /// </summary>
 internal sealed class InstanceManager {
 	private readonly ConcurrentDictionary<InstanceIdentity, Instance> _instances = new();
-	private readonly ConcurrentDictionary<string, ConcurrentDictionary<Instance, byte>> _byStage = new(StringComparer.Ordinal);
+	private readonly ConcurrentDictionary<StageDescriptor, ConcurrentDictionary<Instance, byte>> _byStage = new();
 	private static readonly ConcurrentDictionary<Instance, byte> EmptySet = new();
 
 	public bool Exists(InstanceIdentity identity) => _instances.ContainsKey(identity);
@@ -22,13 +22,13 @@ internal sealed class InstanceManager {
 		if (!_instances.TryAdd(instance.Identity, instance)) {
 			throw new InvalidOperationException($"Дубль инстанса в InstanceManager: {instance.Identity.FullyQualifiedName}");
 		}
-		var set = _byStage.GetOrAdd(instance.Identity.Stage.Name, _ => new ConcurrentDictionary<Instance, byte>());
+		var set = _byStage.GetOrAdd(instance.Stage, _ => new ConcurrentDictionary<Instance, byte>());
 		set.TryAdd(instance, 0);
 	}
 
 	public bool Remove(Instance instance) {
 		var removed = _instances.TryRemove(instance.Identity, out _);
-		if (removed && _byStage.TryGetValue(instance.Identity.Stage.Name, out var set)) {
+		if (removed && _byStage.TryGetValue(instance.Stage, out var set)) {
 			set.TryRemove(instance, out _);
 		}
 		return removed;
@@ -36,7 +36,7 @@ internal sealed class InstanceManager {
 
 	/// <summary>O(1)-доступ к инстансам стадии через secondary index. Thread-safe.</summary>
 	public ICollection<Instance> InstancesOf(StageDescriptor stage) =>
-		_byStage.TryGetValue(stage.Name, out var set) ? set.Keys : EmptySet.Keys;
+		_byStage.TryGetValue(stage, out var set) ? set.Keys : EmptySet.Keys;
 
 	/// <summary>Все инстансы. Snapshot enumeration — безопасно итерировать одновременно с мутациями.</summary>
 	public ICollection<Instance> All => _instances.Values;

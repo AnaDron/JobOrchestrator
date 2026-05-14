@@ -13,13 +13,13 @@ namespace JobOrchestrator.Internal;
 /// </para>
 /// </summary>
 internal sealed class ConcurrencyLimits {
-	private readonly Dictionary<string, SemaphoreSlim> _byStage = new(StringComparer.Ordinal);
+	private readonly Dictionary<StageDescriptor, SemaphoreSlim> _byStage = [];
 
 	public ConcurrencyLimits(StageRegistry registry) {
 		ArgumentNullException.ThrowIfNull(registry);
 		foreach (var stage in registry.AllStages) {
 			if (stage.ConcurrencyLimit is { } limit) {
-				_byStage[stage.Name] = new SemaphoreSlim(limit, limit);
+				_byStage[stage] = new SemaphoreSlim(limit, limit);
 			}
 		}
 	}
@@ -30,12 +30,12 @@ internal sealed class ConcurrencyLimits {
 	/// re-schedule; в случае Manual — вернуть пользователю Debounced/similar).
 	/// </summary>
 	public bool TryAcquire(StageDescriptor stage) =>
-		!_byStage.TryGetValue(stage.Name, out var sem) || sem.Wait(0);
+		!_byStage.TryGetValue(stage, out var sem) || sem.Wait(0);
 
 	/// <summary>
 	/// Освобождает токен. Безопасно вызывать для стадий без лимита (no-op).
 	/// </summary>
 	public void Release(StageDescriptor stage) {
-		if (_byStage.TryGetValue(stage.Name, out var sem)) sem.Release();
+		if (_byStage.TryGetValue(stage, out var sem)) sem.Release();
 	}
 }
