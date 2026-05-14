@@ -134,7 +134,8 @@ internal sealed class EventLoop(
 	}
 
 	private void HandleManualTrigger(ManualTriggerRequestedEvent evt, CancellationToken ct) {
-		var instance = instances.Find(evt.StageName, evt.DependencyKeys);
+		// O(1) lookup через pre-computed Identity — без повторного Encode на каждый trigger.
+		var instance = instances.Find(evt.Identity);
 		if (instance is null) {
 			evt.Tcs.TrySetResult(TriggerResult.NotFound);
 			return;
@@ -174,7 +175,7 @@ internal sealed class EventLoop(
 			Log.IgnoredAddKeyFromTerminating(logger, source.Stage.Name, key, source.FullyQualifiedName, null);
 			return;
 		}
-		if (!keyspace.Add(source.Stage.Name, source.DependencyKeys, key)) {
+		if (!keyspace.Add(source.Identity, key)) {
 			Log.AddKeyAlreadyPresent(logger, source.Stage.Name, key, null);
 			return;
 		}
@@ -190,11 +191,11 @@ internal sealed class EventLoop(
 			Log.IgnoredRemoveKeyFromTerminating(logger, source.Stage.Name, key, source.FullyQualifiedName, null);
 			return;
 		}
-		if (!keyspace.Remove(source.Stage.Name, source.DependencyKeys, key)) {
+		if (!keyspace.Remove(source.Identity, key)) {
 			Log.RemoveKeyAbsent(logger, source.Stage.Name, key, null);
 			return;
 		}
-		await CascadeKeyRemovalAsync(source.Stage.Name, source.DependencyKeys, key, ct).ConfigureAwait(false);
+		await CascadeKeyRemovalAsync(source.Identity, key, ct).ConfigureAwait(false);
 		scanner.Wake();
 	}
 
@@ -209,28 +210,29 @@ internal sealed class EventLoop(
 	/// </list>
 	/// Преимущество vs рекурсия: глубокие графы не порождают цепочки async-state-machine-frame'ов в куче.
 	/// </summary>
-	private async Task CascadeKeyRemovalAsync(
-		string emitterStage,
-		IReadOnlyDictionary<string, string> emitterKeys,
-		string key,
-		CancellationToken ct
-	) {
-		var queue = new Queue<(string Stage, IReadOnlyDictionary<string, string> EmitterKeys, string Key)>();
-		queue.Enqueue((emitterStage, emitterKeys, key));
+	/// <summary>
+	/// Сид BFS-обхода каскада: какой эмитер и какой его ключ инициировали удаление.
+	/// Identity иммутабельна — валидна даже после удаления инстанса из <c>InstanceManager</c>.
+	/// </summary>
+	private readonly record struct CascadeSeed(InstanceIdentity Emitter, string Key);
+
+	private async Task CascadeKeyRemovalAsync(InstanceIdentity emitter, string key, CancellationToken ct) {
+		var queue = new Queue<CascadeSeed>();
+		queue.Enqueue(new CascadeSeed(emitter, key));
 
 		while (queue.Count > 0) {
-			var (es, ek, k) = queue.Dequeue();
-			var affectedStages = registry.StagesAffectedByKeyRemoval(es);
+			var seed = queue.Dequeue();
+			var affectedStages = registry.StagesAffectedByKeyRemoval(seed.Emitter.Stage.Name);
 			var affected = affectedStages
 				.SelectMany(s => instances.InstancesOf(s.Name))
 				.Where(inst => !inst.IsTerminating)
-				.Where(inst => MatchesEmitter(inst.DependencyKeys, es, ek, k))
+				.Where(inst => MatchesEmitter(inst, seed.Emitter, seed.Key))
 				.ToList();
 			if (affected.Count == 0) continue;
 
 			// Сортировка по pre-computed cancellation rank (листья — меньший ранг — отменяются первыми).
 			affected.Sort((a, b) => registry.CancellationRank(a.Stage.Name).CompareTo(registry.CancellationRank(b.Stage.Name)));
-			Log.RemoveKeyCascade(logger, es, k, affected.Count, null);
+			Log.RemoveKeyCascade(logger, seed.Emitter.Stage.Name, seed.Key, affected.Count, null);
 
 			foreach (var instance in affected) {
 				// CAS-перевод в Terminating. Если кто-то уже отметил (через другой orphan-ключ
@@ -238,15 +240,13 @@ internal sealed class EventLoop(
 				if (!instance.MarkTerminating()) continue;
 
 				// Снимаем bucket этого инстанса — orphan-ключи enqueue'ём для дальнейшего обхода.
-				var orphans = keyspace.RemoveInstance(instance.Stage.Name, instance.DependencyKeys);
+				// Identity иммутабельна, сохраняется в seed после Remove — для рекурсивного matching.
+				var orphans = keyspace.RemoveInstance(instance.Identity);
 				foreach (var orphanKey in orphans) {
-					queue.Enqueue((instance.Stage.Name, instance.DependencyKeys, orphanKey));
+					queue.Enqueue(new CascadeSeed(instance.Identity, orphanKey));
 				}
 
 				// Если runner всё ещё бежит — defer cleanup до StageCompleted/Failed handler-а.
-				// IsRunning читается ПОСЛЕ MarkTerminating: новый BeginIteration после нашего marking
-				// уже не сможет (TryBeginRunning не активирует Running для Terminating-инстанса —
-				// см. HandleTimerTick guard `IsTerminating || IsRunning`).
 				var cts = instance.RunCts;
 				if (instance.IsRunning && cts is not null) {
 					try { cts.Cancel(); } catch (ObjectDisposedException) { /* race на завершение */ }
@@ -260,19 +260,15 @@ internal sealed class EventLoop(
 	}
 
 	/// <summary>
-	/// True, если <paramref name="dependencyKeys"/> кандидата содержит <c>{emitterStage: key}</c>
-	/// И ВСЕ <paramref name="emitterKeys"/> эмитера (т.е. кандидат был порождён именно этой комбинацией
-	/// emitter+key, а не другим инстансом той же стадии-эмитера).
+	/// True, если <paramref name="candidate"/>-инстанс был порождён ИМЕННО ЭТОЙ комбинацией
+	/// <paramref name="emitter"/> + <paramref name="key"/>: его <c>DependencyKeys</c> содержит
+	/// <c>{emitter.Stage.Name: key}</c> и ВСЕ <c>emitter.DependencyKeys</c> с теми же значениями.
 	/// </summary>
-	private static bool MatchesEmitter(
-		IReadOnlyDictionary<string, string> dependencyKeys,
-		string emitterStage,
-		IReadOnlyDictionary<string, string> emitterKeys,
-		string key
-	) {
-		if (!dependencyKeys.TryGetValue(emitterStage, out var v) || !string.Equals(v, key, StringComparison.Ordinal)) return false;
-		foreach (var kv in emitterKeys) {
-			if (!dependencyKeys.TryGetValue(kv.Key, out var dv) || !string.Equals(dv, kv.Value, StringComparison.Ordinal)) return false;
+	private static bool MatchesEmitter(Instance candidate, InstanceIdentity emitter, string key) {
+		var depKeys = candidate.DependencyKeys;
+		if (!depKeys.TryGetValue(emitter.Stage.Name, out var v) || !string.Equals(v, key, StringComparison.Ordinal)) return false;
+		foreach (var kv in emitter.DependencyKeys) {
+			if (!depKeys.TryGetValue(kv.Key, out var dv) || !string.Equals(dv, kv.Value, StringComparison.Ordinal)) return false;
 		}
 		return true;
 	}

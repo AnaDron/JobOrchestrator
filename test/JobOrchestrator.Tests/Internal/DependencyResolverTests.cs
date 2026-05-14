@@ -100,7 +100,7 @@ public sealed class DependencyResolverTests {
 		var shopsInst = MakeInstance(shops);
 		shopsInst.SetMetrics(shopsInst.Metrics with { LastSuccess = DateTimeOffset.UtcNow });
 		instances.Add(shopsInst);
-		keyspace.Add("shops", EmptyKeys, "u1");
+		keyspace.Add(new InstanceIdentity(shops, EmptyKeys), "u1");
 
 		var resolved = DependencyResolver.AllDependenciesResolved(
 			pg, new Dictionary<string, string> { ["shops"] = "u1" }, instances, keyspace);
@@ -116,7 +116,7 @@ public sealed class DependencyResolverTests {
 		var shopsInst = MakeInstance(shops);
 		// LastSuccess = null — родитель ни разу не был успешен.
 		instances.Add(shopsInst);
-		keyspace.Add("shops", EmptyKeys, "u1");
+		keyspace.Add(new InstanceIdentity(shops, EmptyKeys), "u1");
 
 		var resolved = DependencyResolver.AllDependenciesResolved(
 			pg, new Dictionary<string, string> { ["shops"] = "u1" }, instances, keyspace);

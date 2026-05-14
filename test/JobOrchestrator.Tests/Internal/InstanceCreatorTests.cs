@@ -70,9 +70,9 @@ public sealed class InstanceCreatorTests {
 		var instances = new InstanceManager();
 		var keyspace = new KeyspaceRegistry();
 		instances.Add(MakeInstanceWithSuccess(shops));
-		keyspace.Add("shops", EmptyKeys, "u1");
-		keyspace.Add("shops", EmptyKeys, "u2");
-		keyspace.Add("shops", EmptyKeys, "u3");
+		keyspace.Add(new InstanceIdentity(shops, EmptyKeys), "u1");
+		keyspace.Add(new InstanceIdentity(shops, EmptyKeys), "u2");
+		keyspace.Add(new InstanceIdentity(shops, EmptyKeys), "u3");
 		var creator = new InstanceCreator(instances, keyspace, new StageRegistry([]), TimeProvider.System, System.Threading.Channels.Channel.CreateUnbounded<OrchestratorEvent>());
 
 		var created = creator.EvaluateAndCreate(pg);
@@ -144,10 +144,10 @@ public sealed class InstanceCreatorTests {
 		var keyspace = new KeyspaceRegistry();
 		instances.Add(MakeInstanceWithSuccess(a));
 		instances.Add(MakeInstanceWithSuccess(b));
-		keyspace.Add("a", EmptyKeys, "1");
-		keyspace.Add("a", EmptyKeys, "2");
-		keyspace.Add("b", EmptyKeys, "x");
-		keyspace.Add("b", EmptyKeys, "y");
+		keyspace.Add(new InstanceIdentity(a, EmptyKeys), "1");
+		keyspace.Add(new InstanceIdentity(a, EmptyKeys), "2");
+		keyspace.Add(new InstanceIdentity(b, EmptyKeys), "x");
+		keyspace.Add(new InstanceIdentity(b, EmptyKeys), "y");
 		var creator = new InstanceCreator(instances, keyspace, new StageRegistry([]), TimeProvider.System, System.Threading.Channels.Channel.CreateUnbounded<OrchestratorEvent>());
 
 		var created = creator.EvaluateAndCreate(c);

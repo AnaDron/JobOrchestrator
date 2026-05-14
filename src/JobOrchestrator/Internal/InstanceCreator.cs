@@ -111,8 +111,9 @@ internal sealed class InstanceCreator(
 			var result = new List<IReadOnlyDictionary<string, string>>();
 			foreach (var bucket in keyspace.SnapshotByStage(dep.TargetStageName)) {
 				foreach (var key in bucket.Keys) {
-					var combined = new Dictionary<string, string>(bucket.EmitterKeys.Count + 1, StringComparer.Ordinal);
-					foreach (var ek in bucket.EmitterKeys) combined[ek.Key] = ek.Value;
+					var emitterKeys = bucket.Emitter.DependencyKeys;
+					var combined = new Dictionary<string, string>(emitterKeys.Count + 1, StringComparer.Ordinal);
+					foreach (var ek in emitterKeys) combined[ek.Key] = ek.Value;
 					combined[dep.TargetStageName] = key;
 					result.Add(combined);
 				}

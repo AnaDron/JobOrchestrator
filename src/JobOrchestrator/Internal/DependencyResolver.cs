@@ -39,7 +39,7 @@ internal static class DependencyResolver {
 			// Per-emitter check: bucket именно ЭТОГО paired-инстанса как эмитера должен содержать ключ.
 			// Защищает от race-condition «keyspace.Add → KeyRemoved между построением кандидата и resolve».
 			if (!keys.TryGetValue(dep.TargetStageName, out var k)) return false;
-			if (!keyspace.Contains(dep.TargetStageName, paired.DependencyKeys, k)) return false;
+			if (!keyspace.Contains(paired.Identity, k)) return false;
 		}
 		return true;
 	});

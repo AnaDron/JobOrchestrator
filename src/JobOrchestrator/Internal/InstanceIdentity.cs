@@ -58,7 +58,33 @@ internal sealed class InstanceIdentity : IEquatable<InstanceIdentity> {
 		// Fallback на direct DependsOnInstance, если ordered не передан. Для invariant'a достаточно
 		// для unit-тестов и keyless-стадий. В production InstanceCreator передаёт transitive-list.
 		var ordered = orderedKeyNames ?? [.. stage.Dependencies.Where(d => d.Mode == DependencyMode.Instance).Select(d => d.TargetStageName)];
-		FullyQualifiedName = DependencyKey.FormatFullyQualifiedName(stage.Name, DependencyKeys, ordered);
+		FullyQualifiedName = FormatFqn(stage.Name, DependencyKeys, ordered);
+	}
+
+	/// <summary>
+	/// Human-readable FQN: <c>"stage[dep1=v1,dep2=v2,...]"</c>. Порядок компонентов задаётся
+	/// <paramref name="orderedKeyNames"/> (transitive ExpectedKeyNames из <see cref="StageRegistry"/>) —
+	/// детерминированный независимо от hash-table-order'а <c>ImmutableDictionary</c>.
+	/// <para>
+	/// Приватная деталь Identity: никто снаружи не должен строить FQN по своим правилам, иначе риск
+	/// рассинхронизации форматов между call-sites.
+	/// </para>
+	/// </summary>
+	private static string FormatFqn(string stageName, IReadOnlyDictionary<string, string> keys, IReadOnlyList<string> orderedKeyNames) {
+		if (keys.Count == 0) return $"{stageName}[]";
+		var seen = new HashSet<string>(StringComparer.Ordinal);
+		var parts = new List<string>(keys.Count);
+		foreach (var name in orderedKeyNames) {
+			if (keys.TryGetValue(name, out var v)) {
+				parts.Add($"{name}={v}");
+				seen.Add(name);
+			}
+		}
+		// Safety net: keys, отсутствующие в orderedKeyNames (теоретически невозможно для валидных инстансов).
+		foreach (var kv in keys) {
+			if (!seen.Contains(kv.Key)) parts.Add($"{kv.Key}={kv.Value}");
+		}
+		return $"{stageName}[{string.Join(",", parts)}]";
 	}
 
 	public bool Equals(InstanceIdentity? other) =>

@@ -48,8 +48,11 @@ internal sealed class JobOrchestratorRuntime(
 			return TriggerResult.InvalidKeys;
 		}
 
+		// Identity строится ОДИН РАЗ здесь (после валидации) — encode + format происходят на этом
+		// единственном вызове, а не в каждом EventLoop.HandleManualTrigger через Find(stage, keys).
+		var identity = new InstanceIdentity(registry.Get(stageName), keys, registry.ExpectedKeyNames(stageName));
 		var tcs = new TaskCompletionSource<TriggerResult>(TaskCreationOptions.RunContinuationsAsynchronously);
-		var evt = new ManualTriggerRequestedEvent(stageName, keys, tcs);
+		var evt = new ManualTriggerRequestedEvent(identity, tcs);
 		try {
 			await channel.Writer.WriteAsync(evt, ct).ConfigureAwait(false);
 		} catch (ChannelClosedException) {

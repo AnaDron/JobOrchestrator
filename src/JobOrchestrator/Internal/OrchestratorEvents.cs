@@ -6,10 +6,14 @@ internal abstract record OrchestratorEvent;
 /// <summary>Auto-тик для конкретного инстанса. Публикуется <see cref="DueScanner"/> при наступлении <c>NextAutoUtc</c>.</summary>
 internal sealed record TimerTickedEvent(Instance Instance) : OrchestratorEvent;
 
-/// <summary>Запрос ручного триггера снаружи (через <see cref="IJobOrchestrator.TriggerAsync"/>).</summary>
+/// <summary>
+/// Запрос ручного триггера снаружи (через <see cref="IJobOrchestrator.TriggerAsync"/>).
+/// <see cref="Identity"/> уже валидирован в <c>JobOrchestratorRuntime</c> (stage существует в графе,
+/// keys соответствуют <c>ExpectedKeyNames</c>) и pre-computed encoded-key — event-loop делает прямой
+/// <c>instances.Find(Identity)</c>, без повторного encode на каждый trigger.
+/// </summary>
 internal sealed record ManualTriggerRequestedEvent(
-	string StageName,
-	IReadOnlyDictionary<string, string> DependencyKeys,
+	InstanceIdentity Identity,
 	TaskCompletionSource<TriggerResult> Tcs
 ) : OrchestratorEvent;
 
