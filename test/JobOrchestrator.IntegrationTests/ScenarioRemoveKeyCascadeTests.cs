@@ -40,7 +40,7 @@ public sealed class ScenarioRemoveKeyCascadeTests {
 			(await documentsFake.WaitForCallCountAsync(2, Timeout).ConfigureAwait(false)).Should().BeTrue("оба uuid каскадируются вниз");
 
 			var orchestrator = host.Services.GetRequiredService<IJobOrchestrator>();
-			orchestrator.UnregisterKey("shops", "u1");
+			orchestrator["shops"].UnregisterKey("u1");
 
 			// Signal-based wait: каскадное удаление завершилось, когда u1-инстансы исчезли из overview.
 			(await TestSync.WaitForAsync(async () => {

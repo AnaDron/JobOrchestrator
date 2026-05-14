@@ -56,10 +56,11 @@ var orchestrator = host.Services.GetRequiredService<IJobOrchestrator>();
 await host.StartAsync();
 
 // Bootstrap keyspace из «БД» — типовой production-сценарий, когда оркестратор подхватывает
-// набор объектов, который уже существует, и не ждёт первого producer-успеха для their обнаружения.
+// набор объектов, который уже существует, и не ждёт первого producer-успеха для их обнаружения.
 Console.WriteLine("\n=== Bootstrap: RegisterKey для существующих объектов ===");
+var producer = orchestrator["producer"];
 foreach (var shopId in new[] { "shop-100", "shop-200", "shop-300" }) {
-	orchestrator.RegisterKey("producer", shopId);
+	producer.RegisterKey(shopId);
 }
 
 await Task.Delay(TimeSpan.FromSeconds(5));
@@ -72,10 +73,9 @@ foreach (var info in overview.Instances.OrderBy(i => i.FullyQualifiedName, Strin
 }
 Console.WriteLine();
 
-// Manual trigger конкретного инстанса.
+// Manual trigger конкретного инстанса — handle-API через индексатор.
 Console.WriteLine("=== Manual trigger reporter[producer=shop-100] ===");
-var result = await orchestrator.TriggerAsync("reporter",
-	new Dictionary<string, string>(StringComparer.Ordinal) { ["producer"] = "shop-100" });
+var result = await orchestrator["reporter"][("producer", "shop-100")].TriggerAsync();
 Console.WriteLine($"  result = {result}");
 
 await Task.Delay(TimeSpan.FromSeconds(3));

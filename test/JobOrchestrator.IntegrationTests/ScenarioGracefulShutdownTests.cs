@@ -21,7 +21,7 @@ public sealed class ScenarioGracefulShutdownTests {
 		// После shutdown TriggerAsync должен либо вернуться Faulted (Channel closed), либо завершиться быстро (<1сек).
 		// Используем CancellationToken с таймаутом для защиты от подвисания.
 		using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
-		var result = await orchestrator.TriggerAsync("a", null, cts.Token).ConfigureAwait(false);
+		var result = await orchestrator["a"][InstanceKey.None].TriggerAsync(cts.Token).ConfigureAwait(false);
 		result.Should().Be(TriggerResult.Faulted);
 	}
 
@@ -40,7 +40,7 @@ public sealed class ScenarioGracefulShutdownTests {
 		await host.StartAsync().ConfigureAwait(false);
 		await host.StopAsync().ConfigureAwait(false);
 
-		Action act = () => orchestrator.RegisterKey("a", "key1");
+		Action act = () => orchestrator["a"].RegisterKey("key1");
 		// Либо silent (NotThrow), либо InvalidOperationException — оба ОК.
 		try { act(); } catch (InvalidOperationException) { /* допустимо */ }
 	}

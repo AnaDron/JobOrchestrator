@@ -41,6 +41,50 @@ services.AddInMemoryJobStateStore();
 
 `ProducerService` через `ctx.AddKey("k1")` регистрирует ключ — SDK немедленно создаёт инстанс `consumer[producer=k1]` и ставит в очередь.
 
+## Handle-API
+
+Внешние операции (manual trigger, bootstrap keyspace, диагностика, wait) идут через композицию индексаторов:
+
+```csharp
+// Bootstrap keyspace для keyless-эмитера:
+orchestrator["producer"].RegisterKey("k1");
+orchestrator["producer"].UnregisterKey("k1");
+
+// Ручной trigger:
+await orchestrator["producer"][InstanceKey.None].TriggerAsync();
+await orchestrator["consumer"][("producer", "k1")].TriggerAsync();
+
+// Состояние / диагностика конкретного инстанса:
+var state = orchestrator["consumer"][("producer", "k1")].State;
+var snapshot = orchestrator["consumer"][("producer", "k1")].Snapshot;
+
+// Ожидание исхода:
+await orchestrator["consumer"][("producer", "k1")].WaitForSuccessAsync(ct);
+var outcome = await orchestrator["consumer"][("producer", "k1")].WaitForOutcomeAsync(ct);
+
+// Итерация всех инстансов одной стадии:
+foreach (var h in orchestrator["consumer"].AllInstances) {
+    Console.WriteLine($"{h.FullyQualifiedName}: {h.State}");
+}
+
+// Итерация всех зарегистрированных стадий (IJobOrchestrator : IEnumerable<IStageHandle>):
+foreach (var stage in orchestrator) { /* ... */ }
+```
+
+**Composite keys** (2+ компонента) — через tuple-индексатор или span-params:
+```csharp
+orchestrator["docs"][("shops", "u1"), ("currencies", "USD")].TriggerAsync();
+```
+
+**Кэширование handles в hot-path**: indexer-вызовы создают per-call аллокации. Для polling-сценариев кэшируйте handle локально:
+```csharp
+var h = orchestrator["consumer"][("producer", "k1")];  // один раз
+while (running) {
+    var state = h.State;                                 // re-uses cached identity
+    await Task.Delay(...);
+}
+```
+
 ## Концепции
 
 SDK оперирует тремя сущностями: **Stage** (immutable декларация в Fluent API), **StageInstance** (long-lived runtime-экземпляр с композитным ключом), **Job** (одна итерация = один вызов `IJobService.ExecuteAsync`). Соотношение `Stage:Instance = 1:N`, `Instance:Job = 1:M`. Подробный разбор и иллюстрация на Эвотор-сценарии — в [docs/concepts.md](docs/concepts.md).

@@ -7,19 +7,13 @@ namespace JobOrchestrator.Internal;
 /// <summary>
 /// Реализация <see cref="IJobOrchestrator"/>: фасад поверх event loop'а.
 /// <para>
-/// Новый handle-API (<see cref="IJobOrchestrator.this[string]"/> → <see cref="IStageHandle"/> →
-/// <see cref="IInstanceHandle"/>) — primary surface; flat-методы (TriggerAsync(stageName, …) и т.п.)
-/// сохранены как <c>[Obsolete]</c> для backward-compatibility и будут удалены в следующей мажорной.
+/// Surface — handle-API: <see cref="this[string]"/> возвращает cached <see cref="StageHandle"/>,
+/// далее indexer-композиция → <see cref="InstanceHandle"/>. Все mutation-операции (Trigger/Register*/WaitFor*)
+/// делегируют в internal-методы этого класса.
 /// </para>
-/// <list type="bullet">
-/// <item><c>TriggerAsync(Identity)</c>: публикация <see cref="ManualTriggerRequestedEvent"/> в Channel, await TCS.</item>
-/// <item><c>Register/UnregisterKey(stageName)</c>: проверка существования стадии → публикация <see cref="KeyAddedEvent"/>/<see cref="KeyRemovedEvent"/>.</item>
-/// <item><c>GetOverview</c>: синхронный snapshot через atomic-reads <see cref="Instance"/>-полей. Lock-free, без RPC. Доступен и в Faulted (для диагностики).</item>
-/// </list>
 /// </summary>
 internal sealed class JobOrchestratorRuntime : IJobOrchestrator {
 	private readonly Channel<OrchestratorEvent> _channel;
-	private readonly StageRegistry _registry;
 	private readonly InstanceManager _instances;
 	private readonly OrchestratorLifecycle _lifecycle;
 	private readonly SuccessWaiters _successWaiters;
@@ -37,7 +31,6 @@ internal sealed class JobOrchestratorRuntime : IJobOrchestrator {
 		ILogger<JobOrchestratorRuntime> logger
 	) {
 		_channel = channel;
-		_registry = registry;
 		_instances = instances;
 		_lifecycle = lifecycle;
 		_successWaiters = successWaiters;
@@ -75,11 +68,11 @@ internal sealed class JobOrchestratorRuntime : IJobOrchestrator {
 
 	public InstancesOverview GetOverview() => _instances.Snapshot();
 
-	#region Identity-based primary API (используется handle-API)
+	#region Internal API — вызывается StageHandle / InstanceHandle
 
 	/// <summary>
-	/// Identity-based trigger: identity уже валидирован при создании handle (через <see cref="StageRegistry"/>),
-	/// поэтому валидация ключей не повторяется. Семантика идентична flat-варианту.
+	/// Identity-based trigger: identity уже валидирован в StageHandle-indexer (проверка key-names
+	/// против ExpectedKeyNames), поэтому валидация ключей здесь не повторяется.
 	/// </summary>
 	internal async Task<TriggerResult> TriggerAsync(InstanceIdentity identity, CancellationToken ct = default) {
 		if (_lifecycle.IsFaulted) {
@@ -119,118 +112,44 @@ internal sealed class JobOrchestratorRuntime : IJobOrchestrator {
 
 	internal ICollection<Instance> InstancesOf(StageDescriptor stage) => _instances.InstancesOf(stage);
 
-	#endregion
-
-	#region Public flat-API (handle-API — primary; flat — [Obsolete] для transition)
-
-	[Obsolete("Используйте orchestrator[stageName][keys].TriggerAsync(). Будет удалён в следующей мажорной версии.", DiagnosticId = "JOB001")]
-	public async Task<TriggerResult> TriggerAsync(
-		string stageName,
-		IReadOnlyDictionary<string, string>? dependencyKeys = null,
-		CancellationToken ct = default
-	) {
-		ArgumentException.ThrowIfNullOrEmpty(stageName);
-		if (_lifecycle.IsFaulted) {
-			Log.TriggerFaulted(_logger, stageName, null);
-			return TriggerResult.Faulted;
-		}
-		if (!_registry.TryGet(stageName, out var stage)) {
-			Log.TriggerNotFound(_logger, stageName, null);
-			return TriggerResult.NotFound;
-		}
-		if (!ValidateKeys(stage!.ExpectedKeyNames, dependencyKeys)) {
-			Log.TriggerInvalidKeys(_logger, stageName, null);
-			return TriggerResult.InvalidKeys;
-		}
-		return await TriggerAsync(new InstanceIdentity(stage, dependencyKeys), ct).ConfigureAwait(false);
-	}
-
-	public void RegisterKey(string stageName, string key) {
-		ArgumentException.ThrowIfNullOrEmpty(stageName);
+	/// <summary>
+	/// Внешний bootstrap keyspace для keyless-эмитера. Работает только для стадий без
+	/// <c>DependsOnInstance</c>-зависимостей. Вызывается из <see cref="StageHandle.RegisterKey"/>.
+	/// </summary>
+	internal void RegisterKey(StageDescriptor stage, string key) {
 		ArgumentException.ThrowIfNullOrEmpty(key);
 		ThrowIfFaulted();
-		var source = ResolveKeylessSource(stageName);
-		Log.RegisterKeyExternal(_logger, stageName, key, null);
+		var source = ResolveKeylessSource(stage);
+		Log.RegisterKeyExternal(_logger, stage.Name, key, null);
 		_channel.Writer.Publish(new KeyAddedEvent(source, key));
 	}
 
-	public void UnregisterKey(string stageName, string key) {
-		ArgumentException.ThrowIfNullOrEmpty(stageName);
+	internal void UnregisterKey(StageDescriptor stage, string key) {
 		ArgumentException.ThrowIfNullOrEmpty(key);
 		ThrowIfFaulted();
-		var source = ResolveKeylessSource(stageName);
-		Log.UnregisterKeyExternal(_logger, stageName, key, null);
+		var source = ResolveKeylessSource(stage);
+		Log.UnregisterKeyExternal(_logger, stage.Name, key, null);
 		_channel.Writer.Publish(new KeyRemovedEvent(source, key));
 	}
-
-	[Obsolete("Используйте orchestrator[stageName][keys].WaitForSuccessAsync(). Будет удалён в следующей мажорной версии.", DiagnosticId = "JOB002")]
-	public Task WaitForStageSuccessAsync(
-		string stageName,
-		IReadOnlyDictionary<string, string>? dependencyKeys = null,
-		CancellationToken ct = default
-	) => WaitForStageSuccessAsync(ResolveIdentity(stageName, dependencyKeys), ct);
-
-	[Obsolete("Используйте orchestrator[stageName][keys].WaitForOutcomeAsync(). Будет удалён в следующей мажорной версии.", DiagnosticId = "JOB003")]
-	public Task<StageOutcome> WaitForStageOutcomeAsync(
-		string stageName,
-		IReadOnlyDictionary<string, string>? dependencyKeys = null,
-		CancellationToken ct = default
-	) => WaitForStageOutcomeAsync(ResolveIdentity(stageName, dependencyKeys), ct);
 
 	#endregion
 
 	/// <summary>
-	/// Резолвит keyless-инстанс стадии для внешнего <see cref="RegisterKey"/>/<see cref="UnregisterKey"/>.
-	/// Работает только для стадий без <c>DependsOnInstance</c>-зависимостей (там нет ambiguity, какой
-	/// инстанс-эмитер использовать как Source). Для ключевых стадий — InvalidOperationException
-	/// (BL должна использовать <see cref="JobContext.AddKey"/> изнутри сервиса).
+	/// Резолвит keyless-инстанс стадии для внешнего RegisterKey/UnregisterKey. Бросает
+	/// <see cref="InvalidOperationException"/> для стадий с <c>DependsOnInstance</c>-зависимостями
+	/// (там нет ambiguity-free Source) и для стадий, чей keyless-инстанс ещё не создан bootstrap-ом.
 	/// </summary>
-	private Instance ResolveKeylessSource(string stageName) {
-		if (!_registry.TryGet(stageName, out var stage)) {
-			throw new ArgumentException($"Стадия '{stageName}' не зарегистрирована в графе.", nameof(stageName));
-		}
-		if (stage!.ExpectedKeyNames.Count != 0) {
+	private Instance ResolveKeylessSource(StageDescriptor stage) {
+		if (stage.ExpectedKeyNames.Count != 0) {
 			throw new InvalidOperationException(
-				$"Стадия '{stageName}' имеет ключевые зависимости. Внешний RegisterKey/UnregisterKey работает только для keyless-эмитеров; используйте JobContext.AddKey/RemoveKey из ExecuteAsync.");
+				$"Стадия '{stage.Name}' имеет ключевые зависимости. Внешний RegisterKey/UnregisterKey работает только для keyless-эмитеров; используйте JobContext.AddKey/RemoveKey из ExecuteAsync.");
 		}
 		var source = _instances.Find(new InstanceIdentity(stage));
 		if (source is null) {
 			throw new InvalidOperationException(
-				$"Keyless-инстанс для стадии '{stageName}' ещё не создан (оркестратор не стартован?).");
+				$"Keyless-инстанс для стадии '{stage.Name}' ещё не создан (оркестратор не стартован?).");
 		}
 		return source;
-	}
-
-	/// <summary>
-	/// Резолвит <see cref="InstanceIdentity"/> с валидацией: stage существует в графе, набор ключей
-	/// соответствует <see cref="StageDescriptor.ExpectedKeyNames"/>. Используется flat-обёртками
-	/// WaitFor-методов.
-	/// </summary>
-	private InstanceIdentity ResolveIdentity(string stageName, IReadOnlyDictionary<string, string>? dependencyKeys) {
-		ArgumentException.ThrowIfNullOrEmpty(stageName);
-		if (!_registry.TryGet(stageName, out var stage)) {
-			throw new ArgumentException($"Стадия '{stageName}' не зарегистрирована в графе.", nameof(stageName));
-		}
-		if (!ValidateKeys(stage!.ExpectedKeyNames, dependencyKeys)) {
-			throw new ArgumentException(
-				$"Набор ключей для стадии '{stageName}' не соответствует ExpectedKeyNames.",
-				nameof(dependencyKeys));
-		}
-		return new InstanceIdentity(stage, dependencyKeys);
-	}
-
-	/// <summary>
-	/// Проверяет, что набор имён ключей соответствует ожидаемым именам, включая транзитивно унаследованные
-	/// через цепочку <c>DependsOn</c>-родителей (см. <see cref="StageDescriptor.ExpectedKeyNames"/>).
-	/// <paramref name="keys"/> = <c>null</c> трактуется как пустой словарь — валидно только для keyless-стадий.
-	/// </summary>
-	private static bool ValidateKeys(IReadOnlyList<string> expected, IReadOnlyDictionary<string, string>? keys) {
-		if (keys is null) return expected.Count == 0;
-		if (keys.Count != expected.Count) return false;
-		foreach (var name in expected) {
-			if (!keys.ContainsKey(name)) return false;
-		}
-		return true;
 	}
 
 	private void ThrowIfFaulted() {
@@ -240,8 +159,8 @@ internal sealed class JobOrchestratorRuntime : IJobOrchestrator {
 	}
 
 	/// <summary>
-	/// Pre-allocated LoggerMessage-делегаты для внешнего API (TriggerAsync/RegisterKey/UnregisterKey).
-	/// EventId-ы 6xxx — диапазон Runtime. Operational visibility: видно кто и когда дёргал manual-triggers.
+	/// Pre-allocated LoggerMessage-делегаты для внешнего API. EventId-ы 6xxx — диапазон Runtime.
+	/// Operational visibility: видно кто и когда дёргал manual-triggers.
 	/// </summary>
 	private static class Log {
 		public static readonly Action<ILogger, string, TriggerResult, Exception?> TriggerCompleted =
@@ -251,14 +170,6 @@ internal sealed class JobOrchestratorRuntime : IJobOrchestrator {
 		public static readonly Action<ILogger, string, Exception?> TriggerFaulted =
 			LoggerMessage.Define<string>(LogLevel.Debug, new EventId(6002, nameof(TriggerFaulted)),
 				"TriggerAsync({StageName}) → Faulted (оркестратор крашнулся)");
-
-		public static readonly Action<ILogger, string, Exception?> TriggerNotFound =
-			LoggerMessage.Define<string>(LogLevel.Warning, new EventId(6003, nameof(TriggerNotFound)),
-				"TriggerAsync({StageName}) → NotFound (стадия не зарегистрирована или инстанс не существует)");
-
-		public static readonly Action<ILogger, string, Exception?> TriggerInvalidKeys =
-			LoggerMessage.Define<string>(LogLevel.Warning, new EventId(6004, nameof(TriggerInvalidKeys)),
-				"TriggerAsync({StageName}) → InvalidKeys (набор ключей не соответствует ExpectedKeyNames стадии)");
 
 		public static readonly Action<ILogger, string, string, Exception?> RegisterKeyExternal =
 			LoggerMessage.Define<string, string>(LogLevel.Information, new EventId(6005, nameof(RegisterKeyExternal)),

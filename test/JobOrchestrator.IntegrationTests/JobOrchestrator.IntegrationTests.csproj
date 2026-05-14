@@ -3,8 +3,7 @@
     <RootNamespace>JobOrchestrator.IntegrationTests</RootNamespace>
     <AssemblyName>JobOrchestrator.IntegrationTests</AssemblyName>
     <IsPackable>false</IsPackable>
-    <!-- JOB001-005: flat-API deprecation — существующие сценарии используют [Obsolete]-методы намеренно. -->
-    <NoWarn>$(NoWarn);CA1707;CA1806;CA2016;xUnit1030;JOB001;JOB002;JOB003;JOB004;JOB005</NoWarn>
+    <NoWarn>$(NoWarn);CA1707;CA1806;CA2016;xUnit1030</NoWarn>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="FluentAssertions" Version="8.9.0" />

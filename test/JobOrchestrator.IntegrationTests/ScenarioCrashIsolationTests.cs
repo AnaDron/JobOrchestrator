@@ -24,7 +24,7 @@ public sealed class ScenarioCrashIsolationTests {
 			lifecycle.MarkFaulted();
 			orchestrator.IsFaulted.Should().BeTrue();
 
-			var result = await orchestrator.TriggerAsync("a").ConfigureAwait(false);
+			var result = await orchestrator["a"][InstanceKey.None].TriggerAsync().ConfigureAwait(false);
 			result.Should().Be(TriggerResult.Faulted);
 		} finally {
 			await host.StopAsync().ConfigureAwait(false);
@@ -42,10 +42,10 @@ public sealed class ScenarioCrashIsolationTests {
 		try {
 			host.Services.GetRequiredService<OrchestratorLifecycle>().MarkFaulted();
 
-			Action register = () => orchestrator.RegisterKey("a", "k1");
+			Action register = () => orchestrator["a"].RegisterKey("k1");
 			register.Should().Throw<InvalidOperationException>();
 
-			Action unregister = () => orchestrator.UnregisterKey("a", "k1");
+			Action unregister = () => orchestrator["a"].UnregisterKey("k1");
 			unregister.Should().Throw<InvalidOperationException>();
 		} finally {
 			await host.StopAsync().ConfigureAwait(false);
@@ -72,7 +72,7 @@ public sealed class ScenarioCrashIsolationTests {
 			orchestrator.IsFaulted.Should().BeTrue();
 
 			// Но мутирующие операции — throws.
-			Action register = () => orchestrator.RegisterKey("a", "k1");
+			Action register = () => orchestrator["a"].RegisterKey("k1");
 			register.Should().Throw<InvalidOperationException>();
 		} finally {
 			await host.StopAsync().ConfigureAwait(false);
@@ -140,7 +140,7 @@ public sealed class ScenarioCrashIsolationTests {
 		try {
 			(await pgFake.WaitForCallCountAsync(1, Timeout).ConfigureAwait(false)).Should().BeTrue();
 
-			orchestrator.UnregisterKey("shops", "u1");
+			orchestrator["shops"].UnregisterKey("u1");
 			await Task.Delay(300).ConfigureAwait(false);
 
 			// Event loop жив, орchestratorфункционален несмотря на исключение store-а.

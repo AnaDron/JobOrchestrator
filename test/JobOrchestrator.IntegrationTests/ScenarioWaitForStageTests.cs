@@ -19,7 +19,7 @@ public sealed class ScenarioWaitForStageTests {
 		var orchestrator = host.Services.GetRequiredService<IJobOrchestrator>();
 		await host.StartAsync().ConfigureAwait(false);
 		try {
-			var waitTask = orchestrator.WaitForStageSuccessAsync("a");
+			var waitTask = orchestrator["a"][InstanceKey.None].WaitForSuccessAsync();
 			await waitTask.WaitAsync(Timeout).ConfigureAwait(false);
 			fake.CallCount.Should().BeGreaterThan(0);
 		} finally {
@@ -42,7 +42,7 @@ public sealed class ScenarioWaitForStageTests {
 			// Дать event loop'у обработать StageCompleted.
 			await Task.Delay(100).ConfigureAwait(false);
 
-			var alreadyCompleted = orchestrator.WaitForStageSuccessAsync("a");
+			var alreadyCompleted = orchestrator["a"][InstanceKey.None].WaitForSuccessAsync();
 			alreadyCompleted.IsCompletedSuccessfully.Should().BeTrue(
 				"fast-path: LastSuccess уже выставлен → SignalSuccess сразу резолвит");
 		} finally {
@@ -60,7 +60,7 @@ public sealed class ScenarioWaitForStageTests {
 		var orchestrator = host.Services.GetRequiredService<IJobOrchestrator>();
 		await host.StartAsync().ConfigureAwait(false);
 		try {
-			var outcomeTask = orchestrator.WaitForStageOutcomeAsync("a");
+			var outcomeTask = orchestrator["a"][InstanceKey.None].WaitForOutcomeAsync();
 			var outcome = await outcomeTask.WaitAsync(Timeout).ConfigureAwait(false);
 			outcome.Kind.Should().Be(StageOutcomeKind.Success);
 			outcome.Exception.Should().BeNull();
@@ -84,7 +84,7 @@ public sealed class ScenarioWaitForStageTests {
 		var orchestrator = host.Services.GetRequiredService<IJobOrchestrator>();
 		await host.StartAsync().ConfigureAwait(false);
 		try {
-			var outcome = await orchestrator.WaitForStageOutcomeAsync("a").WaitAsync(Timeout).ConfigureAwait(false);
+			var outcome = await orchestrator["a"][InstanceKey.None].WaitForOutcomeAsync().WaitAsync(Timeout).ConfigureAwait(false);
 			outcome.Kind.Should().Be(StageOutcomeKind.Failure);
 			outcome.Exception.Should().NotBeNull();
 			outcome.Exception!.Message.Should().Contain("planned failure");
@@ -125,9 +125,8 @@ public sealed class ScenarioWaitForStageTests {
 		try {
 			(await pgFake.WaitForCallCountAsync(1, Timeout).ConfigureAwait(false)).Should().BeTrue("pg должен начать выполняться");
 
-			var waitTask = orchestrator.WaitForStageSuccessAsync("pg",
-				new Dictionary<string, string>(StringComparer.Ordinal) { ["shops"] = "u1" });
-			orchestrator.UnregisterKey("shops", "u1");
+			var waitTask = orchestrator["pg"][("shops", "u1")].WaitForSuccessAsync();
+			orchestrator["shops"].UnregisterKey("u1");
 
 			Func<Task> awaitWaiter = async () => await waitTask.WaitAsync(Timeout).ConfigureAwait(false);
 			(await awaitWaiter.Should().ThrowAsync<InvalidOperationException>().ConfigureAwait(false))
@@ -146,8 +145,8 @@ public sealed class ScenarioWaitForStageTests {
 		var orchestrator = host.Services.GetRequiredService<IJobOrchestrator>();
 		await host.StartAsync().ConfigureAwait(false);
 		try {
-			Func<Task> act = async () => await orchestrator.WaitForStageSuccessAsync("nonexistent").ConfigureAwait(false);
-			await act.Should().ThrowAsync<ArgumentException>().ConfigureAwait(false);
+			Action act = () => _ = orchestrator["nonexistent"];
+			act.Should().Throw<ArgumentException>();
 		} finally {
 			await host.StopAsync().ConfigureAwait(false);
 		}
@@ -162,9 +161,8 @@ public sealed class ScenarioWaitForStageTests {
 		var orchestrator = host.Services.GetRequiredService<IJobOrchestrator>();
 		await host.StartAsync().ConfigureAwait(false);
 		try {
-			Func<Task> act = async () => await orchestrator.WaitForStageSuccessAsync("a",
-				new Dictionary<string, string>(StringComparer.Ordinal) { ["unexpected"] = "x" }).ConfigureAwait(false);
-			await act.Should().ThrowAsync<ArgumentException>().ConfigureAwait(false);
+			Action act = () => _ = orchestrator["a"][("unexpected", "x")];
+			act.Should().Throw<ArgumentException>();
 		} finally {
 			await host.StopAsync().ConfigureAwait(false);
 		}
@@ -186,7 +184,7 @@ public sealed class ScenarioWaitForStageTests {
 		await host.StartAsync().ConfigureAwait(false);
 		try {
 			using var cts = new CancellationTokenSource();
-			var waitTask = orchestrator.WaitForStageSuccessAsync("a", null, cts.Token);
+			var waitTask = orchestrator["a"][InstanceKey.None].WaitForSuccessAsync(cts.Token);
 			cts.Cancel();
 			Func<Task> act = async () => await waitTask.ConfigureAwait(false);
 			await act.Should().ThrowAsync<OperationCanceledException>().ConfigureAwait(false);

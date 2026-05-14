@@ -35,7 +35,7 @@ public sealed class ScenarioRegisterKeyTests {
 			await Task.Delay(100).ConfigureAwait(false);
 
 			// Внешний RegisterKey должен спавнить pg-инстанс.
-			orchestrator.RegisterKey("shops", "external-uuid-1");
+			orchestrator["shops"].RegisterKey("external-uuid-1");
 			(await pgFake.WaitForCallCountAsync(1, Timeout).ConfigureAwait(false)).Should().BeTrue();
 			pgFake.Calls[0].DependencyKeys.Should().ContainKey("shops").WhoseValue.Should().Be("external-uuid-1");
 		} finally {
@@ -44,10 +44,10 @@ public sealed class ScenarioRegisterKeyTests {
 	}
 
 	[Fact]
-	public async Task RegisterKey_UnknownStage_ThrowsArgumentException() {
-		// Новый контракт: RegisterKey/UnregisterKey проверяют существование стадии и бросают ArgumentException
-		// сразу, не публикуя бессмысленное событие в event loop. Раньше тут было silently log-warn — мы
-		// сменили на throw, потому что неизвестная стадия — это всегда баг в коде вызывающего.
+	public async Task Indexer_UnknownStage_ThrowsArgumentException() {
+		// Handle-API: индексатор сам проверяет существование стадии и бросает ArgumentException
+		// до того, как мы доберёмся до RegisterKey. Замена раннего log-warn на fail-fast: неизвестная
+		// стадия — это всегда баг в коде вызывающего.
 		using var host = TestHostFactory.Build(
 			configure: jobs => jobs.Stage("a").HandledBy<FakeServiceA>().RunPeriodically(TimeSpan.FromMinutes(1)),
 			registerFakes: s => s.AddSingleton<FakeServiceA>());
@@ -55,7 +55,7 @@ public sealed class ScenarioRegisterKeyTests {
 		await host.StartAsync().ConfigureAwait(false);
 		try {
 			var orchestrator = host.Services.GetRequiredService<IJobOrchestrator>();
-			Action act = () => orchestrator.RegisterKey("nonexistent-stage", "k1");
+			Action act = () => _ = orchestrator["nonexistent-stage"];
 			act.Should().Throw<ArgumentException>().WithMessage("*nonexistent-stage*");
 		} finally {
 			await host.StopAsync().ConfigureAwait(false);

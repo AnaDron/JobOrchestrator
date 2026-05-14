@@ -6,15 +6,18 @@ public sealed class ScenarioManualTriggerTests {
 	private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(5);
 
 	[Fact]
-	public async Task TriggerAsync_UnknownInstance_ReturnsNotFound() {
+	public async Task Indexer_UnknownStage_ThrowsArgumentException() {
+		// Handle-API даёт более точную семантику чем старый flat TriggerAsync("nonexistent"):
+		// stage-name резолвится в индексаторе → unknown-stage = ArgumentException на construction,
+		// а не TriggerResult.NotFound на execution.
 		using var host = TestHostFactory.Build(
 			configure: jobs => jobs.Stage("a").HandledBy<FakeServiceA>().RunPeriodically(TimeSpan.FromHours(1)),
 			registerFakes: s => s.AddSingleton<FakeServiceA>());
 		await host.StartAsync().ConfigureAwait(false);
 		try {
 			var orchestrator = host.Services.GetRequiredService<IJobOrchestrator>();
-			var result = await orchestrator.TriggerAsync("nonexistent").ConfigureAwait(false);
-			result.Should().Be(TriggerResult.NotFound);
+			Action act = () => _ = orchestrator["nonexistent"];
+			act.Should().Throw<ArgumentException>().WithMessage("*nonexistent*");
 		} finally {
 			await host.StopAsync().ConfigureAwait(false);
 		}
@@ -46,7 +49,7 @@ public sealed class ScenarioManualTriggerTests {
 			await Task.Delay(200).ConfigureAwait(false);
 
 			var orchestrator = host.Services.GetRequiredService<IJobOrchestrator>();
-			var result = await orchestrator.TriggerAsync("a").ConfigureAwait(false);
+			var result = await orchestrator["a"][InstanceKey.None].TriggerAsync().ConfigureAwait(false);
 			result.Should().Be(TriggerResult.Started, "Manual игнорирует retry-delay");
 
 			(await fake.WaitForCallCountAsync(2, Timeout).ConfigureAwait(false)).Should().BeTrue();
@@ -82,10 +85,10 @@ public sealed class ScenarioManualTriggerTests {
 				.Should().BeTrue("products[shops=u1] должен пробуститься после каскада");
 
 			var orchestrator = host.Services.GetRequiredService<IJobOrchestrator>();
-			// Manual triggered c унаследованным ключом — раньше валидация отбрасывала это как InvalidKeys.
-			var result = await orchestrator.TriggerAsync("products",
-				new Dictionary<string, string>(StringComparer.Ordinal) { ["shops"] = "u1" }).ConfigureAwait(false);
-			result.Should().NotBe(TriggerResult.InvalidKeys, "inherited key через DependsOn должен валидироваться корректно");
+			// Manual triggered c унаследованным ключом — handle-API валидирует key-names против
+			// ExpectedKeyNames стадии (которая включает транзитивные через DependsOn → у products
+			// есть `shops`-измерение из productGroups).
+			var result = await orchestrator["products"][("shops", "u1")].TriggerAsync().ConfigureAwait(false);
 			result.Should().BeOneOf(TriggerResult.Started, TriggerResult.Debounced, TriggerResult.AlreadyRunning);
 		} finally {
 			await host.StopAsync().ConfigureAwait(false);
@@ -93,8 +96,9 @@ public sealed class ScenarioManualTriggerTests {
 	}
 
 	[Fact]
-	public async Task TriggerAsync_KeysNotMatchingExpected_ReturnsInvalidKeys() {
-		// Keyless-стадия не должна принимать ключи; и наоборот, ключевая — не принимать пустой dict.
+	public async Task Indexer_KeylessWithUnexpectedKey_ThrowsArgumentException() {
+		// Keyless-стадия + попытка передать key → fail-fast в handle-construction (handle-API
+		// заменил runtime InvalidKeys-семантику на compile-time-like ArgumentException).
 		using var host = TestHostFactory.Build(
 			configure: jobs => jobs.Stage("keyless").HandledBy<FakeServiceA>().RunPeriodically(TimeSpan.FromHours(1)),
 			registerFakes: s => s.AddSingleton<FakeServiceA>());
@@ -102,9 +106,8 @@ public sealed class ScenarioManualTriggerTests {
 		await host.StartAsync().ConfigureAwait(false);
 		try {
 			var orchestrator = host.Services.GetRequiredService<IJobOrchestrator>();
-			var result = await orchestrator.TriggerAsync("keyless",
-				new Dictionary<string, string>(StringComparer.Ordinal) { ["unexpected"] = "x" }).ConfigureAwait(false);
-			result.Should().Be(TriggerResult.InvalidKeys);
+			Action act = () => _ = orchestrator["keyless"][("unexpected", "x")];
+			act.Should().Throw<ArgumentException>();
 		} finally {
 			await host.StopAsync().ConfigureAwait(false);
 		}
@@ -127,7 +130,7 @@ public sealed class ScenarioManualTriggerTests {
 			await Task.Delay(200).ConfigureAwait(false);
 
 			var orchestrator = host.Services.GetRequiredService<IJobOrchestrator>();
-			var result = await orchestrator.TriggerAsync("a").ConfigureAwait(false);
+			var result = await orchestrator["a"][InstanceKey.None].TriggerAsync().ConfigureAwait(false);
 			result.Should().Be(TriggerResult.Debounced);
 		} finally {
 			await host.StopAsync().ConfigureAwait(false);

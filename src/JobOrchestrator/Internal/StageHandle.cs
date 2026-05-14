@@ -48,8 +48,8 @@ internal sealed record class StageHandle(JobOrchestratorRuntime Runtime, StageDe
 		}
 	}
 
-	public void RegisterKey(string key) => Runtime.RegisterKey(Stage.Name, key);
-	public void UnregisterKey(string key) => Runtime.UnregisterKey(Stage.Name, key);
+	public void RegisterKey(string key) => Runtime.RegisterKey(Stage, key);
+	public void UnregisterKey(string key) => Runtime.UnregisterKey(Stage, key);
 
 	public IReadOnlyList<IInstanceHandle> AllInstances {
 		get {

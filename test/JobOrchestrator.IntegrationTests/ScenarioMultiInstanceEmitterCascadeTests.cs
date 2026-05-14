@@ -72,7 +72,7 @@ public sealed class ScenarioMultiInstanceEmitterCascadeTests {
 
 			// Удаляем регион EU. По цепочке: shops[regions=EU] cascade'нется, и от него же
 			// удалится bucket с ключом "eu-1" → products[regions=EU,shops=eu-1] тоже cascade'нется.
-			orchestrator.UnregisterKey("regions", "EU");
+			orchestrator["regions"].UnregisterKey("EU");
 
 			// Дать event loop'у обработать каскад.
 			var settled = await TestSync.WaitForAsync(() => {

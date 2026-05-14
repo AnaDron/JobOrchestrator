@@ -38,9 +38,9 @@ public sealed class ScenarioConcurrentStressTests {
 						string key = $"w{worker}-k{j % 10}";
 						try {
 							switch (j % 4) {
-								case 0: orchestrator.RegisterKey("producer", key); break;
-								case 1: await orchestrator.TriggerAsync("producer", null, stopCts.Token).ConfigureAwait(false); break;
-								case 2: orchestrator.UnregisterKey("producer", key); break;
+								case 0: orchestrator["producer"].RegisterKey(key); break;
+								case 1: await orchestrator["producer"][InstanceKey.None].TriggerAsync(stopCts.Token).ConfigureAwait(false); break;
+								case 2: orchestrator["producer"].UnregisterKey(key); break;
 								case 3: orchestrator.GetOverview(); break;
 							}
 						} catch (OperationCanceledException) {
@@ -103,8 +103,8 @@ public sealed class ScenarioConcurrentStressTests {
 			tasks.Add(Task.Run(() => {
 				for (int j = 0; j < 50; j++) {
 					string k = keys[j % 3];
-					if (j % 2 == 0) orchestrator.RegisterKey("producer", k);
-					else orchestrator.UnregisterKey("producer", k);
+					if (j % 2 == 0) orchestrator["producer"].RegisterKey(k);
+					else orchestrator["producer"].UnregisterKey(k);
 				}
 			}));
 		}
