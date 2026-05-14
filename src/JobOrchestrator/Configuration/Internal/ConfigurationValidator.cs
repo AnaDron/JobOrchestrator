@@ -25,12 +25,11 @@ namespace JobOrchestrator.Configuration.Internal;
 /// </summary>
 internal static class ConfigurationValidator {
 	/// <summary>Полная валидация со стороны pipeline: per-stage конфиг + structural.</summary>
-	public static void Validate(IReadOnlyList<StageBuilder> builders) {
+	public static void Validate(IReadOnlyCollection<StageBuilder> builders, IReadOnlyDictionary<string, IReadOnlyList<(string TargetName, DependencyMode Mode)>> rawDeps) {
 		ArgumentNullException.ThrowIfNull(builders);
 		foreach (var sb in builders) {
 			ValidateStageConfig(sb);
 		}
-		var rawDeps = builders.ToDictionary(x => x.Name, x => x.Dependencies, StringComparer.Ordinal);
 		ValidateGraphStructure(rawDeps);
 	}
 
