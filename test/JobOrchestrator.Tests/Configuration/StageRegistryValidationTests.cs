@@ -135,6 +135,24 @@ public sealed class StageRegistryValidationTests {
 	}
 
 	[Fact]
+	public void ExpectedKeyNames_DirectAndInheritedSameDimension_Deduplicated() {
+		// prices одновременно: (a) DependsOn(productGroups), которая через DependsOnInstance(shops)
+		// уже несёт измерение `shops`; (b) сама объявляет DependsOnInstance(shops) напрямую.
+		// Ожидание: измерение `shops` появится в ExpectedKeyNames ровно один раз — дедупликация
+		// через seen-set в BuildExpectedKeyNames должна снять повтор независимо от того, какой путь
+		// добавил имя первым.
+		var reg = new StageRegistry([
+			MakeStage("shops"),
+			MakeStage("productGroups", new StageDependency("shops", DependencyMode.Instance)),
+			MakeStage("prices",
+				new StageDependency("productGroups", DependencyMode.Whole),
+				new StageDependency("shops", DependencyMode.Instance)),
+		]);
+
+		reg.ExpectedKeyNames("prices").Should().Equal("shops");
+	}
+
+	[Fact]
 	public void CancellationRank_LeavesAreLowest() {
 		var reg = new StageRegistry([
 			MakeStage("shops"),
