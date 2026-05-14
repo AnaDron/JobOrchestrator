@@ -7,5 +7,4 @@
 - Условные зависимости (предикат в DependsOn*)
 - Distributed execution (multi-instance с внешним lease)
 - GlobalConcurrency limit (поверх per-stage WithConcurrencyLimit)
-- Запрет дублирующихся зависимостей в одной стадии + убрать defensive DistinctBy
 - DependencyKeys опциональный параметр в InstanceIdentity-конструкторе

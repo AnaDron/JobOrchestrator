@@ -378,10 +378,14 @@ internal sealed class EventLoop(
 		}
 	}
 
+	/// <summary>
+	/// Прямые dependent-стадии (whole ∪ instance) без дубликатов. Инвариант гарантируется
+	/// <c>ConfigurationValidator.ValidateNoDuplicateDependencies</c> на build-time:
+	/// <see cref="StageDescriptor.DependentsWhole"/> ∩ <see cref="StageDescriptor.DependentsInstance"/> = ∅
+	/// и каждый список duplicate-free сам по себе. Defensive <c>DistinctBy</c> здесь не нужен.
+	/// </summary>
 	private static IEnumerable<StageDescriptor> EnumerateDirectDependents(StageDescriptor stage) =>
-		stage.DependentsWhole
-			.Concat(stage.DependentsInstance)
-			.DistinctBy(s => s.Name, StringComparer.Ordinal);
+		stage.DependentsWhole.Concat(stage.DependentsInstance);
 
 	/// <summary>
 	/// Pre-allocated <see cref="LoggerMessage.Define{T}"/>-делегаты для всех hot-path логов EventLoop.

@@ -43,6 +43,7 @@ internal static class ConfigurationValidator {
 	) {
 		ArgumentNullException.ThrowIfNull(rawDeps);
 		ValidateNoDanglingDependencies(rawDeps);
+		ValidateNoDuplicateDependencies(rawDeps);
 		ValidateNoCycles(rawDeps);
 	}
 
@@ -84,6 +85,34 @@ internal static class ConfigurationValidator {
 		}
 		if (sb.Interval <= TimeSpan.Zero) {
 			throw new JobConfigurationException($"Стадия '{sb.Name}': RunPeriodically(...) не задано.");
+		}
+	}
+
+	/// <summary>
+	/// Запрещает дублирующиеся зависимости в одной стадии: для каждого target-имени допустим ровно
+	/// один <see cref="StageDependency"/> (независимо от <see cref="DependencyMode"/>). Это убирает
+	/// два разноса:
+	/// <list type="bullet">
+	/// <item><c>B.DependsOn(A).DependsOn(A)</c> — literal duplicate, без эффекта.</item>
+	/// <item><c>B.DependsOn(A).DependsOnInstance(A)</c> — конфликт семантики (наследование ключей +
+	/// introduction нового измерения для того же target).</item>
+	/// </list>
+	/// Инвариант: <see cref="StageDescriptor.DependentsWhole"/> ∩ <see cref="StageDescriptor.DependentsInstance"/> = ∅
+	/// для любого parent-узла, и каждый список сам по себе duplicate-free. Это позволяет
+	/// <c>EventLoop.EnumerateDirectDependents</c> делать чистый <c>Concat</c> без <c>DistinctBy</c>.
+	/// </summary>
+	private static void ValidateNoDuplicateDependencies(
+		IReadOnlyDictionary<string, IReadOnlyList<(string TargetName, DependencyMode Mode)>> rawDeps
+	) {
+		foreach (var kv in rawDeps) {
+			var seen = new HashSet<string>(StringComparer.Ordinal);
+			foreach (var dep in kv.Value) {
+				if (!seen.Add(dep.TargetName)) {
+					throw new JobConfigurationException(
+						$"Стадия '{kv.Key}': дублирующаяся зависимость от стадии '{dep.TargetName}'. " +
+						"Используйте либо DependsOn, либо DependsOnInstance — но не обе для одной target-стадии.");
+				}
+			}
 		}
 	}
 

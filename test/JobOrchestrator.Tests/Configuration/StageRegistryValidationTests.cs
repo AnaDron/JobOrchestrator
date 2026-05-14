@@ -105,6 +105,26 @@ public sealed class StageRegistryValidationTests {
 	}
 
 	[Fact]
+	public void DuplicateLiteralDependency_Throws() {
+		// B.DependsOn(A).DependsOn(A) — literal duplicate.
+		Action act = () => ConfigurationValidator.ValidateGraphStructure(Graph(
+			("a", []),
+			("b", Deps(("a", DependencyMode.Whole), ("a", DependencyMode.Whole)))
+		));
+		act.Should().Throw<JobConfigurationException>().WithMessage("*дублирующаяся*");
+	}
+
+	[Fact]
+	public void DuplicateCrossModeDependency_Throws() {
+		// B.DependsOn(A).DependsOnInstance(A) — конфликт семантики.
+		Action act = () => ConfigurationValidator.ValidateGraphStructure(Graph(
+			("a", []),
+			("b", Deps(("a", DependencyMode.Whole), ("a", DependencyMode.Instance)))
+		));
+		act.Should().Throw<JobConfigurationException>().WithMessage("*дублирующаяся*");
+	}
+
+	[Fact]
 	public void LinearChain_BuildsSuccessfully() {
 		var reg = RegistryFromGraph(Graph(
 			("a", []),
