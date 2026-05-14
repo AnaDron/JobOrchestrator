@@ -8,6 +8,10 @@ namespace JobOrchestrator.Hosting;
 /// Перехватывает крах любого из них в <c>LogCritical</c> и выставляет <see cref="OrchestratorLifecycle.MarkFaulted"/> —
 /// <see cref="IJobOrchestrator"/>-фасад начинает fail-fast для всех внешних вызовов.
 /// При штатном shutdown закрывает channel через <see cref="OrchestratorLifecycle.CloseChannel"/>.
+/// <para>
+/// <see cref="StopAsync"/> идемпотентен через <c>Interlocked _stopGate</c>: повторный вызов — no-op,
+/// чтобы не двойному dispose-у scanner-а и not double-log shutdown.
+/// </para>
 /// </summary>
 internal sealed class JobOrchestratorHostedService(
 	EventLoop eventLoop,
@@ -18,6 +22,7 @@ internal sealed class JobOrchestratorHostedService(
 	ILogger<JobOrchestratorHostedService> logger
 ) : BackgroundService {
 	private readonly Guid _instanceId = Guid.NewGuid();
+	private int _stopGate;    // 0 = не остановлен; 1 = StopAsync уже выполняется/выполнен.
 
 	public override async Task StartAsync(CancellationToken cancellationToken) {
 		// Fail-fast: ловим misconfiguration на старте, а не на первой итерации стадии.
@@ -27,6 +32,10 @@ internal sealed class JobOrchestratorHostedService(
 	}
 
 	public override async Task StopAsync(CancellationToken cancellationToken) {
+		// Идемпотентный StopAsync: первый вызов проходит весь shutdown, повторные — no-op.
+		// Без этого: BackgroundService.StopHost + manual.StopAsync дали бы 2 вызова → scanner.Dispose()
+		// уже на disposed object → ObjectDisposedException в логе.
+		if (Interlocked.Exchange(ref _stopGate, 1) != 0) return;
 		await base.StopAsync(cancellationToken).ConfigureAwait(false);
 		scanner.Dispose();
 		logger.LogInformation("JobOrchestratorHostedService stopped, instance={InstanceId}", _instanceId);

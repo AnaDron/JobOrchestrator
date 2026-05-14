@@ -21,7 +21,8 @@ public sealed class DueScannerTests {
 		var empty = new Dictionary<string, string>(StringComparer.Ordinal);
 		var inst = new StageInstance { Identity = new InstanceIdentity(stage, empty) };
 		inst.SetMetrics(inst.Metrics with { NextAutoUtc = nextAuto });
-		inst.State = state;
+		if (state == InstanceLifecycleState.Running) inst.TryBeginRunning();
+		else if (state == InstanceLifecycleState.Terminating) inst.MarkTerminating();
 		return inst;
 	}
 
@@ -37,7 +38,8 @@ public sealed class DueScannerTests {
 			var keys = new Dictionary<string, string>(StringComparer.Ordinal) { ["marker"] = marker };
 			var inst = new StageInstance { Identity = new InstanceIdentity(stage, keys) };
 			inst.SetMetrics(inst.Metrics with { NextAutoUtc = nextAuto });
-			inst.State = state;
+			if (state == InstanceLifecycleState.Running) inst.TryBeginRunning();
+			else if (state == InstanceLifecycleState.Terminating) inst.MarkTerminating();
 			return inst;
 		}
 		var dueInstance = MakeMarked("due", DateTimeOffset.UtcNow.AddMilliseconds(-10));

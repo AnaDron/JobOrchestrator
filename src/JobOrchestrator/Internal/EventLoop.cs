@@ -76,9 +76,12 @@ internal sealed class EventLoop(
 	}
 
 	private void DrainPendingRequests() {
+		var stopReason = new InvalidOperationException("Оркестратор остановлен; ManualTrigger не может быть обслужен.");
 		while (channel.Reader.TryRead(out var evt)) {
 			if (evt is ManualTriggerRequestedEvent mt) {
-				mt.Tcs.TrySetResult(TriggerResult.Faulted);
+				// Точная семантика: InvalidOperationException (graceful shutdown), а не TriggerResult.Faulted
+				// (что подразумевает crash). Caller увидит чёткий exception вместо безмолвного «Faulted».
+				mt.Tcs.TrySetException(stopReason);
 			}
 		}
 	}
@@ -122,7 +125,7 @@ internal sealed class EventLoop(
 		instance.ReleasePendingTick();
 		// Идемпотентность: инстанс мог быть уже Terminated/удалён.
 		if (instances.Find(instance.Identity) != instance) return;
-		if (instance.State != InstanceLifecycleState.Idle) return;
+		if (instance.IsTerminating || instance.IsRunning) return;
 		var now = time.GetUtcNow();
 		var decision = TriggerAcceptance.TryAccept(instance, TriggerSource.Auto, now);
 		if (decision == TriggerResult.Started) {
@@ -153,16 +156,21 @@ internal sealed class EventLoop(
 			scanner.Wake();
 			return;
 		}
-		instance.State = InstanceLifecycleState.Running;
+		// CAS-перевод в Running. Идемпотентно: если кто-то уже стартанул этот инстанс (race на dup
+		// TimerTickedEvent) — TryBeginRunning вернёт false и мы отпустим semaphore.
+		if (!instance.TryBeginRunning()) {
+			concurrency.Release(instance.Stage.Name);
+			return;
+		}
 		instance.SetMetrics(instance.Metrics with { NextAutoUtc = null });
 		Log.BeginIteration(logger, instance.FullyQualifiedName, trigger, null);
 		// Fire-and-forget на ThreadPool: StageRunner внутри публикует StageCompleted/Failed в Channel.
-		// StageRunner.RunIterationAsync обязан вызвать concurrency.Release(stage) в finally.
+		// StageRunner.RunIterationAsync обязан вызвать concurrency.Release + instance.EndRunning в finally.
 		_ = Task.Run(async () => await runner.RunIterationAsync(instance, trigger, ct).ConfigureAwait(false), ct);
 	}
 
 	private void HandleKeyAdded(StageInstance source, string key) {
-		if (source.State == InstanceLifecycleState.Terminating) {
+		if (source.IsTerminating) {
 			Log.IgnoredAddKeyFromTerminating(logger, source.Stage.Name, key, source.FullyQualifiedName, null);
 			return;
 		}
@@ -178,7 +186,7 @@ internal sealed class EventLoop(
 	}
 
 	private async Task HandleKeyRemovedAsync(StageInstance source, string key, CancellationToken ct) {
-		if (source.State == InstanceLifecycleState.Terminating) {
+		if (source.IsTerminating) {
 			Log.IgnoredRemoveKeyFromTerminating(logger, source.Stage.Name, key, source.FullyQualifiedName, null);
 			return;
 		}
@@ -215,7 +223,7 @@ internal sealed class EventLoop(
 			var affectedStages = registry.StagesAffectedByKeyRemoval(es);
 			var affected = affectedStages
 				.SelectMany(s => instances.InstancesOf(s.Name))
-				.Where(inst => inst.State != InstanceLifecycleState.Terminating)
+				.Where(inst => !inst.IsTerminating)
 				.Where(inst => MatchesEmitter(inst.DependencyKeys, es, ek, k))
 				.ToList();
 			if (affected.Count == 0) continue;
@@ -225,23 +233,25 @@ internal sealed class EventLoop(
 			Log.RemoveKeyCascade(logger, es, k, affected.Count, null);
 
 			foreach (var instance in affected) {
+				// CAS-перевод в Terminating. Если кто-то уже отметил (через другой orphan-ключ
+				// в той же cascade-сессии) — пропускаем. MarkTerminating возвращает true ровно один раз.
+				if (!instance.MarkTerminating()) continue;
+
 				// Снимаем bucket этого инстанса — orphan-ключи enqueue'ём для дальнейшего обхода.
 				var orphans = keyspace.RemoveInstance(instance.Stage.Name, instance.DependencyKeys);
 				foreach (var orphanKey in orphans) {
 					queue.Enqueue((instance.Stage.Name, instance.DependencyKeys, orphanKey));
 				}
 
-				// Атомарный snapshot State + RunCts ДО State=Terminating, чтобы понять Running vs Idle ветку.
-				var wasRunning = instance.State == InstanceLifecycleState.Running;
-				var cts = instance.RunCts;    // volatile read
-				instance.State = InstanceLifecycleState.Terminating;
-
-				if (wasRunning) {
-					// Defer cleanup: runner отстрелит StageCompleted/Failed, handler увидит Terminating → finalize.
-					try { cts?.Cancel(); } catch (ObjectDisposedException) { /* race на завершение */ }
+				// Если runner всё ещё бежит — defer cleanup до StageCompleted/Failed handler-а.
+				// IsRunning читается ПОСЛЕ MarkTerminating: новый BeginIteration после нашего marking
+				// уже не сможет (TryBeginRunning не активирует Running для Terminating-инстанса —
+				// см. HandleTimerTick guard `IsTerminating || IsRunning`).
+				var cts = instance.RunCts;
+				if (instance.IsRunning && cts is not null) {
+					try { cts.Cancel(); } catch (ObjectDisposedException) { /* race на завершение */ }
 					Log.CascadeCancelRunning(logger, instance.FullyQualifiedName, null);
 				} else {
-					// Идиотическое сразу-удаление: будущего event'а от runner-а не будет.
 					Log.CascadeRemoveIdle(logger, instance.FullyQualifiedName, null);
 					await FinalizeTerminatingAsync(instance, ct).ConfigureAwait(false);
 				}
@@ -269,13 +279,19 @@ internal sealed class EventLoop(
 
 	private async Task HandleStageCompletedAsync(StageInstance instance, DateTimeOffset at, CancellationToken ct) {
 		// Terminating: finalize cleanup, метрики не трогаем (инстанс «мёртв»).
-		if (instance.State == InstanceLifecycleState.Terminating) {
+		if (instance.IsTerminating) {
 			Log.TerminatingCompletedFinalize(logger, instance.FullyQualifiedName, null);
 			await FinalizeTerminatingAsync(instance, ct).ConfigureAwait(false);
 			return;
 		}
-		// Idempotence: если инстанс уже не Running — не двигаемся (могло прийти двойное событие).
-		if (instance.State != InstanceLifecycleState.Running) return;
+		// Late event: runner отстрелил StageCompleted уже после того, как instance был удалён из
+		// InstanceManager (теоретически возможно при race shutdown vs runner-finally). Лог + ignore.
+		if (instances.Find(instance.Identity) != instance) {
+			Log.LateStageEventForRemovedInstance(logger, nameof(StageCompletedEvent), instance.FullyQualifiedName, null);
+			return;
+		}
+		// Idempotence: если runner не был активен — late event (already-processed).
+		if (!instance.IsRunning) return;
 
 		try {
 			var current = instance.Metrics;
@@ -300,20 +316,25 @@ internal sealed class EventLoop(
 				}
 			}
 		} finally {
-			// Guarantee: State выходит из Running при ЛЮБОМ исходе обработки (включая exception из EnumerateDirectDependents).
-			instance.State = InstanceLifecycleState.Idle;
+			// Guarantee: выход из Running при ЛЮБОМ исходе обработки. EndRunning одновременно
+			// чистит pendingTick — гарантирует, что DueScanner может опубликовать следующий тик.
+			instance.EndRunning();
 			scanner.Wake();
 		}
 	}
 
 	private async Task HandleStageFailedAsync(StageInstance instance, Exception ex, DateTimeOffset at, CancellationToken ct) {
 		// Terminating: finalize cleanup.
-		if (instance.State == InstanceLifecycleState.Terminating) {
+		if (instance.IsTerminating) {
 			Log.TerminatingFailedFinalize(logger, instance.FullyQualifiedName, null);
 			await FinalizeTerminatingAsync(instance, ct).ConfigureAwait(false);
 			return;
 		}
-		if (instance.State != InstanceLifecycleState.Running) return;
+		if (instances.Find(instance.Identity) != instance) {
+			Log.LateStageEventForRemovedInstance(logger, nameof(StageFailedEvent), instance.FullyQualifiedName, null);
+			return;
+		}
+		if (!instance.IsRunning) return;
 
 		try {
 			var current = instance.Metrics;
@@ -331,7 +352,7 @@ internal sealed class EventLoop(
 			// Outcome=Failure. SuccessWaiters не сигналим — этот цикл не success.
 			outcomeWaiters.Signal(instance.Stage.Name, instance.EncodedKey, StageOutcome.FromFailure(ex));
 		} finally {
-			instance.State = InstanceLifecycleState.Idle;
+			instance.EndRunning();
 			scanner.Wake();
 		}
 	}
@@ -451,5 +472,9 @@ internal sealed class EventLoop(
 		public static readonly Action<ILogger, string, Exception?> InstanceCreated =
 			LoggerMessage.Define<string>(LogLevel.Debug, new EventId(3022, nameof(InstanceCreated)),
 				"Создан инстанс {Instance}");
+
+		public static readonly Action<ILogger, string, string, Exception?> LateStageEventForRemovedInstance =
+			LoggerMessage.Define<string, string>(LogLevel.Information, new EventId(3024, nameof(LateStageEventForRemovedInstance)),
+				"{EventType} прибыл для уже удалённого инстанса {Instance} — игнорируем (event-loop drained late event без потери)");
 	}
 }

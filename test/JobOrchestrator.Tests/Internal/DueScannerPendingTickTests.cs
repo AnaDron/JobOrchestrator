@@ -75,10 +75,10 @@ public sealed class DueScannerPendingTickTests {
 		// 2) BeginIteration: State=Running, NextAutoUtc=null.
 		// 3) StageCompleted: State=Idle, новый NextAutoUtc.
 		inst.ReleasePendingTick();
-		inst.State = InstanceLifecycleState.Running;
+		inst.TryBeginRunning();
 		inst.SetMetrics(inst.Metrics with { NextAutoUtc = null });
 		while (channel.Reader.TryRead(out _)) { }
-		inst.State = InstanceLifecycleState.Idle;
+		inst.EndRunning();
 		inst.SetMetrics(inst.Metrics with { NextAutoUtc = DateTimeOffset.UtcNow.AddMilliseconds(-1) });
 
 		scanner.Tick(DateTimeOffset.UtcNow);

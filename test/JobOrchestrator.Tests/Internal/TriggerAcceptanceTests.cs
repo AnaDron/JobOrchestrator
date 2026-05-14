@@ -22,7 +22,7 @@ public sealed class TriggerAcceptanceTests {
 	[Fact]
 	public void Running_AlwaysRejectedWithAlreadyRunning() {
 		var inst = MakeInstance(MakeStage(TimeSpan.Zero, RetryPolicy.NoRetry));
-		inst.State = InstanceLifecycleState.Running;
+		inst.TryBeginRunning();
 		TriggerAcceptance.TryAccept(inst, TriggerSource.Auto, Now).Should().Be(TriggerResult.AlreadyRunning);
 		TriggerAcceptance.TryAccept(inst, TriggerSource.Manual, Now).Should().Be(TriggerResult.AlreadyRunning);
 	}

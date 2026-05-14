@@ -4,38 +4,36 @@ namespace JobOrchestrator.Internal;
 /// Runtime-сущность одного инстанса стадии (long-lived). Несколько <see cref="StageInstance"/> могут
 /// разделять один <see cref="StageDescriptor"/> — один на каждый компонент композитного ключа.
 /// <para>
-/// <b>Identity</b> (<see cref="Identity"/>) — иммутабельный идентификатор инстанса
-/// <c>(Stage, DependencyKeys)</c> с pre-computed <c>EncodedKey</c> и <c>FullyQualifiedName</c>.
-/// Все hash-lookup'ы (<see cref="InstanceManager"/>) и log-fields идут через него.
-/// Identity-facades (<see cref="Stage"/>, <see cref="DependencyKeys"/>, <see cref="FullyQualifiedName"/>,
-/// <see cref="EncodedKey"/>, <see cref="StateScope"/>) — простые делегаты, без читательских проблем.
+/// <b>Identity</b> — иммутабельный идентификатор; <b>Sink</b> pre-allocated per lifetime.
 /// </para>
 /// <para>
-/// <b>Метрики</b> (<see cref="Metrics"/>) — иммутабельный <see cref="JobMetrics"/> snapshot, заменяемый
-/// через <see cref="Interlocked.Exchange{T}(ref T, T)"/>. Facade-доступа к отдельным полям метрик
-/// (LastSuccess, LastAttempt, и т.д.) <b>намеренно нет</b> — call-sites обязаны явно делать
-/// <c>instance.Metrics</c> (один <c>Volatile.Read</c>) и потом читать поля snapshot'а. Это сразу
-/// показывает места, где Metrics читается несколько раз → можно оптимизировать локальной переменной.
+/// <b>Состояние</b> хранится двумя независимыми atomic-int-флагами:
+/// </para>
+/// <list type="bullet">
+/// <item><c>_running</c> (0/1): CAS через <see cref="TryBeginRunning"/> / clear через <see cref="EndRunning"/>.</item>
+/// <item><c>_terminating</c> (0/1): CAS через <see cref="MarkTerminating"/> — возвращает <c>true</c> ровно один раз.</item>
+/// </list>
+/// <para>
+/// Эти флаги <b>не взаимоисключающие</b>: инстанс может быть Running И Terminating одновременно
+/// (runner отменён, но ещё не закончил отстреливать <see cref="StageCompletedEvent"/>/<see cref="StageFailedEvent"/>).
+/// <see cref="State"/> сводит их в публичный enum по приоритету Terminating &gt; Running &gt; Idle.
 /// </para>
 /// <para>
-/// <b>State</b> (<see cref="State"/>) и <see cref="TryAcquirePendingTick"/> — отдельные atomic int,
-/// меняются независимо от метрик. <see cref="RunCts"/> — <c>volatile</c>-reference для безопасного
-/// чтения writer'ом (runner-thread) и reader'ом (event-loop).
+/// Метрики (<see cref="Metrics"/>) — иммутабельный <see cref="JobMetrics"/> snapshot, заменяемый
+/// через <see cref="Interlocked.Exchange"/>. Facade-доступ к отдельным полям отсутствует — call-sites
+/// явно делают <c>instance.Metrics</c>, что видно как optimization-hotspot.
 /// </para>
 /// </summary>
 internal sealed class StageInstance {
 	public required InstanceIdentity Identity { get; init; }
 
 	/// <summary>
-	/// Sink для пересылки <c>ctx.AddKey/RemoveKey</c> в event loop. <b>Один объект на инстанс</b>
-	/// (а не на каждую итерацию), потому что <c>Source</c> и <c>ChannelWriter</c> неизменны
-	/// в течение жизни инстанса. Inject'ится <see cref="InstanceCreator"/> при материализации
-	/// (через mutable setter, так как Sink-конструктору нужна обратная ссылка на этот же инстанс).
-	/// После материализации не меняется.
+	/// Sink для пересылки <c>ctx.AddKey/RemoveKey</c> в event loop. Pre-allocated в InstanceCreator,
+	/// переиспользуется через все итерации.
 	/// </summary>
 	public IJobContextSink Sink { get; set; } = null!;
 
-	// Identity-facades — immutable, без подводных камней; делегируют для краткости call-sites.
+	// Identity-facades — immutable, делегируют для краткости call-sites.
 	public StageDescriptor Stage => Identity.Stage;
 	public IReadOnlyDictionary<string, string> DependencyKeys => Identity.DependencyKeys;
 	public string FullyQualifiedName => Identity.FullyQualifiedName;
@@ -43,24 +41,56 @@ internal sealed class StageInstance {
 	public string StateScope => Identity.StateScope;
 
 	JobMetrics _metrics = JobMetrics.Empty;
-	int _state;        // 0 = Idle, 1 = Running, 2 = Terminating
-	int _pendingTick;  // 0 = свободно, 1 = TimerTickedEvent уже в очереди / обрабатывается
+	int _running;       // 0 = не Running, 1 = Running
+	int _terminating;   // 0 = не Terminating, 1 = Terminating
+	int _pendingTick;
 	volatile CancellationTokenSource? _runCts;
 
 	/// <summary>Атомарный snapshot мутирующихся метрик. Безопасно вызывать из любого потока.</summary>
 	public JobMetrics Metrics => Volatile.Read(ref _metrics);
 
-	/// <summary>
-	/// Атомарная замена метрик. Используется только из event-loop-consumer-потока (single writer).
-	/// Типовой паттерн: <c>instance.SetMetrics(instance.Metrics with { LastSuccess = at, ... })</c>.
-	/// </summary>
+	/// <summary>Атомарная замена метрик. Используется только из event-loop-consumer-потока.</summary>
 	public void SetMetrics(JobMetrics next) => Interlocked.Exchange(ref _metrics, next);
 
-	/// <summary>Текущее состояние lifecycle. Хранится отдельно от <see cref="Metrics"/> — меняется независимо.</summary>
+	/// <summary>
+	/// Публичное состояние lifecycle — производное от двух флагов. Приоритет:
+	/// Terminating > Running > Idle. В <see cref="InstancesOverview"/> оператор видит Terminating
+	/// для инстансов, ожидающих cleanup.
+	/// </summary>
 	public InstanceLifecycleState State {
-		get => (InstanceLifecycleState)Volatile.Read(ref _state);
-		set => Volatile.Write(ref _state, (int)value);
+		get {
+			if (Volatile.Read(ref _terminating) == 1) return InstanceLifecycleState.Terminating;
+			return Volatile.Read(ref _running) == 1 ? InstanceLifecycleState.Running : InstanceLifecycleState.Idle;
+		}
 	}
+
+	/// <summary>True, если инстанс находится в active-iteration (runner запущен и не закончил).</summary>
+	public bool IsRunning => Volatile.Read(ref _running) == 1;
+
+	/// <summary>True, если инстанс помечен на удаление каскадом.</summary>
+	public bool IsTerminating => Volatile.Read(ref _terminating) == 1;
+
+	/// <summary>
+	/// CAS-перевод в Running. Возвращает <c>true</c>, если переход состоялся (т.е. был Idle до этого);
+	/// <c>false</c>, если уже Running. Используется в <c>EventLoop.BeginIteration</c> для идемпотентности.
+	/// </summary>
+	public bool TryBeginRunning() => Interlocked.CompareExchange(ref _running, 1, 0) == 0;
+
+	/// <summary>
+	/// Снимает Running-флаг + pendingTick. Вызывается из <c>StageRunner.RunIterationAsync</c> finally —
+	/// гарантирует выход из Running при любом исходе итерации (success/failure/cancel/exception).
+	/// </summary>
+	public void EndRunning() {
+		Volatile.Write(ref _pendingTick, 0);
+		Volatile.Write(ref _running, 0);
+	}
+
+	/// <summary>
+	/// CAS-перевод в Terminating. Возвращает <c>true</c> ровно один раз (первый вызов).
+	/// Каскад использует это для идемпотентности: если попытка отметить тот же инстанс через два разных
+	/// orphan-ключа — второй <c>MarkTerminating</c> вернёт <c>false</c>, caller пропускает.
+	/// </summary>
+	public bool MarkTerminating() => Interlocked.CompareExchange(ref _terminating, 1, 0) == 0;
 
 	/// <summary>
 	/// Idempotency-CAS для <see cref="DueScanner"/>: <c>true</c> возвращается ровно один раз,
@@ -74,12 +104,20 @@ internal sealed class StageInstance {
 		Volatile.Write(ref _pendingTick, 0);
 
 	/// <summary>
-	/// CTS текущей итерации (если State == Running), иначе null. <c>volatile</c>: writer (runner finally
-	/// в одном потоке) и reader (event-loop cascade-cancel в другом потоке) должны видеть согласованные
-	/// записи без отдельных Interlocked-операций.
+	/// CTS текущей итерации (если IsRunning), иначе null. <c>volatile</c>: writer (runner finally) и
+	/// reader (event-loop cascade-cancel) должны видеть согласованные записи без отдельных Interlocked.
 	/// </summary>
 	public CancellationTokenSource? RunCts {
 		get => _runCts;
 		set => _runCts = value;
 	}
+
+	/// <summary>
+	/// Атомарно сбрасывает <see cref="RunCts"/> в null ТОЛЬКО если текущее значение совпадает с
+	/// <paramref name="expected"/>. Используется в <c>StageRunner</c> finally — защищает от случая,
+	/// когда после <c>EndRunning</c> уже стартовал следующий runner и установил свой CTS:
+	/// «свой» runner не должен затирать чужую запись.
+	/// </summary>
+	public void ClearRunCtsIfEquals(CancellationTokenSource expected) =>
+		Interlocked.CompareExchange(ref _runCts, null, expected);
 }

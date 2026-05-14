@@ -84,13 +84,17 @@ internal sealed class StageRunner(
 			Log.IterationFailed(_logger, instance.FullyQualifiedName, ex);
 			channel.Writer.Publish(new StageFailedEvent(instance, ex, time.GetUtcNow()));
 		} finally {
-			instance.RunCts = null;
+			// CAS-clear RunCts: только если это всё ещё «наш» cts. Защищает от race с уже стартовавшим
+			// следующим runner-ом (он установил свой CTS — мы не должны его обнулять).
+			instance.ClearRunCtsIfEquals(cascadeCts);
 			runCts.Dispose();
 			watchdogCts?.Dispose();
 			cascadeCts.Dispose();
 			// Release ВСЕГДА: семафор был Acquire'нут в EventLoop.BeginIteration перед запуском runner-а.
-			// Без release пропускной канал стадии останется навсегда заблокирован.
 			concurrency.Release(instance.Stage.Name);
+			// EndRunning делает ТОЛЬКО event-loop handler (StageCompleted/Failed) — это единый источник
+			// истины для _running-флага. Если вызвать здесь — будет race с уже стартовавшим следующим
+			// runner-ом (мы сбросим его свежевзведённый _running=1).
 		}
 	}
 
