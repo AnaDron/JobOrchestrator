@@ -37,7 +37,6 @@ internal sealed class Instance {
 	public StageDescriptor Stage => Identity.Stage;
 	public IReadOnlyDictionary<string, string> DependencyKeys => Identity.DependencyKeys;
 	public string FullyQualifiedName => Identity.FullyQualifiedName;
-	public string EncodedKey => Identity.EncodedKey;
 	public string StateScope => Identity.StateScope;
 
 	JobMetrics _metrics = JobMetrics.Empty;

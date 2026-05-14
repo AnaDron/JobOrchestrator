@@ -1,9 +1,16 @@
 namespace JobOrchestrator.Internal;
 
 /// <summary>
-/// Реестр ожиданий <see cref="IJobOrchestrator.WaitForStageSuccessAsync"/>: одна группа waiter-ов на пару
-/// <c>(stageName, encodedKey)</c>. Сигнал об успехе резолвит все накопленные TCS этой группы и запоминает
-/// <c>Completed=true</c> — поэтому late-register, прибежавший ПОСЛЕ сигнала, получит уже-завершённый Task.
+/// Реестр ожиданий <see cref="IJobOrchestrator.WaitForStageSuccessAsync"/>: одна группа waiter-ов на
+/// <see cref="InstanceIdentity"/>. Сигнал об успехе резолвит все накопленные TCS этой группы и
+/// запоминает <c>Completed=true</c> — поэтому late-register, прибежавший ПОСЛЕ сигнала, получит
+/// уже-завершённый Task.
+/// <para>
+/// Bucket-key — <see cref="InstanceIdentity"/>: Equals/GetHashCode уже определены через
+/// <c>(Stage.Name, EncodedKey)</c>, поэтому Dictionary-lookup корректен независимо от того,
+/// какой именно instance передан (любые две Identity с одинаковыми Stage+EncodedKey считаются
+/// равными).
+/// </para>
 /// <para>
 /// Корректность под race:
 /// </para>
@@ -18,11 +25,11 @@ namespace JobOrchestrator.Internal;
 /// </summary>
 internal sealed class SuccessWaiters {
 	private readonly object _gate = new();
-	private readonly Dictionary<(string Stage, string Encoded), WaiterBucket> _buckets = new();
+	private readonly Dictionary<InstanceIdentity, WaiterBucket> _buckets = new();
 	private bool _stopped;
 	private Exception? _stopReason;
 
-	public Task Register(string stage, string encodedKey, CancellationToken ct) {
+	public Task Register(InstanceIdentity identity, CancellationToken ct) {
 		ct.ThrowIfCancellationRequested();
 		var tcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 
@@ -32,9 +39,9 @@ internal sealed class SuccessWaiters {
 				tcs.TrySetException(_stopReason!);
 				return tcs.Task;
 			}
-			if (!_buckets.TryGetValue((stage, encodedKey), out var existing)) {
+			if (!_buckets.TryGetValue(identity, out var existing)) {
 				existing = new WaiterBucket();
-				_buckets[(stage, encodedKey)] = existing;
+				_buckets[identity] = existing;
 			}
 			bucket = existing;
 		}
@@ -64,12 +71,12 @@ internal sealed class SuccessWaiters {
 	}
 
 	/// <summary>Сигнализирует первый success — резолвит всех pending и запоминает Completed=true для late-register'ов.</summary>
-	public void SignalSuccess(string stage, string encodedKey) {
+	public void SignalSuccess(InstanceIdentity identity) {
 		WaiterBucket bucket;
 		lock (_gate) {
-			if (!_buckets.TryGetValue((stage, encodedKey), out var existing)) {
+			if (!_buckets.TryGetValue(identity, out var existing)) {
 				existing = new WaiterBucket();
-				_buckets[(stage, encodedKey)] = existing;
+				_buckets[identity] = existing;
 			}
 			bucket = existing;
 		}
@@ -84,12 +91,12 @@ internal sealed class SuccessWaiters {
 
 	/// <summary>
 	/// Удаляет bucket и завершает все pending исключением. Вызывается, когда инстанс удалён каскадом —
-	/// дальнейшее ожидание success бессмысленно. Будущие Register-ы на эту же пару создадут чистый bucket.
+	/// дальнейшее ожидание success бессмысленно. Будущие Register-ы на ту же Identity создадут чистый bucket.
 	/// </summary>
-	public void SignalCancellation(string stage, string encodedKey, Exception ex) {
+	public void SignalCancellation(InstanceIdentity identity, Exception ex) {
 		WaiterBucket? bucket;
 		lock (_gate) {
-			if (!_buckets.Remove((stage, encodedKey), out bucket)) return;
+			if (!_buckets.Remove(identity, out bucket)) return;
 		}
 		TaskCompletionSource[] toResolve;
 		lock (bucket.Lock) {

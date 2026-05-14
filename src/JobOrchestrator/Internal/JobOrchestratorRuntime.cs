@@ -109,7 +109,7 @@ internal sealed class JobOrchestratorRuntime(
 		CancellationToken ct = default
 	) {
 		var identity = ResolveIdentity(stageName, dependencyKeys);
-		var task = successWaiters.Register(identity.Stage.Name, identity.EncodedKey, ct);
+		var task = successWaiters.Register(identity, ct);
 
 		// Fast-path: если инстанс УЖЕ существует И УЖЕ имел success — сразу резолвим (без ожидания
 		// следующего цикла). SignalSuccess идемпотентна — повторный сигнал на already-Completed bucket — no-op.
@@ -117,7 +117,7 @@ internal sealed class JobOrchestratorRuntime(
 		if (existing is not null
 			&& existing.State != InstanceLifecycleState.Terminating
 			&& existing.Metrics.LastSuccess is not null) {
-			successWaiters.SignalSuccess(identity.Stage.Name, identity.EncodedKey);
+			successWaiters.SignalSuccess(identity);
 		}
 
 		return task;
@@ -132,7 +132,7 @@ internal sealed class JobOrchestratorRuntime(
 		// Outcome НЕ имеет fast-path: семантика «исход СЛЕДУЮЩЕГО цикла». Caller сам отвечает за
 		// порядок «Register → Trigger». Memoized только если Signal случился ПОСЛЕ старта оркестратора
 		// и ДО Register'а — late-register получит последний outcome.
-		return outcomeWaiters.Register(identity.Stage.Name, identity.EncodedKey, ct);
+		return outcomeWaiters.Register(identity, ct);
 	}
 
 	/// <summary>

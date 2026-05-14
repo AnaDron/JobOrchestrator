@@ -8,3 +8,5 @@
 - Distributed execution (multi-instance с внешним lease)
 - GlobalConcurrency limit (поверх per-stage WithConcurrencyLimit)
 - Сортировать входящий словарь по ExpectedKeyNames при создании Identity, далее Encode/FormatFqn без OrderBy
+- StageDescriptor вместо string как ключ в internal-словарях (ConcurrencyLimits, KeyspaceRegistry, InstanceManager)
+- SnapshotByStage → IReadOnlyList<EmitterBucket> вместо yield-IEnumerable

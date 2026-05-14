@@ -1,8 +1,8 @@
 namespace JobOrchestrator.Internal;
 
 /// <summary>
-/// Реестр ожиданий <see cref="IJobOrchestrator.WaitForStageOutcomeAsync"/>: одна группа waiter-ов на пару
-/// <c>(stageName, encodedKey)</c>. В отличие от <see cref="SuccessWaiters"/>, резолвится на ЛЮБОЙ
+/// Реестр ожиданий <see cref="IJobOrchestrator.WaitForStageOutcomeAsync"/>: одна группа waiter-ов на
+/// <see cref="InstanceIdentity"/>. В отличие от <see cref="SuccessWaiters"/>, резолвится на ЛЮБОЙ
 /// первый исход стадии — Success/Failure/Cancelled.
 /// <para>
 /// Bucket хранит <c>LastOutcome</c>: late-register, прибежавший после сигнала, получает последний
@@ -13,11 +13,11 @@ namespace JobOrchestrator.Internal;
 /// </summary>
 internal sealed class OutcomeWaiters {
 	private readonly object _gate = new();
-	private readonly Dictionary<(string Stage, string Encoded), WaiterBucket> _buckets = new();
+	private readonly Dictionary<InstanceIdentity, WaiterBucket> _buckets = new();
 	private bool _stopped;
 	private Exception? _stopReason;
 
-	public Task<StageOutcome> Register(string stage, string encodedKey, CancellationToken ct) {
+	public Task<StageOutcome> Register(InstanceIdentity identity, CancellationToken ct) {
 		ct.ThrowIfCancellationRequested();
 		var tcs = new TaskCompletionSource<StageOutcome>(TaskCreationOptions.RunContinuationsAsynchronously);
 
@@ -27,9 +27,9 @@ internal sealed class OutcomeWaiters {
 				tcs.TrySetException(_stopReason!);
 				return tcs.Task;
 			}
-			if (!_buckets.TryGetValue((stage, encodedKey), out var existing)) {
+			if (!_buckets.TryGetValue(identity, out var existing)) {
 				existing = new WaiterBucket();
-				_buckets[(stage, encodedKey)] = existing;
+				_buckets[identity] = existing;
 			}
 			bucket = existing;
 		}
@@ -59,12 +59,12 @@ internal sealed class OutcomeWaiters {
 	}
 
 	/// <summary>Сигнализирует исход (Success/Failure/Cancelled), резолвит всех pending и запоминает.</summary>
-	public void Signal(string stage, string encodedKey, StageOutcome outcome) {
+	public void Signal(InstanceIdentity identity, StageOutcome outcome) {
 		WaiterBucket bucket;
 		lock (_gate) {
-			if (!_buckets.TryGetValue((stage, encodedKey), out var existing)) {
+			if (!_buckets.TryGetValue(identity, out var existing)) {
 				existing = new WaiterBucket();
-				_buckets[(stage, encodedKey)] = existing;
+				_buckets[identity] = existing;
 			}
 			bucket = existing;
 		}
@@ -78,11 +78,11 @@ internal sealed class OutcomeWaiters {
 	}
 
 	/// <summary>
-	/// Очищает bucket для пары <c>(stage, encodedKey)</c>. Используется в <c>FinalizeTerminating</c> —
+	/// Очищает bucket для <paramref name="identity"/>. Используется в <c>FinalizeTerminating</c> —
 	/// новый инстанс с теми же ключами не должен видеть исход предыдущего.
 	/// </summary>
-	public void Reset(string stage, string encodedKey) {
-		lock (_gate) _buckets.Remove((stage, encodedKey));
+	public void Reset(InstanceIdentity identity) {
+		lock (_gate) _buckets.Remove(identity);
 	}
 
 	/// <summary>Завершает все pending исключением и блокирует будущие Register-ы.</summary>

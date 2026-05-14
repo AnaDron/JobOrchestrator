@@ -301,8 +301,8 @@ internal sealed class EventLoop(
 				NextAutoUtc: at + instance.Stage.Interval));
 
 			// Сигналим waiters ПОСЛЕ обновления метрик — late-register увидит LastSuccess через fast-path.
-			successWaiters.SignalSuccess(instance.Stage.Name, instance.EncodedKey);
-			outcomeWaiters.Signal(instance.Stage.Name, instance.EncodedKey, StageOutcome.Success);
+			successWaiters.SignalSuccess(instance.Identity);
+			outcomeWaiters.Signal(instance.Identity, StageOutcome.Success);
 
 			if (wasFirstSuccess) {
 				Log.FirstSuccessCascade(logger, instance.FullyQualifiedName, null);
@@ -347,7 +347,7 @@ internal sealed class EventLoop(
 			});
 
 			// Outcome=Failure. SuccessWaiters не сигналим — этот цикл не success.
-			outcomeWaiters.Signal(instance.Stage.Name, instance.EncodedKey, StageOutcome.FromFailure(ex));
+			outcomeWaiters.Signal(instance.Identity, StageOutcome.FromFailure(ex));
 		} finally {
 			instance.EndRunning();
 			scanner.Wake();
@@ -362,9 +362,9 @@ internal sealed class EventLoop(
 		// outcome-ожидание получает StageOutcomeKind.Cancelled. После этого Reset bucket-ы —
 		// новый инстанс с теми же ключами начнёт с чистого состояния.
 		var cancelReason = new InvalidOperationException($"Инстанс {instance.FullyQualifiedName} удалён каскадом.");
-		successWaiters.SignalCancellation(instance.Stage.Name, instance.EncodedKey, cancelReason);
-		outcomeWaiters.Signal(instance.Stage.Name, instance.EncodedKey, StageOutcome.FromCancellation(cancelReason));
-		outcomeWaiters.Reset(instance.Stage.Name, instance.EncodedKey);
+		successWaiters.SignalCancellation(instance.Identity, cancelReason);
+		outcomeWaiters.Signal(instance.Identity, StageOutcome.FromCancellation(cancelReason));
+		outcomeWaiters.Reset(instance.Identity);
 
 		try {
 			await stateStore.RemoveScopeAsync(instance.StateScope, ct).ConfigureAwait(false);
