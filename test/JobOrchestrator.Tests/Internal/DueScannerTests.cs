@@ -66,7 +66,7 @@ public sealed class DueScannerTests {
 		var stage = MakeStage("x");
 
 		// Всё в далёком будущем — без Wake() scanner спал бы дольше теста.
-		var farFuture = new Instance { Identity = new InstanceIdentity(stage, new Dictionary<string, string>(StringComparer.Ordinal)) };
+		var farFuture = new Instance { Identity = new InstanceIdentity(stage) };
 		farFuture.SetMetrics(farFuture.Metrics with { NextAutoUtc = DateTimeOffset.UtcNow.AddMinutes(10) });
 		manager.Add(farFuture);
 

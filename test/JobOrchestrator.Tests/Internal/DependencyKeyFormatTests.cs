@@ -13,7 +13,7 @@ public sealed class DependencyKeyFormatTests {
 
 	[Fact]
 	public void Identity_EmptyKeys_FormatsAsBrackets() {
-		var id = new InstanceIdentity(MakeStage("shops"), new Dictionary<string, string>());
+		var id = new InstanceIdentity(MakeStage("shops"));
 		id.FullyQualifiedName.Should().Be("shops[]");
 	}
 

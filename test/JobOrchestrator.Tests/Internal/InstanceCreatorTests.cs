@@ -29,7 +29,7 @@ public sealed class InstanceCreatorTests {
 		created[0].Stage.Should().Be(stage);
 		created[0].DependencyKeys.Should().BeEmpty();
 		created[0].FullyQualifiedName.Should().Be("shops[]");
-		instances.Exists(new InstanceIdentity(stage, new Dictionary<string, string>())).Should().BeTrue();
+		instances.Exists(new InstanceIdentity(stage)).Should().BeTrue();
 	}
 
 	[Fact]
@@ -118,7 +118,7 @@ public sealed class InstanceCreatorTests {
 		var instances = new InstanceManager();
 		var keyspace = new KeyspaceRegistry();
 		// LastSuccess = null — ещё не был успешен.
-		var pgInst = new Instance { Identity = new InstanceIdentity(pg, new Dictionary<string, string>(StringComparer.Ordinal)) };
+		var pgInst = new Instance { Identity = new InstanceIdentity(pg) };
 		instances.Add(pgInst);
 		var creator = NewCreator(instances, keyspace);
 

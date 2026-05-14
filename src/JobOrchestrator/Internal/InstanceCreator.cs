@@ -33,7 +33,7 @@ internal sealed class InstanceCreator(
 	public List<Instance> EvaluateAndCreate(StageDescriptor stage) {
 		if (stage.Dependencies.Count == 0) {
 			// Безключевая стадия → один инстанс с пустыми DependencyKeys.
-			var emptyId = new InstanceIdentity(stage, new Dictionary<string, string>(StringComparer.Ordinal));
+			var emptyId = new InstanceIdentity(stage);
 			return instances.Exists(emptyId) ? [] : [MaterializeInstance(emptyId)];
 		}
 

@@ -306,9 +306,11 @@ internal sealed class EventLoop(
 
 			if (wasFirstSuccess) {
 				Log.FirstSuccessCascade(logger, instance.FullyQualifiedName, null);
-				foreach (var dependent in EnumerateDirectDependents(instance.Stage)) {
-					CreateAndStart(dependent);
-				}
+				// Прямые dependent-стадии: DependentsWhole ∪ DependentsInstance без дубликатов.
+				// Инвариант гарантируется ConfigurationValidator.ValidateNoDuplicateDependencies на
+				// build-time (списки не пересекаются и каждый сам duplicate-free).
+				foreach (var dependent in instance.Stage.DependentsWhole) CreateAndStart(dependent);
+				foreach (var dependent in instance.Stage.DependentsInstance) CreateAndStart(dependent);
 			}
 		} finally {
 			// Guarantee: выход из Running при ЛЮБОМ исходе обработки. EndRunning одновременно
@@ -377,15 +379,6 @@ internal sealed class EventLoop(
 			Log.InstanceCreated(logger, instance.FullyQualifiedName, null);
 		}
 	}
-
-	/// <summary>
-	/// Прямые dependent-стадии (whole ∪ instance) без дубликатов. Инвариант гарантируется
-	/// <c>ConfigurationValidator.ValidateNoDuplicateDependencies</c> на build-time:
-	/// <see cref="StageDescriptor.DependentsWhole"/> ∩ <see cref="StageDescriptor.DependentsInstance"/> = ∅
-	/// и каждый список duplicate-free сам по себе. Defensive <c>DistinctBy</c> здесь не нужен.
-	/// </summary>
-	private static IEnumerable<StageDescriptor> EnumerateDirectDependents(StageDescriptor stage) =>
-		stage.DependentsWhole.Concat(stage.DependentsInstance);
 
 	/// <summary>
 	/// Pre-allocated <see cref="LoggerMessage.Define{T}"/>-делегаты для всех hot-path логов EventLoop.

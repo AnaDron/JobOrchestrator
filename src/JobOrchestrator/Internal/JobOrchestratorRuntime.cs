@@ -1,4 +1,3 @@
-using System.Collections.Immutable;
 using System.Threading.Channels;
 using Microsoft.Extensions.Logging;
 
@@ -21,10 +20,6 @@ internal sealed class JobOrchestratorRuntime(
 	OutcomeWaiters outcomeWaiters,
 	ILogger<JobOrchestratorRuntime> logger
 ) : IJobOrchestrator {
-	// Pre-allocated пустой словарь для null-path в TriggerAsync — избегаем аллокации при каждом вызове.
-	private static readonly IReadOnlyDictionary<string, string> EmptyKeys =
-		ImmutableDictionary<string, string>.Empty.WithComparers(StringComparer.Ordinal);
-
 	public bool IsFaulted => lifecycle.IsFaulted;
 
 	public async Task<TriggerResult> TriggerAsync(
@@ -42,15 +37,14 @@ internal sealed class JobOrchestratorRuntime(
 			return TriggerResult.NotFound;
 		}
 
-		var keys = dependencyKeys ?? EmptyKeys;
-		if (!ValidateKeys(stage!.ExpectedKeyNames, keys)) {
+		if (!ValidateKeys(stage!.ExpectedKeyNames, dependencyKeys)) {
 			Log.TriggerInvalidKeys(logger, stageName, null);
 			return TriggerResult.InvalidKeys;
 		}
 
 		// Identity строится ОДИН РАЗ здесь (после валидации) — encode + format происходят на этом
 		// единственном вызове, а не в каждом EventLoop.HandleManualTrigger через Find(stage, keys).
-		var identity = new InstanceIdentity(stage, keys);
+		var identity = new InstanceIdentity(stage, dependencyKeys);
 		var tcs = new TaskCompletionSource<TriggerResult>(TaskCreationOptions.RunContinuationsAsynchronously);
 		var evt = new ManualTriggerRequestedEvent(identity, tcs);
 		try {
@@ -95,7 +89,7 @@ internal sealed class JobOrchestratorRuntime(
 			throw new InvalidOperationException(
 				$"Стадия '{stageName}' имеет ключевые зависимости. Внешний RegisterKey/UnregisterKey работает только для keyless-эмитеров; используйте JobContext.AddKey/RemoveKey из ExecuteAsync.");
 		}
-		var source = instances.Find(new InstanceIdentity(stage, EmptyKeys));
+		var source = instances.Find(new InstanceIdentity(stage));
 		if (source is null) {
 			throw new InvalidOperationException(
 				$"Keyless-инстанс для стадии '{stageName}' ещё не создан (оркестратор не стартован?).");
@@ -151,20 +145,21 @@ internal sealed class JobOrchestratorRuntime(
 		if (!registry.TryGet(stageName, out var stage)) {
 			throw new ArgumentException($"Стадия '{stageName}' не зарегистрирована в графе.", nameof(stageName));
 		}
-		var keys = dependencyKeys ?? EmptyKeys;
-		if (!ValidateKeys(stage!.ExpectedKeyNames, keys)) {
+		if (!ValidateKeys(stage!.ExpectedKeyNames, dependencyKeys)) {
 			throw new ArgumentException(
 				$"Набор ключей для стадии '{stageName}' не соответствует ExpectedKeyNames.",
 				nameof(dependencyKeys));
 		}
-		return new InstanceIdentity(stage, keys);
+		return new InstanceIdentity(stage, dependencyKeys);
 	}
 
 	/// <summary>
 	/// Проверяет, что набор имён ключей соответствует ожидаемым именам, включая транзитивно унаследованные
-	/// через цепочку <c>DependsOn</c>-родителей (см. <see cref="StageRegistry.ExpectedKeyNames"/>).
+	/// через цепочку <c>DependsOn</c>-родителей (см. <see cref="StageDescriptor.ExpectedKeyNames"/>).
+	/// <paramref name="keys"/> = <c>null</c> трактуется как пустой словарь — валидно только для keyless-стадий.
 	/// </summary>
-	private static bool ValidateKeys(IReadOnlyList<string> expected, IReadOnlyDictionary<string, string> keys) {
+	private static bool ValidateKeys(IReadOnlyList<string> expected, IReadOnlyDictionary<string, string>? keys) {
+		if (keys is null) return expected.Count == 0;
 		if (keys.Count != expected.Count) return false;
 		foreach (var name in expected) {
 			if (!keys.ContainsKey(name)) return false;

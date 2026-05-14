@@ -5,7 +5,7 @@ public sealed class TriggerAcceptanceTests {
 		TestStages.Make("x", new() { Debounce = debounce, RetryPolicy = retry });
 
 	private static Instance MakeInstance(StageDescriptor stage) =>
-		new() { Identity = new InstanceIdentity(stage, new Dictionary<string, string>(StringComparer.Ordinal)) };
+		new() { Identity = new InstanceIdentity(stage) };
 
 	private static readonly DateTimeOffset Now = new(2026, 1, 1, 12, 0, 0, TimeSpan.Zero);
 

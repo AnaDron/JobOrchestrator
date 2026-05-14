@@ -78,7 +78,7 @@ public sealed class DueScannerBacklogWarningTests {
 		// Все события orchestrator-loop'а привязаны к Instance. Создаём минимально валидный
 		// инстанс stub-стадии и используем StageCompletedEvent (без побочных эффектов в Channel.Reader).
 		var stage = TestStages.Make("stub", new() { ServiceType = typeof(object) });
-		var inst = new Instance { Identity = new InstanceIdentity(stage, new Dictionary<string, string>(StringComparer.Ordinal)) };
+		var inst = new Instance { Identity = new InstanceIdentity(stage) };
 		return new StageCompletedEvent(inst, DateTimeOffset.UtcNow);
 	}
 }

@@ -41,15 +41,25 @@ internal sealed class InstanceIdentity : IEquatable<InstanceIdentity> {
 	/// <summary>Scope для <see cref="IJobStateStore"/>: <c>"{StageName}:{EncodedKey}"</c>.</summary>
 	public string StateScope => $"{Stage.Name}:{EncodedKey}";
 
-	public InstanceIdentity(StageDescriptor stage, IReadOnlyDictionary<string, string> dependencyKeys) {
+	/// <summary>
+	/// <paramref name="dependencyKeys"/> опционален: <c>null</c> = пустой словарь (для keyless-стадий —
+	/// типичный путь, чтобы не плодить <c>new Dictionary&lt;string,string&gt;(StringComparer.Ordinal)</c>
+	/// на каждом call-site).
+	/// </summary>
+	public InstanceIdentity(StageDescriptor stage, IReadOnlyDictionary<string, string>? dependencyKeys = null) {
 		ArgumentNullException.ThrowIfNull(stage);
-		ArgumentNullException.ThrowIfNull(dependencyKeys);
 		Stage = stage;
-		DependencyKeys = dependencyKeys as ImmutableDictionary<string, string>
-			?? ImmutableDictionary.CreateRange(StringComparer.Ordinal, dependencyKeys);
+		DependencyKeys = dependencyKeys switch {
+			null => EmptyKeys,
+			ImmutableDictionary<string, string> already => already,
+			_ => ImmutableDictionary.CreateRange(StringComparer.Ordinal, dependencyKeys),
+		};
 		EncodedKey = Encode(DependencyKeys);
 		FullyQualifiedName = FormatFqn(stage.Name, DependencyKeys, stage.ExpectedKeyNames);
 	}
+
+	private static readonly ImmutableDictionary<string, string> EmptyKeys =
+		ImmutableDictionary<string, string>.Empty.WithComparers(StringComparer.Ordinal);
 
 	/// <summary>
 	/// Канонический encoding: компоненты отсортированы по имени; спецсимволы (<c>|</c>, <c>=</c>, <c>\</c>) экранируются

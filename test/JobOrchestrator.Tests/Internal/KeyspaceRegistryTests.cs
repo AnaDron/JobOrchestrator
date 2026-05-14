@@ -4,8 +4,7 @@ public sealed class KeyspaceRegistryTests {
 	private static readonly StageDescriptor Shops = TestStages.Make("shops");
 	private static readonly StageDescriptor Employees = TestStages.Make("employees");
 
-	private static InstanceIdentity Keyless(StageDescriptor stage) =>
-		new(stage, new Dictionary<string, string>(StringComparer.Ordinal));
+	private static InstanceIdentity Keyless(StageDescriptor stage) => new(stage);
 
 	private static InstanceIdentity Emitter(StageDescriptor stage, string keyName, string keyValue) =>
 		new(stage, new Dictionary<string, string>(StringComparer.Ordinal) { [keyName] = keyValue });
