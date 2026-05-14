@@ -3,6 +3,12 @@ namespace JobOrchestrator.Abstractions;
 /// <summary>
 /// Точка управления оркестратором снаружи: ручные триггеры, наполнение keyspace для bootstrap, диагностика.
 /// Резолвится из DI как singleton.
+/// <para>
+/// <b>Primary handle-API:</b> <c>orchestrator["stageName"][InstanceKey.None | (key, value), ...].Operation()</c>
+/// — структурированный доступ через <see cref="IStageHandle"/> → <see cref="IInstanceHandle"/>.
+/// Старые flat-методы (<c>TriggerAsync(stageName, dict, ct)</c>, <c>WaitForStage*Async</c>) помечены
+/// <c>[Obsolete]</c> и будут удалены в следующей мажорной версии.
+/// </para>
 /// </summary>
 public interface IJobOrchestrator {
 	/// <summary>
@@ -12,15 +18,26 @@ public interface IJobOrchestrator {
 	bool IsFaulted { get; }
 
 	/// <summary>
+	/// Root handle-API: <c>orchestrator["stageName"]</c> → <see cref="IStageHandle"/>.
+	/// O(1) hash-lookup в pre-populated кеше; нулевая allocation.
+	/// </summary>
+	/// <exception cref="ArgumentException">Если стадия не зарегистрирована в графе.</exception>
+	IStageHandle this[string stageName] { get; }
+
+	/// <summary>
+	/// Синхронный снимок состояния всех существующих инстансов всех стадий. Lock-free через atomic-reads
+	/// (<see cref="System.Threading.Volatile.Read{T}(ref T)"/>) — eventually consistent между полями одного инстанса,
+	/// но всегда без race-conditions на уровне snapshot collection.
+	/// </summary>
+	InstancesOverview GetOverview();
+
+	#region [Obsolete] flat-API — заменён на handle-API, удалён в следующей мажорной версии
+
+	/// <summary>
 	/// Запросить ручной запуск инстанса. Подчиняется логике <c>TryAcceptTrigger</c>: Manual игнорирует retry-delay,
 	/// но уважает debounce-окно (от LastAttempt, вне зависимости от исхода последней попытки).
 	/// </summary>
-	/// <param name="stageName">Имя стадии (как задано в Fluent API).</param>
-	/// <param name="dependencyKeys">
-	/// Композитный ключ целевого инстанса. <c>null</c> или пустой словарь — для безключевых стадий.
-	/// Набор имён должен соответствовать набору <c>DependsOnInstance</c>-зависимостей стадии,
-	/// иначе возвращается <see cref="TriggerResult.InvalidKeys"/>.
-	/// </param>
+	[Obsolete("Используйте orchestrator[stageName][keys].TriggerAsync(). Будет удалён в следующей мажорной версии.", DiagnosticId = "JOB001")]
 	Task<TriggerResult> TriggerAsync(
 		string stageName,
 		IReadOnlyDictionary<string, string>? dependencyKeys = null,
@@ -32,6 +49,7 @@ public interface IJobOrchestrator {
 	/// </summary>
 	/// <exception cref="ArgumentException">Если <paramref name="stageName"/> не зарегистрирована в графе.</exception>
 	/// <exception cref="InvalidOperationException">Если оркестратор в Faulted-состоянии.</exception>
+	[Obsolete("Используйте orchestrator[stageName].RegisterKey(key). Будет удалён в следующей мажорной версии.", DiagnosticId = "JOB004")]
 	void RegisterKey(string stageName, string key);
 
 	/// <summary>
@@ -40,14 +58,8 @@ public interface IJobOrchestrator {
 	/// </summary>
 	/// <exception cref="ArgumentException">Если <paramref name="stageName"/> не зарегистрирована в графе.</exception>
 	/// <exception cref="InvalidOperationException">Если оркестратор в Faulted-состоянии.</exception>
+	[Obsolete("Используйте orchestrator[stageName].UnregisterKey(key). Будет удалён в следующей мажорной версии.", DiagnosticId = "JOB005")]
 	void UnregisterKey(string stageName, string key);
-
-	/// <summary>
-	/// Синхронный снимок состояния всех существующих инстансов всех стадий. Lock-free через atomic-reads
-	/// (<see cref="System.Threading.Volatile.Read{T}(ref T)"/>) — eventually consistent между полями одного инстанса,
-	/// но всегда без race-conditions на уровне snapshot collection.
-	/// </summary>
-	InstancesOverview GetOverview();
 
 	/// <summary>
 	/// Завершается, когда инстанс <paramref name="stageName"/> с указанными ключами успешно
@@ -58,6 +70,7 @@ public interface IJobOrchestrator {
 	/// <see cref="OperationCanceledException"/>. При shutdown оркестратора — <see cref="InvalidOperationException"/>.
 	/// </summary>
 	/// <exception cref="ArgumentException">Если <paramref name="stageName"/> не в графе или keys не соответствуют ExpectedKeyNames.</exception>
+	[Obsolete("Используйте orchestrator[stageName][keys].WaitForSuccessAsync(). Будет удалён в следующей мажорной версии.", DiagnosticId = "JOB002")]
 	Task WaitForStageSuccessAsync(
 		string stageName,
 		IReadOnlyDictionary<string, string>? dependencyKeys = null,
@@ -70,8 +83,11 @@ public interface IJobOrchestrator {
 	/// за порядок «Register перед Trigger», если хочет ждать именно текущий запуск.
 	/// </summary>
 	/// <exception cref="ArgumentException">Если <paramref name="stageName"/> не в графе или keys не соответствуют ExpectedKeyNames.</exception>
+	[Obsolete("Используйте orchestrator[stageName][keys].WaitForOutcomeAsync(). Будет удалён в следующей мажорной версии.", DiagnosticId = "JOB003")]
 	Task<StageOutcome> WaitForStageOutcomeAsync(
 		string stageName,
 		IReadOnlyDictionary<string, string>? dependencyKeys = null,
 		CancellationToken ct = default);
+
+	#endregion
 }
