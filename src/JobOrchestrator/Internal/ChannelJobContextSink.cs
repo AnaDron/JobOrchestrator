@@ -5,9 +5,9 @@ namespace JobOrchestrator.Internal;
 /// <summary>
 /// Production-реализация <see cref="IJobContextSink"/>: публикует <see cref="KeyAddedEvent"/>/
 /// <see cref="KeyRemovedEvent"/> в event-loop Channel с привязкой к инстансу-эмитеру
-/// (<see cref="StageInstance"/>).
+/// (<see cref="Instance"/>).
 /// <para>
-/// <b>Один sink на StageInstance lifetime</b> (pre-created в <see cref="InstanceCreator"/>):
+/// <b>Один sink на Instance lifetime</b> (pre-created в <see cref="InstanceCreator"/>):
 /// Source и ChannelWriter постоянны → нет смысла создавать sink на каждую итерацию.
 /// Один Sink-объект живёт столько же, сколько Instance.
 /// </para>
@@ -21,7 +21,7 @@ namespace JobOrchestrator.Internal;
 /// </summary>
 internal sealed class ChannelJobContextSink(
 	ChannelWriter<OrchestratorEvent> writer,
-	StageInstance source
+	Instance source
 ) : IJobContextSink {
 	public void AddKey(string key) => PublishOrThrow(new KeyAddedEvent(source, key), "AddKey");
 

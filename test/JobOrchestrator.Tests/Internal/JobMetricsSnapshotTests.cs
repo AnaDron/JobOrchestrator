@@ -9,7 +9,7 @@ public sealed class JobMetricsSnapshotTests {
 		public Task ExecuteAsync(JobContext ctx, CancellationToken ct) => Task.CompletedTask;
 	}
 
-	private static StageInstance MakeInstance() {
+	private static Instance MakeInstance() {
 		var stage = new StageDescriptor {
 			Name = "x",
 			ServiceType = typeof(FakeService),
@@ -19,7 +19,7 @@ public sealed class JobMetricsSnapshotTests {
 			Dependencies = [],
 		};
 		var keys = new Dictionary<string, string>(StringComparer.Ordinal);
-		return new StageInstance { Identity = new InstanceIdentity(stage, keys) };
+		return new Instance { Identity = new InstanceIdentity(stage, keys) };
 	}
 
 	[Fact]

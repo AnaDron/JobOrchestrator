@@ -4,7 +4,7 @@ namespace JobOrchestrator.Internal;
 internal abstract record OrchestratorEvent;
 
 /// <summary>Auto-тик для конкретного инстанса. Публикуется <see cref="DueScanner"/> при наступлении <c>NextAutoUtc</c>.</summary>
-internal sealed record TimerTickedEvent(StageInstance Instance) : OrchestratorEvent;
+internal sealed record TimerTickedEvent(Instance Instance) : OrchestratorEvent;
 
 /// <summary>Запрос ручного триггера снаружи (через <see cref="IJobOrchestrator.TriggerAsync"/>).</summary>
 internal sealed record ManualTriggerRequestedEvent(
@@ -19,16 +19,16 @@ internal sealed record ManualTriggerRequestedEvent(
 /// <see cref="IJobOrchestrator.RegisterKey"/> Source резолвится в keyless-инстанс стадии (это работает
 /// только для стадий без <c>DependsOnInstance</c>).
 /// </summary>
-internal sealed record KeyAddedEvent(StageInstance Source, string Key) : OrchestratorEvent;
+internal sealed record KeyAddedEvent(Instance Source, string Key) : OrchestratorEvent;
 
 /// <summary>
 /// Удаление ключа из keyspace инстанса-эмитера. <paramref name="Source"/> идентифицирует bucket
 /// аналогично <see cref="KeyAddedEvent"/>.
 /// </summary>
-internal sealed record KeyRemovedEvent(StageInstance Source, string Key) : OrchestratorEvent;
+internal sealed record KeyRemovedEvent(Instance Source, string Key) : OrchestratorEvent;
 
 /// <summary>Итерация инстанса завершилась успешно (без исключения). <paramref name="At"/> зафиксировано в runner-thread.</summary>
-internal sealed record StageCompletedEvent(StageInstance Instance, DateTimeOffset At) : OrchestratorEvent;
+internal sealed record StageCompletedEvent(Instance Instance, DateTimeOffset At) : OrchestratorEvent;
 
 /// <summary>Итерация инстанса завершилась неуспехом (исключение или watchdog cancel).</summary>
-internal sealed record StageFailedEvent(StageInstance Instance, Exception Exception, DateTimeOffset At) : OrchestratorEvent;
+internal sealed record StageFailedEvent(Instance Instance, Exception Exception, DateTimeOffset At) : OrchestratorEvent;

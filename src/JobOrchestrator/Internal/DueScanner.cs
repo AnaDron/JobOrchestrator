@@ -119,10 +119,10 @@ internal sealed class DueScanner(
 	/// Сканирует все инстансы, публикует <see cref="TimerTickedEvent"/> для due-инстансов,
 	/// возвращает ближайший <c>NextAutoUtc</c> в будущем (или <c>null</c>, если расписаний нет).
 	/// <para>
-	/// Идемпотентность гарантируется через <see cref="StageInstance.TryAcquirePendingTick"/>:
+	/// Идемпотентность гарантируется через <see cref="Instance.TryAcquirePendingTick"/>:
 	/// если флаг уже взведён (предыдущий tick ещё в Channel или обрабатывается consumer-ом),
 	/// scan пропускает инстанс. Флаг сбрасывается event-loop-ом в <c>BeginIteration</c> (через
-	/// <see cref="StageInstance.ReleasePendingTick"/>) после завершения обработки события.
+	/// <see cref="Instance.ReleasePendingTick"/>) после завершения обработки события.
 	/// </para>
 	/// </summary>
 	private DateTimeOffset? ScanAndPublishDue(DateTimeOffset now) {

@@ -14,10 +14,10 @@ public sealed class InstanceManagerTests {
 		Dependencies = [],
 	};
 
-	private static StageInstance MakeInstance(StageDescriptor stage, Dictionary<string, string> keys) {
+	private static Instance MakeInstance(StageDescriptor stage, Dictionary<string, string> keys) {
 		var fqn = DependencyKey.FormatFullyQualifiedName(stage.Name, keys, []);
 		var encoded = DependencyKey.Encode(keys);
-		return new StageInstance { Identity = new InstanceIdentity(stage, keys) };
+		return new Instance { Identity = new InstanceIdentity(stage, keys) };
 	}
 
 	[Fact]

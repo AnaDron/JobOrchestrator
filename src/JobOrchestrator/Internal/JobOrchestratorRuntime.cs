@@ -9,7 +9,7 @@ namespace JobOrchestrator.Internal;
 /// <list type="bullet">
 /// <item><c>TriggerAsync</c>: валидация ключей → публикация <see cref="ManualTriggerRequestedEvent"/> в Channel, await TCS.</item>
 /// <item><c>Register/UnregisterKey</c>: проверка существования стадии → публикация <see cref="KeyAddedEvent"/>/<see cref="KeyRemovedEvent"/>.</item>
-/// <item><c>GetOverview</c>: синхронный snapshot через atomic-reads <see cref="StageInstance"/>-полей. Lock-free, без RPC. Доступен и в Faulted (для диагностики).</item>
+/// <item><c>GetOverview</c>: синхронный snapshot через atomic-reads <see cref="Instance"/>-полей. Lock-free, без RPC. Доступен и в Faulted (для диагностики).</item>
 /// </list>
 /// </summary>
 internal sealed class JobOrchestratorRuntime(
@@ -84,7 +84,7 @@ internal sealed class JobOrchestratorRuntime(
 	/// инстанс-эмитер использовать как Source). Для ключевых стадий — InvalidOperationException
 	/// (BL должна использовать <see cref="JobContext.AddKey"/> изнутри сервиса).
 	/// </summary>
-	private StageInstance ResolveKeylessSource(string stageName) {
+	private Instance ResolveKeylessSource(string stageName) {
 		if (!registry.TryGet(stageName, out _)) {
 			throw new ArgumentException($"Стадия '{stageName}' не зарегистрирована в графе.", nameof(stageName));
 		}

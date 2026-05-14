@@ -14,7 +14,7 @@ internal static class DependencyResolver {
 	/// target присутствуют в candidate с теми же значениями). Для безключевой target — единственный
 	/// инстанс с пустыми DependencyKeys.
 	/// </summary>
-	public static StageInstance? FindPairedInstance(InstanceManager instances, string targetStageName, IReadOnlyDictionary<string, string> candidateKeys) =>
+	public static Instance? FindPairedInstance(InstanceManager instances, string targetStageName, IReadOnlyDictionary<string, string> candidateKeys) =>
 		instances.InstancesOf(targetStageName)
 			.FirstOrDefault(inst => inst.DependencyKeys.All(kv =>
 				candidateKeys.TryGetValue(kv.Key, out var v) && string.Equals(v, kv.Value, StringComparison.Ordinal)));

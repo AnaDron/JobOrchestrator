@@ -19,7 +19,7 @@ internal sealed class StageRunner(
 ) {
 	private readonly ILogger _logger = loggerFactory.CreateLogger("JobOrchestrator.StageRunner");
 
-	public async Task RunIterationAsync(StageInstance instance, TriggerSource trigger, CancellationToken stoppingToken) {
+	public async Task RunIterationAsync(Instance instance, TriggerSource trigger, CancellationToken stoppingToken) {
 		string correlationId = Guid.NewGuid().ToString("N");
 		var logFields = BuildLogScopeFields(instance, correlationId);
 
@@ -98,7 +98,7 @@ internal sealed class StageRunner(
 		}
 	}
 
-	private static Dictionary<string, object> BuildLogScopeFields(StageInstance instance, string correlationId) {
+	private static Dictionary<string, object> BuildLogScopeFields(Instance instance, string correlationId) {
 		Dictionary<string, object> fields = new(3 + instance.DependencyKeys.Count, StringComparer.Ordinal) {
 			["CorrelationId"] = correlationId,
 			["FullyQualifiedName"] = instance.FullyQualifiedName,

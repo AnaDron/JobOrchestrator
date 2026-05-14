@@ -17,9 +17,9 @@ public sealed class DueScannerTests {
 		Dependencies = [],
 	};
 
-	private static StageInstance MakeInstance(StageDescriptor stage, DateTimeOffset? nextAuto, InstanceLifecycleState state = InstanceLifecycleState.Idle) {
+	private static Instance MakeInstance(StageDescriptor stage, DateTimeOffset? nextAuto, InstanceLifecycleState state = InstanceLifecycleState.Idle) {
 		var empty = new Dictionary<string, string>(StringComparer.Ordinal);
-		var inst = new StageInstance { Identity = new InstanceIdentity(stage, empty) };
+		var inst = new Instance { Identity = new InstanceIdentity(stage, empty) };
 		inst.SetMetrics(inst.Metrics with { NextAutoUtc = nextAuto });
 		if (state == InstanceLifecycleState.Running) inst.TryBeginRunning();
 		else if (state == InstanceLifecycleState.Terminating) inst.MarkTerminating();
@@ -34,9 +34,9 @@ public sealed class DueScannerTests {
 
 		// Три инстанса с разными "marker"-ключами, чтобы Identity-equality их различал в InstanceManager:
 		// один уже due, один — в будущем, один — Running (должен быть пропущен).
-		StageInstance MakeMarked(string marker, DateTimeOffset nextAuto, InstanceLifecycleState state = InstanceLifecycleState.Idle) {
+		Instance MakeMarked(string marker, DateTimeOffset nextAuto, InstanceLifecycleState state = InstanceLifecycleState.Idle) {
 			var keys = new Dictionary<string, string>(StringComparer.Ordinal) { ["marker"] = marker };
-			var inst = new StageInstance { Identity = new InstanceIdentity(stage, keys) };
+			var inst = new Instance { Identity = new InstanceIdentity(stage, keys) };
 			inst.SetMetrics(inst.Metrics with { NextAutoUtc = nextAuto });
 			if (state == InstanceLifecycleState.Running) inst.TryBeginRunning();
 			else if (state == InstanceLifecycleState.Terminating) inst.MarkTerminating();
@@ -77,7 +77,7 @@ public sealed class DueScannerTests {
 		var stage = MakeStage("x");
 
 		// Всё в далёком будущем — без Wake() scanner спал бы дольше теста.
-		var farFuture = new StageInstance { Identity = new InstanceIdentity(stage, new Dictionary<string, string>(StringComparer.Ordinal)) };
+		var farFuture = new Instance { Identity = new InstanceIdentity(stage, new Dictionary<string, string>(StringComparer.Ordinal)) };
 		farFuture.SetMetrics(farFuture.Metrics with { NextAutoUtc = DateTimeOffset.UtcNow.AddMinutes(10) });
 		manager.Add(farFuture);
 

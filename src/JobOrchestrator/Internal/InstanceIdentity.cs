@@ -11,7 +11,7 @@ namespace JobOrchestrator.Internal;
 /// </para>
 /// <list type="bullet">
 /// <item><see cref="InstanceManager"/> хранит инстансы по <c>Identity</c>;</item>
-/// <item>Channel-события (<c>TimerTickedEvent</c>, <c>StageCompletedEvent</c>, …) несут ссылку на <see cref="StageInstance"/>, у которого есть <c>Identity</c>;</item>
+/// <item>Channel-события (<c>TimerTickedEvent</c>, <c>StageCompletedEvent</c>, …) несут ссылку на <see cref="Instance"/>, у которого есть <c>Identity</c>;</item>
 /// <item><see cref="JobContext.FullyQualifiedName"/>/<c>DependencyKeys</c> — фасады поверх Identity.</item>
 /// </list>
 /// <para>

@@ -17,9 +17,9 @@ public sealed class DependencyResolverTests {
 		Dependencies = deps,
 	};
 
-	private static StageInstance MakeInstance(StageDescriptor stage, Dictionary<string, string>? keys = null) {
+	private static Instance MakeInstance(StageDescriptor stage, Dictionary<string, string>? keys = null) {
 		keys ??= new Dictionary<string, string>(StringComparer.Ordinal);
-		return new StageInstance { Identity = new InstanceIdentity(stage, keys) };
+		return new Instance { Identity = new InstanceIdentity(stage, keys) };
 	}
 
 	[Fact]

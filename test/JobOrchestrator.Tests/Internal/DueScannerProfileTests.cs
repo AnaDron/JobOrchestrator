@@ -9,8 +9,8 @@ namespace JobOrchestrator.Tests.Internal;
 /// Профилирование <see cref="DueScanner.Tick"/> на больших графах. Принимает решение по TODO-пункту
 /// «sorted-by-deadline collection vs linear-scan».
 /// <para>
-/// Текущая модель: один scan = O(N) volatile-read поля <see cref="StageInstance.NextAutoUtc"/>.
-/// Альтернатива: <c>PriorityQueue&lt;StageInstance, DateTimeOffset&gt;</c> с O(log N) на schedule-change,
+/// Текущая модель: один scan = O(N) volatile-read поля <see cref="Instance.NextAutoUtc"/>.
+/// Альтернатива: <c>PriorityQueue&lt;Instance, DateTimeOffset&gt;</c> с O(log N) на schedule-change,
 /// O(log N) на dequeue. Точка безразличия: log₂(N) ≈ 14 при N=10k — sorted-collection дешевле только если
 /// средняя «доля due-инстансов на один scan» меньше 1/14 (~7%).
 /// </para>
@@ -48,7 +48,7 @@ public sealed class DueScannerProfileTests(ITestOutputHelper output) {
 
 		for (int i = 0; i < n; i++) {
 			var keys = new Dictionary<string, string>(StringComparer.Ordinal) { ["i"] = i.ToString() };
-			var instance = new StageInstance { Identity = new InstanceIdentity(stage, keys) };
+			var instance = new Instance { Identity = new InstanceIdentity(stage, keys) };
 			// All-due → NextAutoUtc в прошлом; no-work → далеко в будущем.
 			instance.SetMetrics(instance.Metrics with {
 				NextAutoUtc = allDue ? DateTimeOffset.UtcNow.AddSeconds(-1) : DateTimeOffset.UtcNow.AddDays(30),

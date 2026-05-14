@@ -26,7 +26,7 @@ namespace JobOrchestrator.Internal;
 /// корректное расписание даже когда event-loop отстаёт.
 /// </para>
 /// <para>
-/// <b>Try/finally state consistency.</b> В StageCompleted/Failed handler-е <see cref="StageInstance.State"/>=Idle
+/// <b>Try/finally state consistency.</b> В StageCompleted/Failed handler-е <see cref="Instance.State"/>=Idle
 /// проставляется в finally — exception между SetMetrics и State=Idle не оставит инстанс залипшим в Running.
 /// </para>
 /// </remarks>
@@ -120,7 +120,7 @@ internal sealed class EventLoop(
 		}
 	}
 
-	private void HandleTimerTick(StageInstance instance, CancellationToken ct) {
+	private void HandleTimerTick(Instance instance, CancellationToken ct) {
 		// pendingTick освобождается ВСЕГДА при обработке tick-события.
 		instance.ReleasePendingTick();
 		// Идемпотентность: инстанс мог быть уже Terminated/удалён.
@@ -147,7 +147,7 @@ internal sealed class EventLoop(
 		}
 	}
 
-	private void BeginIteration(StageInstance instance, TriggerSource trigger, CancellationToken ct) {
+	private void BeginIteration(Instance instance, TriggerSource trigger, CancellationToken ct) {
 		// ConcurrencyLimit: если стадия уже на лимите — re-schedule инстанс через короткое окно
 		// (1 sec), не меняя State (остаётся Idle). DueScanner подберёт его снова, когда лимит откроется.
 		if (!concurrency.TryAcquire(instance.Stage.Name)) {
@@ -169,7 +169,7 @@ internal sealed class EventLoop(
 		_ = Task.Run(async () => await runner.RunIterationAsync(instance, trigger, ct).ConfigureAwait(false), ct);
 	}
 
-	private void HandleKeyAdded(StageInstance source, string key) {
+	private void HandleKeyAdded(Instance source, string key) {
 		if (source.IsTerminating) {
 			Log.IgnoredAddKeyFromTerminating(logger, source.Stage.Name, key, source.FullyQualifiedName, null);
 			return;
@@ -185,7 +185,7 @@ internal sealed class EventLoop(
 		scanner.Wake();
 	}
 
-	private async Task HandleKeyRemovedAsync(StageInstance source, string key, CancellationToken ct) {
+	private async Task HandleKeyRemovedAsync(Instance source, string key, CancellationToken ct) {
 		if (source.IsTerminating) {
 			Log.IgnoredRemoveKeyFromTerminating(logger, source.Stage.Name, key, source.FullyQualifiedName, null);
 			return;
@@ -203,7 +203,7 @@ internal sealed class EventLoop(
 	/// Для каждого аффектированного инстанса:
 	/// <list type="bullet">
 	/// <item>устанавливаем State=Terminating;</item>
-	/// <item>если был Running — cancel <see cref="StageInstance.RunCts"/>, finalize отложен до StageCompleted/Failed;</item>
+	/// <item>если был Running — cancel <see cref="Instance.RunCts"/>, finalize отложен до StageCompleted/Failed;</item>
 	/// <item>если был Idle — сразу finalize (Remove + RemoveScopeAsync);</item>
 	/// <item>сирот-ключи из его keyspace-bucket → enqueue для дальнейшего обхода.</item>
 	/// </list>
@@ -277,7 +277,7 @@ internal sealed class EventLoop(
 		return true;
 	}
 
-	private async Task HandleStageCompletedAsync(StageInstance instance, DateTimeOffset at, CancellationToken ct) {
+	private async Task HandleStageCompletedAsync(Instance instance, DateTimeOffset at, CancellationToken ct) {
 		// Terminating: finalize cleanup, метрики не трогаем (инстанс «мёртв»).
 		if (instance.IsTerminating) {
 			Log.TerminatingCompletedFinalize(logger, instance.FullyQualifiedName, null);
@@ -323,7 +323,7 @@ internal sealed class EventLoop(
 		}
 	}
 
-	private async Task HandleStageFailedAsync(StageInstance instance, Exception ex, DateTimeOffset at, CancellationToken ct) {
+	private async Task HandleStageFailedAsync(Instance instance, Exception ex, DateTimeOffset at, CancellationToken ct) {
 		// Terminating: finalize cleanup.
 		if (instance.IsTerminating) {
 			Log.TerminatingFailedFinalize(logger, instance.FullyQualifiedName, null);
@@ -357,7 +357,7 @@ internal sealed class EventLoop(
 		}
 	}
 
-	private async Task FinalizeTerminatingAsync(StageInstance instance, CancellationToken ct) {
+	private async Task FinalizeTerminatingAsync(Instance instance, CancellationToken ct) {
 		// Remove из InstanceManager БЕФОRE RemoveScopeAsync — следующие lookup'ы не найдут.
 		instances.Remove(instance);
 

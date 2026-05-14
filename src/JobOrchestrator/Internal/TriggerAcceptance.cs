@@ -13,7 +13,7 @@ namespace JobOrchestrator.Internal;
 /// </summary>
 internal static class TriggerAcceptance {
 	public static TriggerResult TryAccept(
-		StageInstance instance,
+		Instance instance,
 		TriggerSource source,
 		DateTimeOffset now
 	) {

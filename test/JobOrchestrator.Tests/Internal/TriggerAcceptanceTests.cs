@@ -14,7 +14,7 @@ public sealed class TriggerAcceptanceTests {
 		Dependencies = [],
 	};
 
-	private static StageInstance MakeInstance(StageDescriptor stage) =>
+	private static Instance MakeInstance(StageDescriptor stage) =>
 		new() { Identity = new InstanceIdentity(stage, new Dictionary<string, string>(StringComparer.Ordinal)) };
 
 	private static readonly DateTimeOffset Now = new(2026, 1, 1, 12, 0, 0, TimeSpan.Zero);

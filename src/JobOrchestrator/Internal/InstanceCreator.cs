@@ -30,7 +30,7 @@ internal sealed class InstanceCreator(
 	TimeProvider time,
 	Channel<OrchestratorEvent> channel
 ) {
-	public List<StageInstance> EvaluateAndCreate(StageDescriptor stage) {
+	public List<Instance> EvaluateAndCreate(StageDescriptor stage) {
 		if (stage.Dependencies.Count == 0) {
 			// Безключевая стадия → один инстанс с пустыми DependencyKeys.
 			var empty = new Dictionary<string, string>(StringComparer.Ordinal);
@@ -51,7 +51,7 @@ internal sealed class InstanceCreator(
 		// Имена ключей в порядке Fluent API — для нормализации insertion order финального словаря.
 		var orderedKeyNames = ComputeOrderedKeyNames(stage, dimensions);
 
-		var created = new List<StageInstance>();
+		var created = new List<Instance>();
 		var workingMerged = new Dictionary<string, string>(StringComparer.Ordinal);
 		Recurse(stage, dimensions, 0, workingMerged, orderedKeyNames, created);
 		return created;
@@ -63,7 +63,7 @@ internal sealed class InstanceCreator(
 		int dimIdx,
 		Dictionary<string, string> current,
 		IReadOnlyList<string> orderedKeyNames,
-		List<StageInstance> output
+		List<Instance> output
 	) {
 		if (dimIdx == dimensions.Count) {
 			// Все измерения совмещены — проверяем существование и зависимости.
@@ -164,11 +164,11 @@ internal sealed class InstanceCreator(
 		return ordered;
 	}
 
-	private StageInstance MaterializeInstance(StageDescriptor stage, IReadOnlyDictionary<string, string> keys) {
+	private Instance MaterializeInstance(StageDescriptor stage, IReadOnlyDictionary<string, string> keys) {
 		// Передаём transitive-ordered names из registry — гарантирует детерминированный FQN
 		// (insertion order ImmutableDictionary не сохраняет).
 		var identity = new InstanceIdentity(stage, keys, registry.ExpectedKeyNames(stage.Name));
-		var instance = new StageInstance { Identity = identity };
+		var instance = new Instance { Identity = identity };
 		// Pre-allocated Sink: один объект на lifetime инстанса (Source/Writer постоянны), переиспользуется
 		// всеми итерациями StageRunner-а — экономим аллокацию per-iteration.
 		instance.Sink = new ChannelJobContextSink(channel.Writer, instance);

@@ -17,9 +17,9 @@ public sealed class InstanceCreatorTests {
 		Dependencies = deps,
 	};
 
-	private static StageInstance MakeInstanceWithSuccess(StageDescriptor stage, Dictionary<string, string>? keys = null) {
+	private static Instance MakeInstanceWithSuccess(StageDescriptor stage, Dictionary<string, string>? keys = null) {
 		keys ??= new Dictionary<string, string>(StringComparer.Ordinal);
-		var inst = new StageInstance { Identity = new InstanceIdentity(stage, keys) };
+		var inst = new Instance { Identity = new InstanceIdentity(stage, keys) };
 		inst.SetMetrics(inst.Metrics with { LastSuccess = DateTimeOffset.UtcNow });
 		return inst;
 	}
@@ -125,7 +125,7 @@ public sealed class InstanceCreatorTests {
 		var instances = new InstanceManager();
 		var keyspace = new KeyspaceRegistry();
 		// LastSuccess = null — ещё не был успешен.
-		var pgInst = new StageInstance { Identity = new InstanceIdentity(pg, new Dictionary<string, string>(StringComparer.Ordinal)) };
+		var pgInst = new Instance { Identity = new InstanceIdentity(pg, new Dictionary<string, string>(StringComparer.Ordinal)) };
 		instances.Add(pgInst);
 		var creator = new InstanceCreator(instances, keyspace, new StageRegistry([]), TimeProvider.System, System.Threading.Channels.Channel.CreateUnbounded<OrchestratorEvent>());
 

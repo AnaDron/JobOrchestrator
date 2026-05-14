@@ -1,7 +1,7 @@
 namespace JobOrchestrator.Internal;
 
 /// <summary>
-/// Runtime-сущность одного инстанса стадии (long-lived). Несколько <see cref="StageInstance"/> могут
+/// Runtime-сущность одного инстанса стадии (long-lived). Несколько <see cref="Instance"/> могут
 /// разделять один <see cref="StageDescriptor"/> — один на каждый компонент композитного ключа.
 /// <para>
 /// <b>Identity</b> — иммутабельный идентификатор; <b>Sink</b> pre-allocated per lifetime.
@@ -24,7 +24,7 @@ namespace JobOrchestrator.Internal;
 /// явно делают <c>instance.Metrics</c>, что видно как optimization-hotspot.
 /// </para>
 /// </summary>
-internal sealed class StageInstance {
+internal sealed class Instance {
 	public required InstanceIdentity Identity { get; init; }
 
 	/// <summary>
