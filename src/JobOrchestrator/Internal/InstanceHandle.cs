@@ -1,33 +1,31 @@
 namespace JobOrchestrator.Internal;
 
 /// <summary>
-/// Реализация <see cref="IInstanceHandle"/>. Identity-based: создаётся per-indexer-call,
-/// держит <see cref="InstanceIdentity"/> для всех downstream-операций. State/Snapshot читают
-/// текущее состояние через <see cref="InstanceManager"/> on-demand — handle переживает как
-/// pre-materialization, так и cascade-removal инстанса.
+/// Реализация <see cref="IInstanceHandle"/>. Identity-based: handle хранит <see cref="InstanceIdentity"/>,
+/// State/Snapshot читают текущее состояние через <see cref="InstanceManager"/> on-demand. Handle переживает
+/// как pre-materialization, так и cascade-removal инстанса.
+/// <para>
+/// <c>record class</c> — для value-equality по <c>(Runtime, Identity)</c>. Два handle-instance с
+/// одинаковым Identity считаются равными (можно класть в <c>Dictionary&lt;IInstanceHandle, T&gt;</c>
+/// или <c>HashSet</c>).
+/// </para>
 /// </summary>
-internal sealed class InstanceHandle(
-	JobOrchestratorRuntime runtime,
-	StageDescriptor stage,
-	IReadOnlyDictionary<string, string> dependencyKeys
-) : IInstanceHandle {
-	private readonly InstanceIdentity _identity = new(stage, dependencyKeys);
+internal sealed record class InstanceHandle(JobOrchestratorRuntime Runtime, InstanceIdentity Identity) : IInstanceHandle {
+	public string StageName => Identity.Stage.Name;
+	public IReadOnlyDictionary<string, string> DependencyKeys => Identity.DependencyKeys;
+	public string FullyQualifiedName => Identity.FullyQualifiedName;
 
-	public string StageName => _identity.Stage.Name;
-	public IReadOnlyDictionary<string, string> DependencyKeys => _identity.DependencyKeys;
-	public string FullyQualifiedName => _identity.FullyQualifiedName;
-
-	public InstanceLifecycleState? State => runtime.FindInstance(_identity)?.State;
+	public InstanceLifecycleState? State => Runtime.FindInstance(Identity)?.State;
 
 	public InstanceInfo? Snapshot {
 		get {
-			var instance = runtime.FindInstance(_identity);
+			var instance = Runtime.FindInstance(Identity);
 			if (instance is null) return null;
 			var m = instance.Metrics;
 			return new InstanceInfo {
-				StageName = _identity.Stage.Name,
-				DependencyKeys = _identity.DependencyKeys,
-				FullyQualifiedName = _identity.FullyQualifiedName,
+				StageName = Identity.Stage.Name,
+				DependencyKeys = Identity.DependencyKeys,
+				FullyQualifiedName = Identity.FullyQualifiedName,
 				State = instance.State,
 				LastSuccess = m.LastSuccess,
 				LastAttempt = m.LastAttempt,
@@ -38,11 +36,11 @@ internal sealed class InstanceHandle(
 	}
 
 	public Task<TriggerResult> TriggerAsync(CancellationToken ct = default) =>
-		runtime.TriggerAsync(_identity, ct);
+		Runtime.TriggerAsync(Identity, ct);
 
 	public Task WaitForSuccessAsync(CancellationToken ct = default) =>
-		runtime.WaitForStageSuccessAsync(_identity, ct);
+		Runtime.WaitForStageSuccessAsync(Identity, ct);
 
 	public Task<StageOutcome> WaitForOutcomeAsync(CancellationToken ct = default) =>
-		runtime.WaitForStageOutcomeAsync(_identity, ct);
+		Runtime.WaitForStageOutcomeAsync(Identity, ct);
 }

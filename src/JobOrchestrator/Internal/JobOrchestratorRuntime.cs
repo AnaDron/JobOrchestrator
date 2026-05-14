@@ -1,3 +1,4 @@
+using System.Collections;
 using System.Threading.Channels;
 using Microsoft.Extensions.Logging;
 
@@ -64,6 +65,13 @@ internal sealed class JobOrchestratorRuntime : IJobOrchestrator {
 			return handle;
 		}
 	}
+
+	/// <summary>
+	/// Итерация всех зарегистрированных стадий через cached <see cref="StageHandle"/>-ы. Zero-allocation
+	/// (за исключением enumerator-state-machine от Dictionary.ValueCollection).
+	/// </summary>
+	public IEnumerator<IStageHandle> GetEnumerator() => _stageHandles.Values.GetEnumerator();
+	IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
 
 	public InstancesOverview GetOverview() => _instances.Snapshot();
 

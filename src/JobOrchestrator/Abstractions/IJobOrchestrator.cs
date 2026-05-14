@@ -4,13 +4,28 @@ namespace JobOrchestrator.Abstractions;
 /// Точка управления оркестратором снаружи: ручные триггеры, наполнение keyspace для bootstrap, диагностика.
 /// Резолвится из DI как singleton.
 /// <para>
-/// <b>Primary handle-API:</b> <c>orchestrator["stageName"][InstanceKey.None | (key, value), ...].Operation()</c>
+/// <b>Handle-API:</b> <c>orchestrator["stageName"][InstanceKey.None | (key, value), ...].Operation()</c>
 /// — структурированный доступ через <see cref="IStageHandle"/> → <see cref="IInstanceHandle"/>.
 /// Старые flat-методы (<c>TriggerAsync(stageName, dict, ct)</c>, <c>WaitForStage*Async</c>) помечены
 /// <c>[Obsolete]</c> и будут удалены в следующей мажорной версии.
 /// </para>
+/// <para>
+/// <b>Enumeration:</b> <see cref="IJobOrchestrator"/> сам по себе является <see cref="IEnumerable{IStageHandle}"/>:
+/// <c>foreach (var stage in orchestrator) { ... }</c> — итерация всех зарегистрированных стадий.
+/// </para>
+/// <para>
+/// <b>Кэширование handles в hot-path:</b> indexer-вызовы создают per-call аллокации (InstanceHandle + Identity).
+/// Для polling-сценариев (UI-обновления, метрики) — кэшируйте handle локально:
+/// <code>
+/// var h = orchestrator["pg"][("shops", "u1")];   // один раз
+/// while (running) {
+///     var state = h.State;                        // re-uses cached identity
+///     await Task.Delay(...);
+/// }
+/// </code>
+/// </para>
 /// </summary>
-public interface IJobOrchestrator {
+public interface IJobOrchestrator : IEnumerable<IStageHandle> {
 	/// <summary>
 	/// <c>true</c>, если event loop крашнулся (Faulted). После Faulted-состояния все методы либо возвращают
 	/// <see cref="TriggerResult.Faulted"/>, либо бросают <see cref="InvalidOperationException"/>.
