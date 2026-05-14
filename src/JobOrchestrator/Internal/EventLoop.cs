@@ -38,6 +38,8 @@ internal sealed class EventLoop(
 	StageRunner runner,
 	DueScanner scanner,
 	ConcurrencyLimits concurrency,
+	SuccessWaiters successWaiters,
+	OutcomeWaiters outcomeWaiters,
 	Channel<OrchestratorEvent> channel,
 	IJobStateStore stateStore,
 	ILogger<EventLoop> logger,
@@ -64,6 +66,11 @@ internal sealed class EventLoop(
 			DrainPendingRequests();
 			// Финализируем все Terminating-инстансы (их finalize-events не прилетят при закрытом Channel).
 			await FinalizeAllTerminatingAsync().ConfigureAwait(false);
+			// Завершаем все pending WaitFor-таски с InvalidOperationException — caller-ы получат
+			// чёткий сигнал «оркестратор остановлен», а не зависшие Task'и.
+			var stopReason = new InvalidOperationException("Оркестратор остановлен; WaitFor-ожидания не могут быть резолвлены.");
+			successWaiters.FailAll(stopReason);
+			outcomeWaiters.FailAll(stopReason);
 		}
 		Log.Stopped(logger, null);
 	}
@@ -282,6 +289,10 @@ internal sealed class EventLoop(
 				LastError: null,
 				NextAutoUtc: at + instance.Stage.Interval));
 
+			// Сигналим waiters ПОСЛЕ обновления метрик — late-register увидит LastSuccess через fast-path.
+			successWaiters.SignalSuccess(instance.Stage.Name, instance.EncodedKey);
+			outcomeWaiters.Signal(instance.Stage.Name, instance.EncodedKey, StageOutcome.Success);
+
 			if (wasFirstSuccess) {
 				Log.FirstSuccessCascade(logger, instance.FullyQualifiedName, null);
 				foreach (var dependent in EnumerateDirectDependents(instance.Stage.Name)) {
@@ -316,6 +327,9 @@ internal sealed class EventLoop(
 				LastError = ex.Message,
 				NextAutoUtc = at + nextDelay,
 			});
+
+			// Outcome=Failure. SuccessWaiters не сигналим — этот цикл не success.
+			outcomeWaiters.Signal(instance.Stage.Name, instance.EncodedKey, StageOutcome.FromFailure(ex));
 		} finally {
 			instance.State = InstanceLifecycleState.Idle;
 			scanner.Wake();
@@ -325,6 +339,15 @@ internal sealed class EventLoop(
 	private async Task FinalizeTerminatingAsync(StageInstance instance, CancellationToken ct) {
 		// Remove из InstanceManager БЕФОRE RemoveScopeAsync — следующие lookup'ы не найдут.
 		instances.Remove(instance);
+
+		// Уведомляем waiters об отмене: success-ожидание получает InvalidOperationException,
+		// outcome-ожидание получает StageOutcomeKind.Cancelled. После этого Reset bucket-ы —
+		// новый инстанс с теми же ключами начнёт с чистого состояния.
+		var cancelReason = new InvalidOperationException($"Инстанс {instance.FullyQualifiedName} удалён каскадом.");
+		successWaiters.SignalCancellation(instance.Stage.Name, instance.EncodedKey, cancelReason);
+		outcomeWaiters.Signal(instance.Stage.Name, instance.EncodedKey, StageOutcome.FromCancellation(cancelReason));
+		outcomeWaiters.Reset(instance.Stage.Name, instance.EncodedKey);
+
 		try {
 			await stateStore.RemoveScopeAsync(instance.StateScope, ct).ConfigureAwait(false);
 		} catch (Exception ex) {

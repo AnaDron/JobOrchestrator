@@ -48,4 +48,30 @@ public interface IJobOrchestrator {
 	/// но всегда без race-conditions на уровне snapshot collection.
 	/// </summary>
 	InstancesOverview GetOverview();
+
+	/// <summary>
+	/// Завершается, когда инстанс <paramref name="stageName"/> с указанными ключами успешно
+	/// отработает хотя бы один раз. Memoized: если на момент вызова <c>LastSuccess != null</c> —
+	/// возвращает уже-завершённый <see cref="Task"/>. Если инстанс ещё не создан, ожидание висит
+	/// до его появления и первого успеха. Если инстанс удалён каскадом до первого успеха —
+	/// Task завершается <see cref="InvalidOperationException"/>. Отмена через <paramref name="ct"/> →
+	/// <see cref="OperationCanceledException"/>. При shutdown оркестратора — <see cref="InvalidOperationException"/>.
+	/// </summary>
+	/// <exception cref="ArgumentException">Если <paramref name="stageName"/> не в графе или keys не соответствуют ExpectedKeyNames.</exception>
+	Task WaitForStageSuccessAsync(
+		string stageName,
+		IReadOnlyDictionary<string, string>? dependencyKeys = null,
+		CancellationToken ct = default);
+
+	/// <summary>
+	/// Завершается на ПЕРВОМ ИСХОДЕ следующего цикла стадии: <see cref="StageOutcomeKind.Success"/>,
+	/// <see cref="StageOutcomeKind.Failure"/> или <see cref="StageOutcomeKind.Cancelled"/>
+	/// (инстанс удалён каскадом до отработки). Регистрация выполняется синхронно — caller сам отвечает
+	/// за порядок «Register перед Trigger», если хочет ждать именно текущий запуск.
+	/// </summary>
+	/// <exception cref="ArgumentException">Если <paramref name="stageName"/> не в графе или keys не соответствуют ExpectedKeyNames.</exception>
+	Task<StageOutcome> WaitForStageOutcomeAsync(
+		string stageName,
+		IReadOnlyDictionary<string, string>? dependencyKeys = null,
+		CancellationToken ct = default);
 }

@@ -36,6 +36,8 @@ public static class ServiceCollectionExtensions {
 		services.AddSingleton<InstanceManager>();
 		services.AddSingleton<KeyspaceRegistry>();
 		services.AddSingleton<ConcurrencyLimits>();
+		services.AddSingleton<SuccessWaiters>();
+		services.AddSingleton<OutcomeWaiters>();
 		services.AddSingleton<InstanceCreator>();
 		services.AddSingleton<StageRunner>();
 		services.AddSingleton<DueScanner>();

@@ -17,6 +17,8 @@ internal sealed class JobOrchestratorRuntime(
 	StageRegistry registry,
 	InstanceManager instances,
 	OrchestratorLifecycle lifecycle,
+	SuccessWaiters successWaiters,
+	OutcomeWaiters outcomeWaiters,
 	ILogger<JobOrchestratorRuntime> logger
 ) : IJobOrchestrator {
 	// Pre-allocated пустой словарь для null-path в TriggerAsync — избегаем аллокации при каждом вызове.
@@ -103,6 +105,57 @@ internal sealed class JobOrchestratorRuntime(
 	/// важно видеть, в каком состоянии оркестратор крашнулся (метрики, расписания инстансов).
 	/// </summary>
 	public InstancesOverview GetOverview() => instances.Snapshot();
+
+	public Task WaitForStageSuccessAsync(
+		string stageName,
+		IReadOnlyDictionary<string, string>? dependencyKeys = null,
+		CancellationToken ct = default
+	) {
+		var identity = ResolveIdentity(stageName, dependencyKeys);
+		var task = successWaiters.Register(identity.Stage.Name, identity.EncodedKey, ct);
+
+		// Fast-path: если инстанс УЖЕ существует И УЖЕ имел success — сразу резолвим (без ожидания
+		// следующего цикла). SignalSuccess идемпотентна — повторный сигнал на already-Completed bucket — no-op.
+		var existing = instances.Find(identity);
+		if (existing is not null
+			&& existing.State != InstanceLifecycleState.Terminating
+			&& existing.Metrics.LastSuccess is not null) {
+			successWaiters.SignalSuccess(identity.Stage.Name, identity.EncodedKey);
+		}
+
+		return task;
+	}
+
+	public Task<StageOutcome> WaitForStageOutcomeAsync(
+		string stageName,
+		IReadOnlyDictionary<string, string>? dependencyKeys = null,
+		CancellationToken ct = default
+	) {
+		var identity = ResolveIdentity(stageName, dependencyKeys);
+		// Outcome НЕ имеет fast-path: семантика «исход СЛЕДУЮЩЕГО цикла». Caller сам отвечает за
+		// порядок «Register → Trigger». Memoized только если Signal случился ПОСЛЕ старта оркестратора
+		// и ДО Register'а — late-register получит последний outcome.
+		return outcomeWaiters.Register(identity.Stage.Name, identity.EncodedKey, ct);
+	}
+
+	/// <summary>
+	/// Резолвит <see cref="InstanceIdentity"/> с валидацией: stage существует в графе, набор ключей
+	/// соответствует <see cref="StageRegistry.ExpectedKeyNames"/>. Используется WaitFor-методами,
+	/// чтобы регистрация валидной identity всегда могла дождаться сигнала (даже если инстанса ещё нет).
+	/// </summary>
+	private InstanceIdentity ResolveIdentity(string stageName, IReadOnlyDictionary<string, string>? dependencyKeys) {
+		ArgumentException.ThrowIfNullOrEmpty(stageName);
+		if (!registry.TryGet(stageName, out var stage)) {
+			throw new ArgumentException($"Стадия '{stageName}' не зарегистрирована в графе.", nameof(stageName));
+		}
+		var keys = dependencyKeys ?? EmptyKeys;
+		if (!ValidateKeys(registry.ExpectedKeyNames(stageName), keys)) {
+			throw new ArgumentException(
+				$"Набор ключей для стадии '{stageName}' не соответствует ExpectedKeyNames.",
+				nameof(dependencyKeys));
+		}
+		return new InstanceIdentity(stage!, keys, registry.ExpectedKeyNames(stageName));
+	}
 
 	/// <summary>
 	/// Проверяет, что набор имён ключей соответствует ожидаемым именам, включая транзитивно унаследованные

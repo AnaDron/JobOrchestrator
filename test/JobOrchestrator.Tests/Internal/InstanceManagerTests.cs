@@ -15,7 +15,7 @@ public sealed class InstanceManagerTests {
 	};
 
 	private static StageInstance MakeInstance(StageDescriptor stage, Dictionary<string, string> keys) {
-		var fqn = DependencyKey.FormatFullyQualifiedName(stage.Name, keys);
+		var fqn = DependencyKey.FormatFullyQualifiedName(stage.Name, keys, []);
 		var encoded = DependencyKey.Encode(keys);
 		return new StageInstance { Identity = new InstanceIdentity(stage, keys) };
 	}

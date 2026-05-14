@@ -1,0 +1,64 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TestRun id="42a2daee-d78f-4d5c-91ed-4b3c7b790797" name="@iMac-anadron 2026-05-14 10:46:07" xmlns="http://microsoft.com/schemas/VisualStudio/TeamTest/2010">
+  <Times creation="2026-05-14T10:46:07.3523340+02:00" queuing="2026-05-14T10:46:07.3523340+02:00" start="2026-05-14T10:46:05.4880870+02:00" finish="2026-05-14T10:46:07.3595330+02:00" />
+  <TestSettings name="default" id="85a8b68b-7fde-4469-b187-7409dd683656">
+    <Deployment runDeploymentRoot="_iMac-anadron_2026-05-14_10_46_07" />
+  </TestSettings>
+  <Results>
+    <UnitTestResult executionId="4ea22869-a9a0-4bbc-8834-f35f0c0ff84b" testId="c045a0bf-1331-db10-633c-02346077bd74" testName="JobOrchestrator.IntegrationTests.ScenarioMultiInstanceEmitterCascadeTests.UnregisterKey_OnMultiInstanceEmitter_CascadesOnlyAffectedBranch" computerName="iMac-anadron" duration="00:00:00.5381363" startTime="2026-05-14T10:46:07.0964510+02:00" endTime="2026-05-14T10:46:07.0965120+02:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Failed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="4ea22869-a9a0-4bbc-8834-f35f0c0ff84b">
+      <Output>
+        <ErrorInfo>
+          <Message>Expected fqns {"products[shops=us-1,regions=US]", "regions[]", "shops[regions=US]"} to contain "products[regions=US,shops=us-1]".</Message>
+          <StackTrace>   at FluentAssertions.Collections.GenericCollectionAssertions`3.Contain(T expected, String because, Object[] becauseArgs)
+   at JobOrchestrator.IntegrationTests.ScenarioMultiInstanceEmitterCascadeTests.UnregisterKey_OnMultiInstanceEmitter_CascadesOnlyAffectedBranch() in /Volumes/Work/AnaDron/Aura/libs/job-orchestrator/test/JobOrchestrator.IntegrationTests/ScenarioMultiInstanceEmitterCascadeTests.cs:line 88
+   at JobOrchestrator.IntegrationTests.ScenarioMultiInstanceEmitterCascadeTests.UnregisterKey_OnMultiInstanceEmitter_CascadesOnlyAffectedBranch() in /Volumes/Work/AnaDron/Aura/libs/job-orchestrator/test/JobOrchestrator.IntegrationTests/ScenarioMultiInstanceEmitterCascadeTests.cs:line 93
+--- End of stack trace from previous location ---</StackTrace>
+        </ErrorInfo>
+      </Output>
+    </UnitTestResult>
+  </Results>
+  <TestDefinitions>
+    <UnitTest name="JobOrchestrator.IntegrationTests.ScenarioMultiInstanceEmitterCascadeTests.UnregisterKey_OnMultiInstanceEmitter_CascadesOnlyAffectedBranch" storage="/volumes/work/anadron/aura/libs/job-orchestrator/test/joborchestrator.integrationtests/bin/debug/net10.0/joborchestrator.integrationtests.dll" id="c045a0bf-1331-db10-633c-02346077bd74">
+      <Execution id="4ea22869-a9a0-4bbc-8834-f35f0c0ff84b" />
+      <TestMethod codeBase="/Volumes/Work/AnaDron/Aura/libs/job-orchestrator/test/JobOrchestrator.IntegrationTests/bin/Debug/net10.0/JobOrchestrator.IntegrationTests.dll" adapterTypeName="executor://xunit/VsTestRunner2/netcoreapp" className="JobOrchestrator.IntegrationTests.ScenarioMultiInstanceEmitterCascadeTests" name="UnregisterKey_OnMultiInstanceEmitter_CascadesOnlyAffectedBranch" />
+    </UnitTest>
+  </TestDefinitions>
+  <TestEntries>
+    <TestEntry testId="c045a0bf-1331-db10-633c-02346077bd74" executionId="4ea22869-a9a0-4bbc-8834-f35f0c0ff84b" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+  </TestEntries>
+  <TestLists>
+    <TestList name="Список результатов" id="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestList name="Все загруженные результаты" id="19431567-8539-422a-85d7-44ee4e166bda" />
+  </TestLists>
+  <ResultSummary outcome="Failed">
+    <Counters total="1" executed="1" passed="0" failed="1" error="0" timeout="0" aborted="0" inconclusive="0" passedButRunAborted="0" notRunnable="0" notExecuted="0" disconnected="0" warning="0" completed="0" inProgress="0" pending="0" />
+    <Output>
+      <StdOut>[xUnit.net 00:00:00.00] xUnit.net VSTest Adapter v2.8.2+699d445a1a (64-bit .NET 10.0.5)
+[xUnit.net 00:00:00.09]   Discovering: JobOrchestrator.IntegrationTests
+[xUnit.net 00:00:00.12]   Discovered:  JobOrchestrator.IntegrationTests
+[xUnit.net 00:00:00.13]   Starting:    JobOrchestrator.IntegrationTests
+     Warning:
+     The component "Fluent Assertions" is governed by the rules defined in the Xceed License Agreement and
+     the Xceed Fluent Assertions Community License. You may use Fluent Assertions free of charge for
+     non-commercial use only. An active subscription is required to use Fluent Assertions for commercial use.
+     Please contact Xceed Sales mailto:sales@xceed.com to acquire a subscription at a very low cost.
+     A paid commercial license supports the development and continued increasing support of
+     Fluent Assertions users under both commercial and community licenses. Help us
+     keep Fluent Assertions at the forefront of unit testing.
+     For more information, visit https://xceed.com/products/unit-testing/fluent-assertions/
+[xUnit.net 00:00:00.73]       Expected fqns {"products[shops=us-1,regions=US]", "regions[]", "shops[regions=US]"} to contain "products[regions=US,shops=us-1]".
+[xUnit.net 00:00:00.73]       Stack Trace:
+[xUnit.net 00:00:00.73]            at FluentAssertions.Collections.GenericCollectionAssertions`3.Contain(T expected, String because, Object[] becauseArgs)
+[xUnit.net 00:00:00.73]         /Volumes/Work/AnaDron/Aura/libs/job-orchestrator/test/JobOrchestrator.IntegrationTests/ScenarioMultiInstanceEmitterCascadeTests.cs(88,0): at JobOrchestrator.IntegrationTests.ScenarioMultiInstanceEmitterCascadeTests.UnregisterKey_OnMultiInstanceEmitter_CascadesOnlyAffectedBranch()
+[xUnit.net 00:00:00.73]         /Volumes/Work/AnaDron/Aura/libs/job-orchestrator/test/JobOrchestrator.IntegrationTests/ScenarioMultiInstanceEmitterCascadeTests.cs(93,0): at JobOrchestrator.IntegrationTests.ScenarioMultiInstanceEmitterCascadeTests.UnregisterKey_OnMultiInstanceEmitter_CascadesOnlyAffectedBranch()
+[xUnit.net 00:00:00.73]         --- End of stack trace from previous location ---
+[xUnit.net 00:00:00.75]   Finished:    JobOrchestrator.IntegrationTests
+</StdOut>
+    </Output>
+    <RunInfos>
+      <RunInfo computerName="iMac-anadron" outcome="Error" timestamp="2026-05-14T10:46:07.0931360+02:00">
+        <Text>[xUnit.net 00:00:00.73]     JobOrchestrator.IntegrationTests.ScenarioMultiInstanceEmitterCascadeTests.UnregisterKey_OnMultiInstanceEmitter_CascadesOnlyAffectedBranch [FAIL]</Text>
+      </RunInfo>
+    </RunInfos>
+  </ResultSummary>
+</TestRun>

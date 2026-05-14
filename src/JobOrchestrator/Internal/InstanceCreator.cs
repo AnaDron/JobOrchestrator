@@ -26,6 +26,7 @@ namespace JobOrchestrator.Internal;
 internal sealed class InstanceCreator(
 	InstanceManager instances,
 	KeyspaceRegistry keyspace,
+	StageRegistry registry,
 	TimeProvider time,
 	Channel<OrchestratorEvent> channel
 ) {
@@ -164,7 +165,9 @@ internal sealed class InstanceCreator(
 	}
 
 	private StageInstance MaterializeInstance(StageDescriptor stage, IReadOnlyDictionary<string, string> keys) {
-		var identity = new InstanceIdentity(stage, keys);
+		// Передаём transitive-ordered names из registry — гарантирует детерминированный FQN
+		// (insertion order ImmutableDictionary не сохраняет).
+		var identity = new InstanceIdentity(stage, keys, registry.ExpectedKeyNames(stage.Name));
 		var instance = new StageInstance { Identity = identity };
 		// Pre-allocated Sink: один объект на lifetime инстанса (Source/Writer постоянны), переиспользуется
 		// всеми итерациями StageRunner-а — экономим аллокацию per-iteration.

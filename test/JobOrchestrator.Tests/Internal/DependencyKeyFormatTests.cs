@@ -3,39 +3,50 @@ namespace JobOrchestrator.Tests.Internal;
 public sealed class DependencyKeyFormatTests {
 	[Fact]
 	public void FormatFullyQualifiedName_EmptyKeys_FormatsAsBrackets() {
-		var fqn = DependencyKey.FormatFullyQualifiedName("shops", new Dictionary<string, string>());
+		var fqn = DependencyKey.FormatFullyQualifiedName("shops", new Dictionary<string, string>(), []);
 		fqn.Should().Be("shops[]");
 	}
 
 	[Fact]
 	public void FormatFullyQualifiedName_SingleKey_NoSpaces() {
 		var keys = new Dictionary<string, string> { ["shops"] = "ab12-c34d" };
-		var fqn = DependencyKey.FormatFullyQualifiedName("productGroups", keys);
+		var fqn = DependencyKey.FormatFullyQualifiedName("productGroups", keys, ["shops"]);
 		fqn.Should().Be("productGroups[shops=ab12-c34d]");
 	}
 
 	[Fact]
-	public void FormatFullyQualifiedName_MultipleKeys_NoSpacesAfterCommas() {
+	public void FormatFullyQualifiedName_MultipleKeys_RespectsOrderedKeyNames() {
 		var keys = new Dictionary<string, string> {
 			["shops"] = "uuid-1",
 			["currencies"] = "USD",
 		};
-		var fqn = DependencyKey.FormatFullyQualifiedName("prices", keys);
+		var fqn = DependencyKey.FormatFullyQualifiedName("prices", keys, ["shops", "currencies"]);
 		fqn.Should().Be("prices[shops=uuid-1,currencies=USD]");
 	}
 
 	[Fact]
-	public void FormatFullyQualifiedName_RespectsInsertionOrder_NotAlphabeticalOrder() {
-		// SDK при создании инстанса вставляет компоненты в порядке объявления зависимостей в Fluent API.
-		// Этот тест — анти-регрессия: если кто-то добавит .OrderBy(k => k.Key) в форматтер, тест упадёт,
-		// потому что declaration order ≠ alphabetical order для этих имён.
-		var declarationOrderKeys = new Dictionary<string, string> {
+	public void FormatFullyQualifiedName_OrderedKeyNamesDeterminesOrder_NotInsertionOrder() {
+		// FQN-порядок ОПРЕДЕЛЯЕТСЯ orderedKeyNames-параметром (transitive ExpectedKeyNames из registry).
+		// Insertion order словаря НЕ участвует — это важно потому что DependencyKeys обычно ImmutableDictionary,
+		// который insertion order не сохраняет.
+		var keys = new Dictionary<string, string> {
+			["currencies"] = "USD",      // вставлен первым
 			["shops"] = "u1",
-			["currencies"] = "USD",  // алфавитно был бы первым
 		};
-		var fqn = DependencyKey.FormatFullyQualifiedName("x", declarationOrderKeys);
+		// orderedKeyNames говорит: shops первый, currencies второй.
+		var fqn = DependencyKey.FormatFullyQualifiedName("x", keys, ["shops", "currencies"]);
 		fqn.Should().Be("x[shops=u1,currencies=USD]");
 		fqn.Should().NotBe("x[currencies=USD,shops=u1]");
+	}
+
+	[Fact]
+	public void FormatFullyQualifiedName_MissingFromOrderedList_GoesToSafetyNet() {
+		// Edge-case: key, отсутствующий в orderedKeyNames, добавляется в конец (для теоретически
+		// невозможных случаев, где cache рассинхронизирован с реальным состоянием).
+		var keys = new Dictionary<string, string> { ["a"] = "1", ["b"] = "2" };
+		var fqn = DependencyKey.FormatFullyQualifiedName("x", keys, ["a"]);    // b не в ordered
+		fqn.Should().StartWith("x[a=1");
+		fqn.Should().Contain("b=2");
 	}
 
 	[Fact]

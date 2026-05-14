@@ -17,6 +17,9 @@
     </PackageReference>
   </ItemGroup>
   <ItemGroup>
+    <None Update="xunit.runner.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+  <ItemGroup>
     <ProjectReference Include="..\..\src\JobOrchestrator\JobOrchestrator.csproj" />
     <ProjectReference Include="..\..\src\JobOrchestrator.InMemory\JobOrchestrator.InMemory.csproj" />
   </ItemGroup>

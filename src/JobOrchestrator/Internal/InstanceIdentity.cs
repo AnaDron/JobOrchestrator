@@ -37,14 +37,28 @@ internal sealed class InstanceIdentity : IEquatable<InstanceIdentity> {
 	/// <summary>Scope для <see cref="IJobStateStore"/>: <c>"{StageName}:{EncodedKey}"</c>.</summary>
 	public string StateScope => $"{Stage.Name}:{EncodedKey}";
 
-	public InstanceIdentity(StageDescriptor stage, IReadOnlyDictionary<string, string> dependencyKeys) {
+	/// <summary>
+	/// Конструктор. <paramref name="orderedKeyNames"/> задаёт детерминированный порядок компонентов
+	/// в <see cref="FullyQualifiedName"/> (обычно — <c>StageRegistry.ExpectedKeyNames(stage.Name)</c>),
+	/// чтобы FQN не зависел от hash-table-order'а <see cref="DependencyKeys"/>. Если <c>null</c> —
+	/// используется порядок прямых <c>DependsOnInstance</c>-зависимостей этой стадии (fallback для
+	/// тестов; в production code путь через <see cref="StageRegistry"/>).
+	/// </summary>
+	public InstanceIdentity(
+		StageDescriptor stage,
+		IReadOnlyDictionary<string, string> dependencyKeys,
+		IReadOnlyList<string>? orderedKeyNames = null
+	) {
 		ArgumentNullException.ThrowIfNull(stage);
 		ArgumentNullException.ThrowIfNull(dependencyKeys);
 		Stage = stage;
 		DependencyKeys = dependencyKeys as ImmutableDictionary<string, string>
 			?? ImmutableDictionary.CreateRange(StringComparer.Ordinal, dependencyKeys);
 		EncodedKey = DependencyKey.Encode(DependencyKeys);
-		FullyQualifiedName = DependencyKey.FormatFullyQualifiedName(stage.Name, DependencyKeys);
+		// Fallback на direct DependsOnInstance, если ordered не передан. Для invariant'a достаточно
+		// для unit-тестов и keyless-стадий. В production InstanceCreator передаёт transitive-list.
+		var ordered = orderedKeyNames ?? [.. stage.Dependencies.Where(d => d.Mode == DependencyMode.Instance).Select(d => d.TargetStageName)];
+		FullyQualifiedName = DependencyKey.FormatFullyQualifiedName(stage.Name, DependencyKeys, ordered);
 	}
 
 	public bool Equals(InstanceIdentity? other) =>

@@ -37,12 +37,25 @@ internal static class DependencyKey {
 
 	/// <summary>
 	/// FullyQualifiedName: <c>"stage[dep1=v1,dep2=v2,...]"</c> без пробелов после запятых.
-	/// Порядок компонентов — порядок их появления в <paramref name="keys"/> (insertion order).
-	/// SDK заполняет <c>keys</c> в порядке объявления зависимостей в Fluent API при создании инстанса.
-	/// Для безключевой стадии (пустой словарь) — <c>"stage[]"</c>.
+	/// Порядок компонентов — <paramref name="orderedKeyNames"/> (заранее вычислен <c>StageRegistry.ExpectedKeyNames</c>
+	/// с учётом транзитивного наследования через <c>DependsOn</c>-цепочки). Это даёт детерминированный
+	/// FQN независимо от того, в каком порядке прилетали разрешающие события и в какой порядок hash-table
+	/// уложила ключи в <c>ImmutableDictionary</c>.
 	/// </summary>
-	public static string FormatFullyQualifiedName(string stageName, IReadOnlyDictionary<string, string> keys) {
+	public static string FormatFullyQualifiedName(string stageName, IReadOnlyDictionary<string, string> keys, IReadOnlyList<string> orderedKeyNames) {
 		if (keys.Count == 0) return $"{stageName}[]";
-		return $"{stageName}[{string.Join(",", keys.Select(kv => $"{kv.Key}={kv.Value}"))}]";
+		var seen = new HashSet<string>(StringComparer.Ordinal);
+		var parts = new List<string>(keys.Count);
+		foreach (var name in orderedKeyNames) {
+			if (keys.TryGetValue(name, out var v)) {
+				parts.Add($"{name}={v}");
+				seen.Add(name);
+			}
+		}
+		// Safety net: keys, отсутствующие в orderedKeyNames (теоретически невозможно для валидных инстансов).
+		foreach (var kv in keys) {
+			if (!seen.Contains(kv.Key)) parts.Add($"{kv.Key}={kv.Value}");
+		}
+		return $"{stageName}[{string.Join(",", parts)}]";
 	}
 }
