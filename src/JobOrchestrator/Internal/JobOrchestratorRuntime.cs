@@ -36,11 +36,8 @@ internal sealed class JobOrchestratorRuntime : IJobOrchestrator {
 		_successWaiters = successWaiters;
 		_outcomeWaiters = outcomeWaiters;
 		_logger = logger;
-		// One StageHandle per stage, immutable for process lifetime — populated once at construction.
-		_stageHandles = new Dictionary<string, StageHandle>(registry.AllStages.Count, StringComparer.Ordinal);
-		foreach (var stage in registry.AllStages) {
-			_stageHandles[stage.Name] = new StageHandle(this, stage);
-		}
+
+		_stageHandles = registry.AllStages.ToDictionary(x => x.Name, x => new StageHandle(this, x));
 	}
 
 	public bool IsFaulted => _lifecycle.IsFaulted;

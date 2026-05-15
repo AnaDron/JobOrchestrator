@@ -32,6 +32,9 @@ public sealed class JobContext {
 	/// </summary>
 	public DateTimeOffset? LastSuccessAt { get; init; }
 
+	/// <summary>Имя стадии — bare-name без key-components. Для structured logging, метрик, фильтров.</summary>
+	public required string StageName { get; init; }
+
 	/// <summary>
 	/// Композитный ключ инстанса: для каждой <c>DependsOnInstance(X)</c> этой стадии — парный ключ из keyspace(X),
 	/// плюс ключи, унаследованные через <c>DependsOn(Y)</c> от инстансов вышестоящих стадий.
