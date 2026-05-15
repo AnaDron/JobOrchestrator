@@ -104,6 +104,90 @@ public sealed class ScenarioMixedDependsTests {
 		}
 	}
 
+	[Fact]
+	public async Task Groups_CreatedReactively_WhenEmployeesReady_AndShopsAddKey() {
+		// Обратный сценарий: employees сразу завершает первый цикл (LastSuccess=now), потом shops
+		// эмитит AddKey, после чего groups немедленно создаётся — даже пока shops ещё внутри
+		// ExecuteAsync. Проверяет, что reactive-канал DependsOnInstance срабатывает at the moment
+		// AddKey виден, а DependsOn(employees) к этому моменту satisfied.
+		//
+		// Topology та же, но employees НЕ gated; shops gated POSLE AddKey.
+
+		var employeesRuns = 0;
+		var shopsRuns = 0;
+		var groupsRuns = 0;
+		var shopsGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+		var shops = new GatedStage(async (ctx, ct) => {
+			if (Interlocked.Increment(ref shopsRuns) == 1) {
+				ctx.AddKey("u-1");
+				// Висим в ExecuteAsync ПОСЛЕ AddKey — это позволяет проверить reactive-семантику:
+				// groups должен создаться, пока shops ещё running (shops.LastSuccess is null).
+				using var reg = ct.Register(() => shopsGate.TrySetCanceled(ct));
+				await shopsGate.Task.ConfigureAwait(false);
+			}
+		});
+
+		var employees = new GatedStage((_, _) => {
+			Interlocked.Increment(ref employeesRuns);
+			return Task.CompletedTask;   // мгновенно завершает → LastSuccess set
+		});
+
+		var groups = new GatedStage((_, _) => {
+			Interlocked.Increment(ref groupsRuns);
+			return Task.CompletedTask;
+		});
+
+		var b = Host.CreateApplicationBuilder();
+		b.Logging.ClearProviders();
+		b.Logging.SetMinimumLevel(LogLevel.Warning);
+		b.Services.AddSingleton<ShopsStub>(_ => new ShopsStub(shops));
+		b.Services.AddSingleton<EmployeesStub>(_ => new EmployeesStub(employees));
+		b.Services.AddSingleton<GroupsStub>(_ => new GroupsStub(groups));
+		b.Services.AddInMemoryJobStateStore();
+		b.Services.AddJobOrchestrator(jobs => {
+			jobs.Defaults.Debounce = TimeSpan.FromMilliseconds(10);
+			jobs.Defaults.RetryAfterFailure = RetryPolicy.FixedDelay(TimeSpan.FromSeconds(30));
+
+			var shopsStage = jobs.Stage("shops")
+				.HandledBy<ShopsStub>()
+				.RunPeriodically(TimeSpan.FromMilliseconds(80));
+			var employeesStage = jobs.Stage("employees")
+				.HandledBy<EmployeesStub>()
+				.RunPeriodically(TimeSpan.FromMilliseconds(80));
+			jobs.Stage("groups")
+				.HandledBy<GroupsStub>()
+				.DependsOnInstance(shopsStage)
+				.DependsOn(employeesStage)
+				.RunPeriodically(TimeSpan.FromMilliseconds(80));
+		});
+
+		using var host = b.Build();
+		await host.StartAsync().ConfigureAwait(false);
+
+		try {
+			// employees должен пробуститься и сразу завершиться → LastSuccess set.
+			await AsyncWait.UntilAsync(() => Volatile.Read(ref employeesRuns) >= 1, TimeSpan.FromSeconds(5),
+				"employees должен пробуститься и завершить первый цикл");
+
+			// shops стартует, эмитит AddKey("u-1"), висит на gate.
+			await AsyncWait.UntilAsync(() => Volatile.Read(ref shopsRuns) >= 1, TimeSpan.FromSeconds(5),
+				"shops должен пробуститься и эмитить AddKey");
+
+			// Главная проверка: groups создаётся REACTIVELY — оба канала satisfied
+			// (DependsOnInstance: ключ в keyspace + paired-инстанс есть;
+			//  DependsOn: employees.LastSuccess != null), shops.LastSuccess не требуется.
+			await AsyncWait.UntilAsync(() => Volatile.Read(ref groupsRuns) >= 1, TimeSpan.FromSeconds(5),
+				"groups должен стартовать пока shops ещё в ExecuteAsync (reactive DependsOnInstance + satisfied DependsOn)");
+
+			shopsGate.Task.IsCompleted.Should().BeFalse(
+				"shops всё ещё внутри ExecuteAsync — это подтверждает, что groups создан реактивно (НЕ ждали shops.LastSuccess)");
+		} finally {
+			shopsGate.TrySetResult();
+			await host.StopAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false);
+		}
+	}
+
 	// Простые-тонкие adapter-stubs, чтобы каждый Stage в DI был отдельным типом для HandledBy<T>.
 	private sealed class ShopsStub(GatedStage impl) : IJobService {
 		public Task ExecuteAsync(JobContext ctx, CancellationToken ct) => impl.ExecuteAsync(ctx, ct);
