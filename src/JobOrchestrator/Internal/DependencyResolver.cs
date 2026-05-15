@@ -21,10 +21,21 @@ internal static class DependencyResolver {
 
 	/// <summary>
 	/// Проверить, разрешены ли все зависимости стадии <paramref name="stage"/> для кандидата с ключами <paramref name="keys"/>.
-	/// Семантика:
+	/// <para>
+	/// Семантика (после adoption cursor's «event-driven» подхода):
+	/// </para>
 	/// <list type="bullet">
-	/// <item><c>DependsOnInstance(X)</c>: <c>keys[X.Name]</c> существует, <c>keys[X.Name] ∈ keyspace(X)</c>, и парный инстанс X имеет <c>LastSuccess != null</c>.</item>
-	/// <item><c>DependsOn(Y)</c>: существует инстанс Y, чьи DependencyKeys ⊆ keys и который имеет <c>LastSuccess != null</c>.</item>
+	/// <item>
+	/// <b><c>DependsOnInstance(X)</c> — reactive:</b> требуется paired-инстанс X, <c>keys[X.Name]</c>
+	/// существует и принадлежит keyspace-bucket-у этого инстанса. <c>LastSuccess</c> X-а <b>НЕ требуется</b>:
+	/// сам факт публикации ключа эмитером — «событие состоялось», child-инстанс материализуется
+	/// немедленно (даже пока emitter ещё внутри <c>ExecuteAsync</c>). Это поддерживает long-running
+	/// emitter-pattern: shops эмитит ключи постранично, productGroups стартуют сразу для каждого.
+	/// </item>
+	/// <item>
+	/// <b><c>DependsOn(Y)</c> — transactional:</b> требуется paired-инстанс Y с <c>LastSuccess != null</c>.
+	/// Child наследует ключи только из успешного родителя (semantic fan-out по результатам полного цикла).
+	/// </item>
 	/// </list>
 	/// </summary>
 	public static bool AllDependenciesResolved(
@@ -34,13 +45,13 @@ internal static class DependencyResolver {
 		KeyspaceRegistry keyspace
 	) => stage.Dependencies.All(dep => {
 		var paired = FindPairedInstance(instances, dep.Target, keys);
-		if (paired is null || paired.Metrics.LastSuccess is null) return false;
-		if (dep.Mode == DependencyMode.Instance) {
-			// Per-emitter check: bucket именно ЭТОГО paired-инстанса как эмитера должен содержать ключ.
-			// Защищает от race-condition «keyspace.Add → KeyRemoved между построением кандидата и resolve».
-			if (!keys.TryGetValue(dep.Target.Name, out var k)) return false;
-			if (!keyspace.Contains(paired.Identity, k)) return false;
+		if (paired is null) return false;
+		if (dep.Mode == DependencyMode.Whole) {
+			// DependsOn: child наследует ключи только успешного родителя.
+			return paired.Metrics.LastSuccess is not null;
 		}
-		return true;
+		// DependsOnInstance: reactive — LastSuccess эмитера НЕ требуется.
+		// Per-emitter keyspace-check защищает от race «KeyAdded → KeyRemoved».
+		return keys.TryGetValue(dep.Target.Name, out var k) && keyspace.Contains(paired.Identity, k);
 	});
 }

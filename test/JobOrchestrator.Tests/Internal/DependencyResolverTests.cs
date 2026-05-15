@@ -98,19 +98,22 @@ public sealed class DependencyResolverTests {
 	}
 
 	[Fact]
-	public void AllDependenciesResolved_InstanceDep_ParentNeverSucceeded_False() {
+	public void AllDependenciesResolved_InstanceDep_ParentNeverSucceeded_StillResolves_Reactive() {
+		// REACTIVE-семантика: для DependsOnInstance LastSuccess эмитера НЕ требуется. Сам факт публикации
+		// ключа в keyspace = «событие состоялось», child материализуется немедленно — даже пока emitter
+		// ещё внутри ExecuteAsync (long-running emitter pattern: shops эмитит постранично).
 		var shops = MakeStage("shops");
 		var pg = MakeStage("productGroups", new StageDependency(shops, DependencyMode.Instance));
 		var instances = new InstanceManager();
 		var keyspace = new KeyspaceRegistry();
 		var shopsInst = MakeInstance(shops);
-		// LastSuccess = null — родитель ни разу не был успешен.
+		// LastSuccess = null — родитель ни разу не был успешен, но ключ уже опубликован.
 		instances.Add(shopsInst);
 		keyspace.Add(new InstanceIdentity(shops, EmptyKeys), "u1");
 
 		var resolved = DependencyResolver.AllDependenciesResolved(
 			pg, new Dictionary<string, string> { ["shops"] = "u1" }, instances, keyspace);
-		resolved.Should().BeFalse();
+		resolved.Should().BeTrue("DependsOnInstance реактивен — child создаётся сразу при AddKey");
 	}
 
 	[Fact]
