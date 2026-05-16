@@ -1,4 +1,5 @@
 using System.Collections;
+using System.Collections.Concurrent;
 using System.Threading.Channels;
 using Microsoft.Extensions.Logging;
 
@@ -20,6 +21,8 @@ internal sealed class JobOrchestratorRuntime : IJobOrchestrator {
 	private readonly OutcomeWaiters _outcomeWaiters;
 	private readonly ILogger<JobOrchestratorRuntime> _logger;
 	private readonly Dictionary<string, StageHandle> _stageHandles;
+	private readonly HashSet<string> _knownDomains;
+	private readonly ConcurrentDictionary<string, DomainScopedJobOrchestrator> _domainHandles = new(StringComparer.Ordinal);
 
 	public JobOrchestratorRuntime(
 		Channel<OrchestratorEvent> channel,
@@ -38,6 +41,15 @@ internal sealed class JobOrchestratorRuntime : IJobOrchestrator {
 		_logger = logger;
 
 		_stageHandles = registry.AllStages.ToDictionary(x => x.Name, x => new StageHandle(this, x));
+
+		// Pre-compute набор известных доменов — извлекаем префикс до DomainSeparator из имени каждой
+		// стадии. Стадия без префикса (например, "global") — в _knownDomains не попадает, что корректно:
+		// у неё нет домена, через WithDomain она недоступна.
+		_knownDomains = new HashSet<string>(StringComparer.Ordinal);
+		foreach (var stage in registry.AllStages) {
+			var sep = stage.Name.IndexOf(JobOrchestratorBuilder.DomainSeparator);
+			if (sep > 0) _knownDomains.Add(stage.Name[..sep]);
+		}
 	}
 
 	public bool IsFaulted => _lifecycle.IsFaulted;
@@ -64,6 +76,22 @@ internal sealed class JobOrchestratorRuntime : IJobOrchestrator {
 	IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
 
 	public InstancesOverview GetOverview() => _instances.Snapshot();
+
+	/// <summary>
+	/// Domain-проекция: <c>orchestrator.WithDomain("evotor")["shops"]</c> эквивалентно
+	/// <c>orchestrator["evotor:shops"]</c>. Возвращаемый объект кэшируется per-domain через
+	/// <see cref="ConcurrentDictionary{TKey,TValue}.GetOrAdd(TKey, Func{TKey,TValue})"/>:
+	/// повторные вызовы с тем же <paramref name="domain"/> дают тот же объект.
+	/// </summary>
+	public IDomainScopedJobOrchestrator WithDomain(string domain) {
+		ArgumentException.ThrowIfNullOrEmpty(domain);
+		if (!_knownDomains.Contains(domain)) {
+			throw new ArgumentException(
+				$"Домен '{domain}' не зарегистрирован — нет ни одной стадии с префиксом '{domain}{JobOrchestratorBuilder.DomainSeparator}'.",
+				nameof(domain));
+		}
+		return _domainHandles.GetOrAdd(domain, d => new DomainScopedJobOrchestrator(this, d));
+	}
 
 	#region Internal API — вызывается StageHandle / InstanceHandle
 

@@ -4,8 +4,12 @@ namespace JobOrchestrator.Configuration;
 
 /// <summary>Точка входа Fluent API для конфигурации SDK через <c>services.AddJobOrchestrator(jobs => {...})</c>.</summary>
 public sealed class JobOrchestratorBuilder {
+	/// <summary>Разделитель domain-префикса и имени стадии в полном FQN-имени (<c>"evotor:shops"</c>).</summary>
+	internal const char DomainSeparator = ':';
+
 	private readonly Dictionary<string, StageBuilder> _stages = new(StringComparer.Ordinal);
 	private JobDefaults _defaults = new();
+	private string? _currentDomain;
 
 	/// <summary>
 	/// Дефолтные настройки, применяемые к стадиям в момент их объявления.
@@ -16,15 +20,87 @@ public sealed class JobOrchestratorBuilder {
 		set => _defaults = value ?? new JobDefaults();
 	}
 
-	/// <summary>Объявить новую стадию. Снимок текущих <see cref="Defaults"/> захватывается в этот момент.</summary>
+	/// <summary>
+	/// Вход в domain-блок (state-based). Все последующие <see cref="Stage"/>-вызовы до
+	/// <see cref="WithoutDomain"/> получают префикс <c>"{domain}:"</c> в имени.
+	/// <para>
+	/// Вложенные domain'ы запрещены: повторный вызов без сброса бросает <see cref="JobConfigurationException"/>.
+	/// Action-scoped вариант (<see cref="WithDomain(string, Action{JobOrchestratorBuilder})"/>) предпочтительнее —
+	/// он гарантирует автоматический сброс state-а через <c>try/finally</c>.
+	/// </para>
+	/// </summary>
+	public JobOrchestratorBuilder WithDomain(string domain) {
+		EnterDomain(domain);
+		return this;
+	}
+
+	/// <summary>
+	/// Запускает <paramref name="configure"/> внутри domain-блока. Domain активен ТОЛЬКО на
+	/// время выполнения action; восстанавливается через <c>try/finally</c> после выхода, даже при
+	/// исключении внутри. Защищает от случая «забыли <see cref="WithoutDomain"/>».
+	/// <para>
+	/// Вложенные <c>WithDomain</c> любого стиля (state-based или action-scoped) — бросают
+	/// <see cref="JobConfigurationException"/>.
+	/// </para>
+	/// </summary>
+	public JobOrchestratorBuilder WithDomain(string domain, Action<JobOrchestratorBuilder> configure) {
+		ArgumentNullException.ThrowIfNull(configure);
+		var saved = _currentDomain;
+		EnterDomain(domain);
+		try {
+			configure(this);
+		} finally {
+			_currentDomain = saved;
+		}
+		return this;
+	}
+
+	/// <summary>
+	/// Сбрасывает domain-state, установленный через <see cref="WithDomain(string)"/>.
+	/// После — <see cref="Stage"/> возвращает имя без префикса. Идемпотентно: повторный вызов на
+	/// уже-сброшенном state — no-op без exception.
+	/// </summary>
+	public JobOrchestratorBuilder WithoutDomain() {
+		_currentDomain = null;
+		return this;
+	}
+
+	/// <summary>Объявить новую стадию. Снимок текущих <see cref="Defaults"/> захватывается в этот момент.
+	/// <para>
+	/// Если активен domain-блок (<see cref="WithDomain(string)"/> или <see cref="WithDomain(string, Action{JobOrchestratorBuilder})"/>),
+	/// реальное имя стадии — <c>"{domain}:{name}"</c>. Имя <paramref name="name"/> не должно содержать <c>':'</c>
+	/// (разделитель зарезервирован для domain-префикса).
+	/// </para>
+	/// </summary>
 	public IStageBuilder Stage(string name) {
 		ArgumentException.ThrowIfNullOrEmpty(name);
-		if (_stages.ContainsKey(name)) {
-			throw new JobConfigurationException($"Стадия с именем '{name}' уже объявлена.");
+		if (name.Contains(DomainSeparator)) {
+			throw new JobConfigurationException(
+				$"Имя стадии '{name}' содержит зарезервированный символ '{DomainSeparator}' — используйте WithDomain для префикса.");
 		}
-		var sb = new StageBuilder(name, Defaults);
-		_stages.Add(name, sb);
+		var fullName = _currentDomain is null ? name : $"{_currentDomain}{DomainSeparator}{name}";
+		if (_stages.ContainsKey(fullName)) {
+			throw new JobConfigurationException($"Стадия с именем '{fullName}' уже объявлена.");
+		}
+		var sb = new StageBuilder(fullName, Defaults);
+		_stages.Add(fullName, sb);
 		return sb;
+	}
+
+	/// <summary>
+	/// Валидация и установка <c>_currentDomain</c>. Общая для обоих стилей <c>WithDomain</c>.
+	/// </summary>
+	private void EnterDomain(string domain) {
+		ArgumentException.ThrowIfNullOrEmpty(domain);
+		if (domain.Contains(DomainSeparator)) {
+			throw new JobConfigurationException(
+				$"Domain '{domain}' содержит зарезервированный символ '{DomainSeparator}' — вложенные domain'ы не поддерживаются.");
+		}
+		if (_currentDomain is not null) {
+			throw new JobConfigurationException(
+				$"Domain уже установлен в '{_currentDomain}'. Вложенные WithDomain не поддерживаются — используйте WithoutDomain() перед сменой.");
+		}
+		_currentDomain = domain;
 	}
 
 	/// <summary>

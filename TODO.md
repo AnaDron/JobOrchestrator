@@ -7,4 +7,3 @@
 - Условные зависимости (предикат в DependsOn*)
 - Distributed execution (multi-instance с внешним lease)
 - GlobalConcurrency limit (поверх per-stage WithConcurrencyLimit)
-- Multi-tenancy через keyed services (per-tenant изолированные singleton'ы)
