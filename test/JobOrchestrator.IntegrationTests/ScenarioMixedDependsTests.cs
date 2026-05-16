@@ -31,10 +31,9 @@ public sealed class ScenarioMixedDependsTests {
 		var employeesRuns = 0;
 		var groupsRuns = 0;
 
-		var shops = new GatedStage((ctx, _) => {
+		var shops = new GatedStage(async (ctx, ct) => {
 			Interlocked.Increment(ref shopsRuns);
-			if (shopsRuns == 1) ctx.AddKey("u-1");  // только первый раз
-			return Task.CompletedTask;
+			if (shopsRuns == 1) await ctx.AddKeyAsync("u-1", ct);  // только первый раз
 		});
 
 		var employees = new GatedStage(async (_, ct) => {
@@ -120,7 +119,7 @@ public sealed class ScenarioMixedDependsTests {
 
 		var shops = new GatedStage(async (ctx, ct) => {
 			if (Interlocked.Increment(ref shopsRuns) == 1) {
-				ctx.AddKey("u-1");
+				await ctx.AddKeyAsync("u-1", ct);
 				// Висим в ExecuteAsync ПОСЛЕ AddKey — это позволяет проверить reactive-семантику:
 				// groups должен создаться, пока shops ещё running (shops.LastSuccess is null).
 				using var reg = ct.Register(() => shopsGate.TrySetCanceled(ct));

@@ -3,7 +3,7 @@ namespace JobOrchestrator.Internal;
 /// <summary>
 /// Реестр keyspace, привязанного к <b>конкретному инстансу-эмитеру</b> через его <see cref="InstanceIdentity"/>.
 /// Bucket-key — <see cref="InstanceIdentity"/>; каждый bucket хранит ключи, опубликованные данным
-/// инстансом-эмитером через <see cref="JobContext.AddKey"/> или внешний
+/// инстансом-эмитером через <see cref="JobContext.AddKeyAsync"/> или внешний
 /// <see cref="IStageHandle.RegisterKey"/>.
 /// <para>
 /// API принимает <see cref="InstanceIdentity"/>, и внутреннее хранилище тоже ключуется по Identity

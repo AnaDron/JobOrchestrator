@@ -28,7 +28,7 @@ internal sealed class Instance {
 	public required InstanceIdentity Identity { get; init; }
 
 	/// <summary>
-	/// Sink для пересылки <c>ctx.AddKey/RemoveKey</c> в event loop. Pre-allocated в InstanceCreator,
+	/// Sink для пересылки <c>ctx.AddKeyAsync/RemoveKeyAsync</c> в event loop. Pre-allocated в InstanceCreator,
 	/// переиспользуется через все итерации.
 	/// </summary>
 	public IJobContextSink Sink { get; set; } = null!;

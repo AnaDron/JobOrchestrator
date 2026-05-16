@@ -9,42 +9,48 @@ namespace JobOrchestrator.Internal;
 /// <para>
 /// <b>Один sink на Instance lifetime</b> (pre-created в <see cref="InstanceCreator"/>):
 /// Source и ChannelWriter постоянны → нет смысла создавать sink на каждую итерацию.
-/// Один Sink-объект живёт столько же, сколько Instance.
 /// </para>
 /// <para>
 /// <b>Throws на closed-channel.</b> Если ChannelWriter закрыт (orchestrator после shutdown / faulted),
-/// <see cref="AddKey"/>/<see cref="RemoveKey"/> бросают <see cref="InvalidOperationException"/> —
+/// <see cref="AddKeyAsync"/>/<see cref="RemoveKeyAsync"/> бросают <see cref="InvalidOperationException"/> —
 /// пользователю-сервису видна реальная причина «ключ не принят». Silently-drop здесь опасен:
 /// сервис мог рассчитывать, что ключ propagate'нулся, и продолжит работать с фиктивно-зарегистрированным
 /// state.
 /// </para>
 /// <para>
-/// <b>Sync-over-async fallback под backpressure.</b> Контракт <see cref="IJobContextSink"/> синхронный
-/// (<c>void AddKey/RemoveKey</c>) — это упрощает БЛ-сервисам жизнь: <c>ctx.AddKey("k")</c> читается как
-/// noблокирующая инлайн-операция. В 99.99% случаев <see cref="ChannelWriter{T}.TryWrite"/> уходит
-/// мгновенно (bounded-channel capacity 10k, event-loop её быстро дренит). НО если очередь полностью
-/// заполнена (event-loop встал или behind), <see cref="ChannelWriter{T}.WriteAsync"/> блокирует
-/// runner-поток (sync-over-async) до освобождения слота. Это намеренный backpressure: лучше затормозить
-/// конкретный сервис, чем потерять ключ или раздуть очередь без границ.
+/// <b>Fast path / slow path.</b> 99.99% вызовов уходят через <see cref="ChannelWriter{T}.TryWrite"/>
+/// и возвращают синхронно завершённый <see cref="ValueTask"/> без аллокации. При полном bounded-channel
+/// caller получает honest async-ожидание через <see cref="ChannelWriter{T}.WriteAsync"/> — естественный
+/// backpressure без блокировки runner-потока.
 /// </para>
 /// </summary>
 internal sealed class ChannelJobContextSink(
 	ChannelWriter<OrchestratorEvent> writer,
 	Instance source
 ) : IJobContextSink {
-	public void AddKey(string key) => PublishOrThrow(new KeyAddedEvent(source, key), "AddKey");
+	public ValueTask AddKeyAsync(string key, CancellationToken ct = default) =>
+		PublishAsync(new KeyAddedEvent(source, key), "AddKey", key, ct);
 
-	public void RemoveKey(string key) => PublishOrThrow(new KeyRemovedEvent(source, key), "RemoveKey");
+	public ValueTask RemoveKeyAsync(string key, CancellationToken ct = default) =>
+		PublishAsync(new KeyRemovedEvent(source, key), "RemoveKey", key, ct);
 
-	private void PublishOrThrow(OrchestratorEvent evt, string operation) {
+	private ValueTask PublishAsync(OrchestratorEvent evt, string operation, string key, CancellationToken ct) {
 		try {
-			if (writer.TryWrite(evt)) return;
-			// Backpressure: event-loop отстаёт; блокируем runner до освобождения слота — см. summary.
-			writer.WriteAsync(evt).AsTask().GetAwaiter().GetResult();
+			if (writer.TryWrite(evt)) return ValueTask.CompletedTask;
 		} catch (ChannelClosedException ex) {
-			throw new InvalidOperationException(
-				$"Оркестратор остановлен; {operation}(\"{(evt is KeyAddedEvent ka ? ka.Key : ((KeyRemovedEvent)evt).Key)}\") для инстанса {source.FullyQualifiedName} не может быть принят.",
-				ex);
+			throw new InvalidOperationException(BuildClosedMessage(operation, key), ex);
+		}
+		return PublishSlowAsync(evt, operation, key, ct);
+	}
+
+	private async ValueTask PublishSlowAsync(OrchestratorEvent evt, string operation, string key, CancellationToken ct) {
+		try {
+			await writer.WriteAsync(evt, ct).ConfigureAwait(false);
+		} catch (ChannelClosedException ex) {
+			throw new InvalidOperationException(BuildClosedMessage(operation, key), ex);
 		}
 	}
+
+	private string BuildClosedMessage(string operation, string key) =>
+		$"Оркестратор остановлен; {operation}(\"{key}\") для инстанса {source.FullyQualifiedName} не может быть принят.";
 }

@@ -45,10 +45,9 @@ public sealed class ScenarioStateStoreTests {
 		var pgFake = new FakeServiceB();
 
 		int shopsCall = 0;
-		shopsFake.ExecuteHandler = (ctx, _) => {
-			if (shopsCall == 0) ctx.AddKey("u1");
+		shopsFake.ExecuteHandler = async (ctx, ct) => {
+			if (shopsCall == 0) await ctx.AddKeyAsync("u1", ct);
 			shopsCall++;
-			return Task.CompletedTask;
 		};
 		pgFake.ExecuteHandler = async (ctx, _) => {
 			await ctx.State.SetAsync("data", "value-from-pg").ConfigureAwait(false);

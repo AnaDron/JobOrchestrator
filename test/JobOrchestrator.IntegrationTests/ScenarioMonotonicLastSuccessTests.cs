@@ -13,11 +13,11 @@ public sealed class ScenarioMonotonicLastSuccessTests {
 		var pgFake = new FakeServiceB();
 
 		int shopsCall = 0;
-		shopsFake.ExecuteHandler = (ctx, _) => {
+		shopsFake.ExecuteHandler = async (ctx, ct) => {
 			shopsCall++;
 			if (shopsCall == 1) {
-				ctx.AddKey("u1");
-				return Task.CompletedTask;
+				await ctx.AddKeyAsync("u1", ct);
+				return;
 			}
 			throw new InvalidOperationException($"shops call {shopsCall} fails");
 		};

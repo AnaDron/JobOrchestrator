@@ -4,11 +4,10 @@ namespace JobOrchestrator.IntegrationTests.Support;
 // Каждый сервис записывает свой execution в ExecutionRecorder и (опционально) эмитит ключи.
 
 internal sealed class ShopsStageService(ExecutionRecorder recorder, ShopsKeySource keys) : IJobService {
-	public Task ExecuteAsync(JobContext ctx, CancellationToken ct) {
+	public async Task ExecuteAsync(JobContext ctx, CancellationToken ct) {
 		recorder.Record(ctx);
-		foreach (var k in keys.SnapshotAddNext()) ctx.AddKey(k);
-		foreach (var k in keys.SnapshotRemoveNext()) ctx.RemoveKey(k);
-		return Task.CompletedTask;
+		foreach (var k in keys.SnapshotAddNext()) await ctx.AddKeyAsync(k, ct);
+		foreach (var k in keys.SnapshotRemoveNext()) await ctx.RemoveKeyAsync(k, ct);
 	}
 }
 
@@ -41,10 +40,9 @@ internal sealed class DocumentsStageService(ExecutionRecorder recorder) : IJobSe
 }
 
 internal sealed class CurrenciesStageService(ExecutionRecorder recorder, CurrenciesKeySource keys) : IJobService {
-	public Task ExecuteAsync(JobContext ctx, CancellationToken ct) {
+	public async Task ExecuteAsync(JobContext ctx, CancellationToken ct) {
 		recorder.Record(ctx);
-		foreach (var k in keys.SnapshotAddNext()) ctx.AddKey(k);
-		return Task.CompletedTask;
+		foreach (var k in keys.SnapshotAddNext()) await ctx.AddKeyAsync(k, ct);
 	}
 }
 

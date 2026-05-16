@@ -89,9 +89,8 @@ public sealed class ScenarioHandleApiTests {
 				s.AddSingleton<FakeServiceB>();
 			});
 		var shopsFake = host.Services.GetRequiredService<FakeServiceA>();
-		shopsFake.ExecuteHandler = (ctx, _) => {
-			ctx.AddKey("u1");
-			return Task.CompletedTask;
+		shopsFake.ExecuteHandler = async (ctx, ct) => {
+			await ctx.AddKeyAsync("u1", ct);
 		};
 		var pgFake = host.Services.GetRequiredService<FakeServiceB>();
 		await host.StartAsync().ConfigureAwait(false);
@@ -324,11 +323,10 @@ public sealed class ScenarioHandleApiTests {
 				s.AddSingleton<FakeServiceB>();
 			});
 		var shopsFake = host.Services.GetRequiredService<FakeServiceA>();
-		shopsFake.ExecuteHandler = (ctx, _) => {
-			ctx.AddKey("u1");
-			ctx.AddKey("u2");
-			ctx.AddKey("u3");
-			return Task.CompletedTask;
+		shopsFake.ExecuteHandler = async (ctx, ct) => {
+			await ctx.AddKeyAsync("u1", ct);
+			await ctx.AddKeyAsync("u2", ct);
+			await ctx.AddKeyAsync("u3", ct);
 		};
 		var pgFake = host.Services.GetRequiredService<FakeServiceB>();
 		await host.StartAsync().ConfigureAwait(false);

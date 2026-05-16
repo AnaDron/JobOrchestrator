@@ -33,7 +33,7 @@ public sealed class ScenarioStructuredLoggingTests {
 		builder.Services.AddSingleton<FakeServiceB>();
 		builder.Services.AddSingleton<FakeServiceA>(sp => {
 			var s = new FakeServiceA();
-			s.ExecuteHandler = (ctx, _) => { ctx.AddKey("uuid-1"); return Task.CompletedTask; };
+			s.ExecuteHandler = async (ctx, ct) => { await ctx.AddKeyAsync("uuid-1", ct); };
 			return s;
 		});
 

@@ -9,8 +9,14 @@ public sealed class JobContextSinkTests {
 	private sealed class RecordingSink : IJobContextSink {
 		public List<string> Added { get; } = [];
 		public List<string> Removed { get; } = [];
-		public void AddKey(string key) => Added.Add(key);
-		public void RemoveKey(string key) => Removed.Add(key);
+		public ValueTask AddKeyAsync(string key, CancellationToken ct = default) {
+			Added.Add(key);
+			return ValueTask.CompletedTask;
+		}
+		public ValueTask RemoveKeyAsync(string key, CancellationToken ct = default) {
+			Removed.Add(key);
+			return ValueTask.CompletedTask;
+		}
 	}
 
 	private sealed class NoopState : IJobState {
@@ -20,7 +26,7 @@ public sealed class JobContextSinkTests {
 	}
 
 	[Fact]
-	public void AddKey_DelegatesToSink() {
+	public async Task AddKey_DelegatesToSink() {
 		var sink = new RecordingSink();
 		var ctx = new JobContext {
 			CorrelationId = "c1",
@@ -32,15 +38,15 @@ public sealed class JobContextSinkTests {
 			Sink = sink,
 		};
 
-		ctx.AddKey("k1");
-		ctx.AddKey("k2");
+		await ctx.AddKeyAsync("k1");
+		await ctx.AddKeyAsync("k2");
 
 		sink.Added.Should().Equal("k1", "k2");
 		sink.Removed.Should().BeEmpty();
 	}
 
 	[Fact]
-	public void RemoveKey_DelegatesToSink() {
+	public async Task RemoveKey_DelegatesToSink() {
 		var sink = new RecordingSink();
 		var ctx = new JobContext {
 			CorrelationId = "c1",
@@ -52,12 +58,12 @@ public sealed class JobContextSinkTests {
 			Sink = sink,
 		};
 
-		ctx.RemoveKey("a");
+		await ctx.RemoveKeyAsync("a");
 		sink.Removed.Should().Equal("a");
 	}
 
 	[Fact]
-	public void AddKey_NullOrEmpty_Throws() {
+	public async Task AddKey_NullOrEmpty_Throws() {
 		var ctx = new JobContext {
 			CorrelationId = "c1",
 			Trigger = TriggerSource.Auto,
@@ -68,9 +74,9 @@ public sealed class JobContextSinkTests {
 			Sink = new RecordingSink(),
 		};
 
-		Action addNull = () => ctx.AddKey(null!);
-		Action addEmpty = () => ctx.AddKey("");
-		addNull.Should().Throw<ArgumentException>();
-		addEmpty.Should().Throw<ArgumentException>();
+		Func<Task> addNull = async () => await ctx.AddKeyAsync(null!);
+		Func<Task> addEmpty = async () => await ctx.AddKeyAsync("");
+		await addNull.Should().ThrowAsync<ArgumentException>();
+		await addEmpty.Should().ThrowAsync<ArgumentException>();
 	}
 }

@@ -64,7 +64,7 @@ public sealed class ScenarioManualTriggerTests {
 		// products нет прямого DependsOnInstance(shops), но через DependsOn(productGroups) измерение
 		// `shops` унаследовано. TriggerAsync("products", { shops: "u1" }) должен принять keys.
 		var shopsFake = new FakeServiceA();
-		shopsFake.ExecuteHandler = (ctx, _) => { ctx.AddKey("u1"); return Task.CompletedTask; };
+		shopsFake.ExecuteHandler = async (ctx, ct) => { await ctx.AddKeyAsync("u1", ct); };
 
 		using var host = TestHostFactory.Build(
 			configure: jobs => {
@@ -116,9 +116,8 @@ public sealed class ScenarioManualTriggerTests {
 	[Fact]
 	public async Task TriggerAsync_WhenConcurrencyLimitExhausted_ReturnsWaitingRetryNotStarted() {
 		var shopsFake = new FakeServiceA();
-		shopsFake.ExecuteHandler = (ctx, _) => {
-			for (int i = 0; i < 3; i++) ctx.AddKey($"shop-{i}");
-			return Task.CompletedTask;
+		shopsFake.ExecuteHandler = async (ctx, ct) => {
+			for (int i = 0; i < 3; i++) await ctx.AddKeyAsync($"shop-{i}", ct);
 		};
 
 		var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);

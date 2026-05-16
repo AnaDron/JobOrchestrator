@@ -167,7 +167,7 @@ internal sealed class JobOrchestratorRuntime : IJobOrchestrator {
 	private Instance ResolveKeylessSource(StageDescriptor stage) {
 		if (stage.ExpectedKeyNames.Count != 0) {
 			throw new InvalidOperationException(
-				$"Стадия '{stage.Name}' имеет ключевые зависимости. Внешний RegisterKey/UnregisterKey работает только для keyless-эмитеров; используйте JobContext.AddKey/RemoveKey из ExecuteAsync.");
+				$"Стадия '{stage.Name}' имеет ключевые зависимости. Внешний RegisterKey/UnregisterKey работает только для keyless-эмитеров; используйте JobContext.AddKeyAsync/RemoveKeyAsync из ExecuteAsync.");
 		}
 		var source = _instances.Find(new InstanceIdentity(stage));
 		if (source is null) {

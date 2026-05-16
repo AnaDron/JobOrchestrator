@@ -99,7 +99,7 @@ public sealed class ScenarioTerminatingFilterTests {
 		public void ReleaseGate() => _gate.TrySetResult();
 
 		public async Task ExecuteAsync(JobContext ctx, CancellationToken ct) {
-			ctx.AddKey("b1");
+			await ctx.AddKeyAsync("b1", ct);
 			try {
 				await _gate.Task.WaitAsync(ct).ConfigureAwait(false);
 			} catch (OperationCanceledException) {
@@ -107,7 +107,7 @@ public sealed class ScenarioTerminatingFilterTests {
 				// «Плохой гражданин»: после Cancel зовёт AddKey. SDK должен это отбросить,
 				// потому что инстанс уже помечен на удаление.
 				try {
-					ctx.AddKey("b2");
+					await ctx.AddKeyAsync("b2", CancellationToken.None);
 				} catch (InvalidOperationException) {
 					// Channel уже закрыт — тоже допустимо при гонке со shutdown.
 				}

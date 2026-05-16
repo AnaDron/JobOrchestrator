@@ -20,7 +20,7 @@ public interface IJobStateStore {
 
 	/// <summary>
 	/// Удалить весь scope целиком. Вызывается SDK при удалении инстанса
-	/// (через <see cref="JobContext.RemoveKey"/> или <see cref="IStageHandle.UnregisterKey"/>).
+	/// (через <see cref="JobContext.RemoveKeyAsync"/> или <see cref="IStageHandle.UnregisterKey"/>).
 	/// Идемпотентно: отсутствующий scope — no-op.
 	/// </summary>
 	Task RemoveScopeAsync(string scope, CancellationToken ct);

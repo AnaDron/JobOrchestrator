@@ -11,8 +11,9 @@ namespace JobOrchestrator.Abstractions;
 /// что сервис корректно вызывает <see cref="AddKey"/>/<see cref="RemoveKey"/>.
 /// </para>
 /// <para>
-/// Фасадные методы <see cref="AddKey"/>/<see cref="RemoveKey"/> остаются на самом контексте
-/// (<c>ctx.AddKey(k)</c> короче, чем <c>ctx.Sink.AddKey(k)</c>); внутри делегируют в <see cref="Sink"/>.
+/// Фасадные методы <see cref="AddKeyAsync"/>/<see cref="RemoveKeyAsync"/> остаются на самом контексте
+/// (<c>await ctx.AddKeyAsync(k)</c> короче, чем <c>await ctx.Sink.AddKeyAsync(k)</c>); внутри делегируют
+/// в <see cref="Sink"/>.
 /// </para>
 /// </remarks>
 public sealed class JobContext {
@@ -56,20 +57,20 @@ public sealed class JobContext {
 
 	/// <summary>
 	/// Регистрирует ключ в keyspace ТЕКУЩЕЙ стадии. Идемпотентно: повторный вызов с тем же ключом — no-op.
-	/// Фасад над <see cref="Sink"/>. Обработка в event loop асинхронная; при backpressure на channel
-	/// вызов может синхронно блокировать поток итерации (см. <see cref="IJobContextSink.AddKey"/>).
+	/// Фасад над <see cref="Sink"/>. Обработка в event loop асинхронная; при backpressure caller
+	/// естественно <c>await</c>-ит освободившийся слот (см. <see cref="IJobContextSink.AddKeyAsync"/>).
 	/// </summary>
-	public void AddKey(string key) {
+	public ValueTask AddKeyAsync(string key, CancellationToken ct = default) {
 		ArgumentException.ThrowIfNullOrEmpty(key);
-		Sink.AddKey(key);
+		return Sink.AddKeyAsync(key, ct);
 	}
 
 	/// <summary>
 	/// Удаляет ключ из keyspace ТЕКУЩЕЙ стадии. Каскадно gracefully cancel-ит инстансы зависимых стадий
 	/// с этим компонентом ключа, в топологически обратном порядке (листья перед корнями). Фасад над <see cref="Sink"/>.
 	/// </summary>
-	public void RemoveKey(string key) {
+	public ValueTask RemoveKeyAsync(string key, CancellationToken ct = default) {
 		ArgumentException.ThrowIfNullOrEmpty(key);
-		Sink.RemoveKey(key);
+		return Sink.RemoveKeyAsync(key, ct);
 	}
 }

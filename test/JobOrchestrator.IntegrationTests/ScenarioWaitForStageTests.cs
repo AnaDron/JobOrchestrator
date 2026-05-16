@@ -105,7 +105,7 @@ public sealed class ScenarioWaitForStageTests {
 		// как он успел отработать (он сразу запускается, но мы быстро удалим). WaitForStageSuccessAsync
 		// для pg[shops=u1] должен throw InvalidOperationException через каскадную отмену.
 		var shopsFake = new FakeServiceA();
-		shopsFake.ExecuteHandler = (ctx, _) => { ctx.AddKey("u1"); return Task.CompletedTask; };
+		shopsFake.ExecuteHandler = async (ctx, ct) => { await ctx.AddKeyAsync("u1", ct); };
 		var pgFake = new FakeServiceB();
 		// pg висит долго — гарантирует, что мы успеем UnregisterKey до StageCompleted.
 		pgFake.ExecuteHandler = async (_, ct) => {

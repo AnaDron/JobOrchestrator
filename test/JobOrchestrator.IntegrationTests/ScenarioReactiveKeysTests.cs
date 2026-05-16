@@ -67,7 +67,7 @@ public sealed class ScenarioReactiveKeysTests {
 
 		public async Task ExecuteAsync(JobContext ctx, CancellationToken ct) {
 			if (Interlocked.CompareExchange(ref _entered, 1, 0) != 0) return;
-			ctx.AddKey("s-1");
+			await ctx.AddKeyAsync("s-1", ct);
 			using var reg = ct.Register(() => _gate.TrySetCanceled(ct));
 			await _gate.Task.ConfigureAwait(false);
 		}

@@ -20,9 +20,8 @@ public sealed class ScenarioConcurrencyLimitTests {
 		var gate = new object();
 
 		var shopsFake = new FakeServiceA();
-		shopsFake.ExecuteHandler = (ctx, _) => {
-			for (int i = 0; i < TotalKeys; i++) ctx.AddKey($"shop-{i}");
-			return Task.CompletedTask;
+		shopsFake.ExecuteHandler = async (ctx, ct) => {
+			for (int i = 0; i < TotalKeys; i++) await ctx.AddKeyAsync($"shop-{i}", ct);
 		};
 
 		var pgFake = new FakeServiceB();

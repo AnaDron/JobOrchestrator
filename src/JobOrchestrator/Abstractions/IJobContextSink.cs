@@ -8,21 +8,27 @@ namespace JobOrchestrator.Abstractions;
 /// В production реализуется внутренним <c>ChannelSink</c>, который публикует <c>KeyAddedEvent</c>/
 /// <c>KeyRemovedEvent</c> в <c>Channel&lt;OrchestratorEvent&gt;</c> с привязкой к инстансу-эмитеру.
 /// </para>
+/// <para>
+/// <b>Async-контракт.</b> Операции возвращают <see cref="ValueTask"/> — fast path (свободный слот
+/// в bounded channel) синхронно резолвится в <see cref="ValueTask.CompletedTask"/> без аллокации,
+/// а при заполненной очереди caller естественно <c>await</c>-ит освободившийся слот вместо
+/// sync-over-async блокировки runner-потока.
+/// </para>
 /// </summary>
 public interface IJobContextSink {
 	/// <summary>
 	/// Регистрирует ключ в keyspace текущей стадии. Идемпотентно.
 	/// <para>
-	/// Обычно не блокирует (<see cref="System.Threading.Channels.ChannelWriter{T}.TryWrite"/>).
-	/// При переполнении очереди event loop (10 000 событий) — <b>синхронно блокирует</b> поток
-	/// итерации до backpressure-слота (жёсткий контракт SDK).
+	/// Обычно мгновенно (<see cref="System.Threading.Channels.ChannelWriter{T}.TryWrite"/>); при
+	/// переполнении очереди event loop (10 000 событий) <c>await</c> ждёт backpressure-слота —
+	/// runner-поток не блокируется sync-over-async.
 	/// </para>
 	/// </summary>
-	void AddKey(string key);
+	ValueTask AddKeyAsync(string key, CancellationToken ct = default);
 
 	/// <summary>
 	/// Удаляет ключ из keyspace текущей стадии. Каскадно отменяет зависимых. Идемпотентно.
-	/// Семантика блокировки — как у <see cref="AddKey"/>.
+	/// Семантика backpressure — как у <see cref="AddKeyAsync"/>.
 	/// </summary>
-	void RemoveKey(string key);
+	ValueTask RemoveKeyAsync(string key, CancellationToken ct = default);
 }

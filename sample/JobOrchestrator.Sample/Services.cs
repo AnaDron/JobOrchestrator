@@ -4,12 +4,11 @@ using Microsoft.Extensions.Logging;
 namespace JobOrchestrator.Sample;
 
 internal sealed class ProducerService(ILogger<ProducerService> logger) : IJobService {
-	public Task ExecuteAsync(JobContext ctx, CancellationToken ct) {
+	public async Task ExecuteAsync(JobContext ctx, CancellationToken ct) {
 		logger.LogInformation("Producer iteration ({Instance})", ctx.FullyQualifiedName);
-		ctx.AddKey("alpha");
-		ctx.AddKey("beta");
-		ctx.AddKey("gamma");
-		return Task.CompletedTask;
+		await ctx.AddKeyAsync("alpha", ct);
+		await ctx.AddKeyAsync("beta", ct);
+		await ctx.AddKeyAsync("gamma", ct);
 	}
 }
 

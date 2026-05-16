@@ -25,18 +25,16 @@ public sealed class ScenarioMultiInstanceEmitterCascadeTests {
 	[Fact]
 	public async Task UnregisterKey_OnMultiInstanceEmitter_CascadesOnlyAffectedBranch() {
 		var regionsFake = new FakeServiceA();
-		regionsFake.ExecuteHandler = (ctx, _) => {
-			ctx.AddKey("EU");
-			ctx.AddKey("US");
-			return Task.CompletedTask;
+		regionsFake.ExecuteHandler = async (ctx, ct) => {
+			await ctx.AddKeyAsync("EU", ct);
+			await ctx.AddKeyAsync("US", ct);
 		};
 
 		var shopsFake = new FakeServiceB();
-		shopsFake.ExecuteHandler = (ctx, _) => {
+		shopsFake.ExecuteHandler = async (ctx, ct) => {
 			// shops[regions=EU] эмитит eu-1, shops[regions=US] эмитит us-1.
 			var region = ctx.DependencyKeys["regions"];
-			ctx.AddKey($"{region.ToLowerInvariant()}-1");
-			return Task.CompletedTask;
+			await ctx.AddKeyAsync($"{region.ToLowerInvariant()}-1", ct);
 		};
 
 		var productsFake = new FakeServiceC();

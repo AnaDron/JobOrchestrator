@@ -61,9 +61,8 @@ public sealed class ScenarioBootstrapTests {
 		var productsFake = host.Services.GetRequiredService<FakeServiceC>();
 		var documentsFake = host.Services.GetRequiredService<FakeServiceD>();
 
-		shopsFake.ExecuteHandler = (ctx, _) => {
-			ctx.AddKey("u1");
-			return Task.CompletedTask;
+		shopsFake.ExecuteHandler = async (ctx, ct) => {
+			await ctx.AddKeyAsync("u1", ct);
 		};
 
 		await host.StartAsync().ConfigureAwait(false);

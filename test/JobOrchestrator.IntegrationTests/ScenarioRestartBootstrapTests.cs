@@ -13,7 +13,7 @@ public sealed class ScenarioRestartBootstrapTests {
 	public async Task Restart_ResetsInMemoryStateButPreservesIJobStateStore() {
 		// Phase 1: первый запуск — shops эмитит ключ, dependent создаётся.
 		var shopsFake1 = new FakeServiceA();
-		shopsFake1.ExecuteHandler = (ctx, _) => { ctx.AddKey("shop-1"); return Task.CompletedTask; };
+		shopsFake1.ExecuteHandler = async (ctx, ct) => { await ctx.AddKeyAsync("shop-1", ct); };
 		var pgFake1 = new FakeServiceB();
 		int phaseCalls1;
 
@@ -44,7 +44,7 @@ public sealed class ScenarioRestartBootstrapTests {
 		// Phase 2: новый host, тот же граф. In-memory state СБРОСИЛСЯ — bootstrap пройдёт заново,
 		// shops снова получит первую итерацию → AddKey → pg снова bootstrap'нется.
 		var shopsFake2 = new FakeServiceA();
-		shopsFake2.ExecuteHandler = (ctx, _) => { ctx.AddKey("shop-1"); return Task.CompletedTask; };
+		shopsFake2.ExecuteHandler = async (ctx, ct) => { await ctx.AddKeyAsync("shop-1", ct); };
 		var pgFake2 = new FakeServiceB();
 
 		using (var host2 = TestHostFactory.Build(
