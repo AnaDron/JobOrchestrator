@@ -154,7 +154,7 @@ internal sealed class EventLoop(
 		if (instance.IsTerminating || instance.IsRunning) return;
 		var now = time.GetUtcNow();
 		var decision = TriggerAcceptance.TryAccept(instance, TriggerSource.Auto, now);
-		if (decision == TriggerResult.Started) {
+		if (decision == TriggerResult.Accepted) {
 			BeginIteration(instance, TriggerSource.Auto, ct);
 		}
 	}
@@ -171,7 +171,7 @@ internal sealed class EventLoop(
 		// BeginIteration вызывается ДО TrySetResult: если лимит ConcurrencyLimit выбран,
 		// возвращает WaitingRetry; если race на Running — AlreadyRunning. Caller получает
 		// точную семантику вместо ложного Started при фактически отложенном запуске.
-		if (decision == TriggerResult.Started) {
+		if (decision == TriggerResult.Accepted) {
 			decision = BeginIteration(instance, TriggerSource.Manual, ct);
 		}
 		evt.Tcs.TrySetResult(decision);
@@ -207,7 +207,7 @@ internal sealed class EventLoop(
 		instance.SetMetrics(instance.Metrics with { NextAutoUtc = null });
 		Log.BeginIteration(logger, instance.FullyQualifiedName, trigger, null);
 		// Fire-and-forget на ThreadPool: StageRunner внутри публикует StageCompleted/Failed в Channel.
-		// StageRunner.RunIterationAsync обязан вызвать concurrency.Release + instance.EndRunning в finally.
+		// StageRunner.RunIterationAsync обязан вызвать concurrency.Release в finally; EndRunning — в event-loop handler.
 		_ = Task.Run(() => runner.RunIterationAsync(instance, trigger, ct), ct);
 		return TriggerResult.Started;
 	}

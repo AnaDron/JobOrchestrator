@@ -5,10 +5,9 @@ namespace JobOrchestrator.Internal;
 /// <see cref="InstanceIdentity"/>. В отличие от <see cref="SuccessWaiters"/>, резолвится на ЛЮБОЙ
 /// первый исход стадии — Success/Failure/Cancelled.
 /// <para>
-/// Bucket хранит <c>LastOutcome</c>: late-register, прибежавший после сигнала, получает последний
-/// исход сразу. <see cref="Reset"/> очищает bucket — новые регистрации создают чистый bucket
-/// (используется при <c>FinalizeTerminating</c>, чтобы новый инстанс с теми же ключами не наследовал
-/// чужой outcome).
+/// Bucket создаётся только при <see cref="Register"/>; <see cref="Signal"/> без подписчиков — no-op
+/// (нет накопления исходов для «холодных» инстансов). <c>LastOutcome</c> в bucket — для late-register
+/// внутри одного цикла ожидания. <see cref="Reset"/> очищает bucket при cascade-finalize.
 /// </para>
 /// </summary>
 internal sealed class OutcomeWaiters {
@@ -53,17 +52,17 @@ internal sealed class OutcomeWaiters {
 		return tcs.Task;
 	}
 
-	/// <summary>Сигнализирует исход (Success/Failure/Cancelled), резолвит всех pending и запоминает.</summary>
+	/// <summary>
+	/// Сигнализирует исход (Success/Failure/Cancelled) подписчикам. Bucket не создаётся, если на identity
+	/// никто не ждал — без накопления <c>LastOutcome</c> для «холодных» инстансов.
+	/// </summary>
 	public void Signal(InstanceIdentity identity, StageOutcome outcome) {
 		TaskCompletionSource<StageOutcome>[] toResolve;
 		lock (_gate) {
-			if (!_buckets.TryGetValue(identity, out var existing)) {
-				existing = new WaiterBucket();
-				_buckets[identity] = existing;
-			}
-			existing.LastOutcome = outcome;
-			toResolve = [.. existing.Pending];
-			existing.Pending.Clear();
+			if (!_buckets.TryGetValue(identity, out var bucket)) return;
+			bucket.LastOutcome = outcome;
+			toResolve = [.. bucket.Pending];
+			bucket.Pending.Clear();
 		}
 		foreach (var t in toResolve) t.TrySetResult(outcome);
 	}

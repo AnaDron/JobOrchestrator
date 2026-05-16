@@ -56,7 +56,8 @@ public sealed class JobContext {
 
 	/// <summary>
 	/// Регистрирует ключ в keyspace ТЕКУЩЕЙ стадии. Идемпотентно: повторный вызов с тем же ключом — no-op.
-	/// Не блокирует — публикует событие в event loop, обработка асинхронная. Фасад над <see cref="Sink"/>.
+	/// Фасад над <see cref="Sink"/>. Обработка в event loop асинхронная; при backpressure на channel
+	/// вызов может синхронно блокировать поток итерации (см. <see cref="IJobContextSink.AddKey"/>).
 	/// </summary>
 	public void AddKey(string key) {
 		ArgumentException.ThrowIfNullOrEmpty(key);

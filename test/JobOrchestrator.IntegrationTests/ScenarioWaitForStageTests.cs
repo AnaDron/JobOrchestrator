@@ -71,8 +71,12 @@ public sealed class ScenarioWaitForStageTests {
 
 	[Fact]
 	public async Task WaitForStageOutcome_Failure_ReturnsFailureKindWithException() {
+		var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 		var fake = new FakeServiceA();
-		fake.ExecuteHandler = (_, _) => throw new InvalidOperationException("planned failure");
+		fake.ExecuteHandler = async (_, ct) => {
+			await release.Task.WaitAsync(ct).ConfigureAwait(false);
+			throw new InvalidOperationException("planned failure");
+		};
 
 		using var host = TestHostFactory.Build(
 			configure: jobs => jobs.Stage("a")
@@ -84,7 +88,9 @@ public sealed class ScenarioWaitForStageTests {
 		var orchestrator = host.Services.GetRequiredService<IJobOrchestrator>();
 		await host.StartAsync().ConfigureAwait(false);
 		try {
-			var outcome = await orchestrator["a"][InstanceKey.None].WaitForOutcomeAsync().WaitAsync(Timeout).ConfigureAwait(false);
+			var outcomeTask = orchestrator["a"][InstanceKey.None].WaitForOutcomeAsync();
+			release.TrySetResult();
+			var outcome = await outcomeTask.WaitAsync(Timeout).ConfigureAwait(false);
 			outcome.Kind.Should().Be(StageOutcomeKind.Failure);
 			outcome.Exception.Should().NotBeNull();
 			outcome.Exception!.Message.Should().Contain("planned failure");

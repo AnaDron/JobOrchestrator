@@ -20,8 +20,16 @@ public sealed class TriggerAcceptanceTests {
 	[Fact]
 	public void Idle_NoHistory_AutoAndManualAccepted() {
 		var inst = MakeInstance(MakeStage(TimeSpan.Zero, RetryPolicy.NoRetry));
-		TriggerAcceptance.TryAccept(inst, TriggerSource.Auto, Now).Should().Be(TriggerResult.Started);
-		TriggerAcceptance.TryAccept(inst, TriggerSource.Manual, Now).Should().Be(TriggerResult.Started);
+		TriggerAcceptance.TryAccept(inst, TriggerSource.Auto, Now).Should().Be(TriggerResult.Accepted);
+		TriggerAcceptance.TryAccept(inst, TriggerSource.Manual, Now).Should().Be(TriggerResult.Accepted);
+	}
+
+	[Fact]
+	public void Terminating_RejectedWithTerminating() {
+		var inst = MakeInstance(MakeStage(TimeSpan.Zero, RetryPolicy.NoRetry));
+		inst.MarkTerminating();
+		TriggerAcceptance.TryAccept(inst, TriggerSource.Auto, Now).Should().Be(TriggerResult.Terminating);
+		TriggerAcceptance.TryAccept(inst, TriggerSource.Manual, Now).Should().Be(TriggerResult.Terminating);
 	}
 
 	[Fact]
@@ -37,7 +45,7 @@ public sealed class TriggerAcceptanceTests {
 		var inst = MakeInstance(MakeStage(TimeSpan.Zero, RetryPolicy.FixedDelay(TimeSpan.FromMinutes(5))));
 		inst.SetMetrics(inst.Metrics with { ConsecutiveFailures = 1 });
 		inst.SetMetrics(inst.Metrics with { LastAttempt = Now.AddMinutes(-10) });  // окно прошло
-		TriggerAcceptance.TryAccept(inst, TriggerSource.Auto, Now).Should().Be(TriggerResult.Started);
+		TriggerAcceptance.TryAccept(inst, TriggerSource.Auto, Now).Should().Be(TriggerResult.Accepted);
 	}
 
 	[Fact]
@@ -45,7 +53,7 @@ public sealed class TriggerAcceptanceTests {
 		var inst = MakeInstance(MakeStage(TimeSpan.Zero, RetryPolicy.FixedDelay(TimeSpan.FromMinutes(5))));
 		inst.SetMetrics(inst.Metrics with { ConsecutiveFailures = 5 });
 		inst.SetMetrics(inst.Metrics with { LastAttempt = Now.AddSeconds(-1) });    // явно в окне retry-delay
-		TriggerAcceptance.TryAccept(inst, TriggerSource.Manual, Now).Should().Be(TriggerResult.Started);
+		TriggerAcceptance.TryAccept(inst, TriggerSource.Manual, Now).Should().Be(TriggerResult.Accepted);
 	}
 
 	[Fact]
@@ -70,7 +78,7 @@ public sealed class TriggerAcceptanceTests {
 	public void Manual_DebounceElapsed_Accepted() {
 		var inst = MakeInstance(MakeStage(TimeSpan.FromSeconds(10), RetryPolicy.NoRetry));
 		inst.SetMetrics(inst.Metrics with { LastAttempt = Now.AddSeconds(-30) });
-		TriggerAcceptance.TryAccept(inst, TriggerSource.Manual, Now).Should().Be(TriggerResult.Started);
+		TriggerAcceptance.TryAccept(inst, TriggerSource.Manual, Now).Should().Be(TriggerResult.Accepted);
 	}
 
 	[Fact]
@@ -79,6 +87,6 @@ public sealed class TriggerAcceptanceTests {
 		var inst = MakeInstance(MakeStage(TimeSpan.FromMinutes(1), RetryPolicy.NoRetry));
 		inst.SetMetrics(inst.Metrics with { LastAttempt = Now.AddSeconds(-1) });
 		inst.SetMetrics(inst.Metrics with { LastSuccess = inst.Metrics.LastAttempt });
-		TriggerAcceptance.TryAccept(inst, TriggerSource.Auto, Now).Should().Be(TriggerResult.Started);
+		TriggerAcceptance.TryAccept(inst, TriggerSource.Auto, Now).Should().Be(TriggerResult.Accepted);
 	}
 }

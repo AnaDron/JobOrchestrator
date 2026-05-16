@@ -121,8 +121,8 @@ internal sealed class DueScanner(
 	/// <para>
 	/// Идемпотентность гарантируется через <see cref="Instance.TryAcquirePendingTick"/>:
 	/// если флаг уже взведён (предыдущий tick ещё в Channel или обрабатывается consumer-ом),
-	/// scan пропускает инстанс. Флаг сбрасывается event-loop-ом в <c>BeginIteration</c> (через
-	/// <see cref="Instance.ReleasePendingTick"/>) после завершения обработки события.
+	/// scan пропускает инстанс. Флаг сбрасывается event-loop-ом в начале <c>HandleTimerTick</c>
+	/// (через <see cref="Instance.ReleasePendingTick"/>).
 	/// </para>
 	/// </summary>
 	private DateTimeOffset? ScanAndPublishDue(DateTimeOffset now) {

@@ -114,6 +114,55 @@ public sealed class ScenarioManualTriggerTests {
 	}
 
 	[Fact]
+	public async Task TriggerAsync_WhenConcurrencyLimitExhausted_ReturnsWaitingRetryNotStarted() {
+		var shopsFake = new FakeServiceA();
+		shopsFake.ExecuteHandler = (ctx, _) => {
+			for (int i = 0; i < 3; i++) ctx.AddKey($"shop-{i}");
+			return Task.CompletedTask;
+		};
+
+		var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+		string? runningShopKey = null;
+		var pgFake = new FakeServiceB();
+		pgFake.ExecuteHandler = async (ctx, ct) => {
+			runningShopKey = ctx.DependencyKeys["shops"];
+			gate.TrySetResult();
+			await Task.Delay(TimeSpan.FromMinutes(1), ct).ConfigureAwait(false);
+		};
+
+		using var host = TestHostFactory.Build(
+			configure: jobs => {
+				var shops = jobs.Stage("shops")
+					.HandledBy<FakeServiceA>()
+					.RunPeriodically(TimeSpan.FromHours(1));
+				jobs.Stage("productGroups")
+					.HandledBy<FakeServiceB>()
+					.DependsOnInstance(shops)
+					.WithConcurrencyLimit(1)
+					.RunPeriodically(TimeSpan.FromHours(1));
+			},
+			registerFakes: s => {
+				s.AddSingleton<FakeServiceA>(shopsFake);
+				s.AddSingleton<FakeServiceB>(pgFake);
+			});
+
+		await host.StartAsync().ConfigureAwait(false);
+		try {
+			(await pgFake.WaitForCallCountAsync(1, Timeout).ConfigureAwait(false)).Should().BeTrue();
+			await gate.Task.WaitAsync(Timeout).ConfigureAwait(false);
+			runningShopKey.Should().NotBeNull();
+			var idleShop = runningShopKey == "shop-0" ? "shop-1" : "shop-0";
+
+			var orchestrator = host.Services.GetRequiredService<IJobOrchestrator>();
+			var result = await orchestrator["productGroups"][("shops", idleShop)].TriggerAsync().ConfigureAwait(false);
+			result.Should().Be(TriggerResult.WaitingRetry,
+				"Manual trigger при занятом ConcurrencyLimit не должен возвращать Started до TryBeginRunning");
+		} finally {
+			await host.StopAsync().ConfigureAwait(false);
+		}
+	}
+
+	[Fact]
 	public async Task TriggerAsync_InDebounceWindow_ReturnsDebounced() {
 		var fake = new FakeServiceA();
 		using var host = TestHostFactory.Build(

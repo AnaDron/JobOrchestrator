@@ -3,11 +3,19 @@ using System.Threading.Channels;
 namespace JobOrchestrator.Internal;
 
 /// <summary>
-/// Helper-методы публикации в <see cref="ChannelWriter{T}"/> с уважением к bounded-channel backpressure
-/// и без silent loss событий. В отличие от прямого <see cref="ChannelWriter{T}.TryWrite"/>,
-/// который при <c>FullMode = Wait</c> bounded-channel возвращает <c>false</c> молча, эти методы
-/// либо ждут места (синхронно блокируя поток), либо корректно поглощают <c>ChannelClosedException</c>
-/// после <see cref="OrchestratorLifecycle.MarkFaulted"/>/<see cref="OrchestratorLifecycle.CloseChannel"/>.
+/// Helper-методы публикации в <see cref="ChannelWriter{T}"/> с уважением к bounded-channel backpressure.
+/// <para>
+/// <b>Жёсткий контракт backpressure.</b> Fast path — <see cref="ChannelWriter{T}.TryWrite"/>; если
+/// bounded-channel (capacity 10 000) заполнен, caller-thread <b>синхронно блокируется</b> через
+/// <c>WriteAsync().GetAwaiter().GetResult()</c> до освобождения слота. Это намеренно: лучше
+/// затормозить producer (runner, DueScanner, <see cref="IJobContextSink"/>), чем потерять событие
+/// или раздуть очередь без границ. Вызывать только с потоков, где блокировка допустима
+/// (ThreadPool runner, не UI/ASP.NET request thread).
+/// </para>
+/// <para>
+/// <c>ChannelClosedException</c> поглощается после shutdown/fault — событие в закрытый channel
+/// не ставится в очередь; completion-события при shutdown дочищаются в <see cref="EventLoop.DrainPendingRequests"/>.
+/// </para>
 /// </summary>
 internal static class ChannelWriterExtensions {
 	/// <summary>

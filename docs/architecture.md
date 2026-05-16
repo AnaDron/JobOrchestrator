@@ -28,7 +28,10 @@ Job Orchestrator — SDK периодических задач с зависим
    IJobOrchestrator.GetOverview() ──► (lock-free) InstanceManager.Snapshot()  — НЕ идёт в event loop
 ```
 
-Все публикации идут через `ChannelWriter<T>.Publish` (см. `ChannelWriterExtensions`) — fast-path TryWrite, fallback на sync-WriteAsync при заполнении bounded-channel. `ChannelClosedException` поглощается (после shutdown/crash).
+Все публикации идут через `ChannelWriter<T>.Publish` (см. `ChannelWriterExtensions`):
+
+- **Backpressure (жёсткий контракт):** fast-path `TryWrite`; при заполнении bounded-channel (10 000) caller-thread **синхронно блокируется** через `WriteAsync().GetAwaiter().GetResult()` до слота. Это касается runner-а (`StageCompleted`/`Failed`), `ctx.AddKey`/`RemoveKey` и внешних API. Блокировка допустима только на ThreadPool-потоках итераций, не на UI/HTTP request thread.
+- **Shutdown:** `ChannelClosedException` при `Publish` поглощается; completion-события, уже лежащие в channel, дочищаются в `EventLoop.DrainPendingRequests` (`EndRunning` + сигнал waiters).
 
 ## DueScanner
 
@@ -95,20 +98,26 @@ Recurse(stage, dimensions, dimIdx, currentDict):
 ## Принятие триггеров
 
 ```
-TryAcceptTrigger(instance, source, now):
+TryAccept(instance, source, now):
+    if instance.State == Terminating: return Terminating
     if instance.State == Running: return AlreadyRunning
 
     if source == Auto:
         if ConsecutiveFailures > 0 && now - LastAttempt < RetryDelay(ConsecutiveFailures):
             return WaitingRetry
-        return Started
+        return Accepted
 
     # source == Manual: retry-delay НЕ блокирует, debounce уважается
     if LastAttempt != null && now - LastAttempt < Debounce:
         return Debounced
-    return Started
+    return Accepted
+
+BeginIteration (после Accepted):
+    if ConcurrencyLimit exhausted: return WaitingRetry
+    TryBeginRunning → Started (runner на ThreadPool)
 ```
 
+- `Accepted` — политика пройдена; `Started` — только после успешного `TryBeginRunning` (в TCS `TriggerAsync` попадает результат `BeginIteration`).
 - `Retry-delay` — защита downstream от Auto-spam после неуспеха. Manual игнорирует — пользователь явно просит.
 - `Debounce` — анти-spam-click для Manual. От `LastAttempt`, не от `LastSuccess`, поэтому работает и после успеха, и после неуспеха.
 - `Auto` debounce не проверяет — scheduled tick через interval сам по себе соблюдает темп.
@@ -150,7 +159,7 @@ SDK хранит весь runtime-state in-memory: `InstanceManager`, `KeyspaceR
 Три состояния:
 - **Idle** — инстанс существует, ждёт следующего тика или истечения retry-delay.
 - **Running** — итерация выполняется. DueScanner и Manual-триггеры пропускают (return `AlreadyRunning`).
-- **Terminating** — cascade-removal в процессе. RunCts отменён (для бывших Running). Инстанс остаётся в `InstanceManager` до finalize. Триггеры и DueScanner пропускают (return `NotFound` для Manual).
+- **Terminating** — cascade-removal в процессе. RunCts отменён (для бывших Running). Инстанс остаётся в `InstanceManager` до finalize. Триггеры и DueScanner пропускают; Manual возвращает `TriggerResult.Terminating`.
 
 **State-transition diagram:**
 

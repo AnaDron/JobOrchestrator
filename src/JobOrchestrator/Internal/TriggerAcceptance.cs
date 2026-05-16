@@ -5,6 +5,7 @@ namespace JobOrchestrator.Internal;
 /// по правилам:
 /// <list type="bullet">
 /// <item>Running → <see cref="TriggerResult.AlreadyRunning"/> для любого источника.</item>
+/// <item>Terminating → <see cref="TriggerResult.Terminating"/> (инстанс в каскадном удалении).</item>
 /// <item>Auto в retry-delay (после неуспеха) → <see cref="TriggerResult.WaitingRetry"/>.</item>
 /// <item>Manual в окне debounce от <c>LastAttempt</c> (вне зависимости от исхода) → <see cref="TriggerResult.Debounced"/>.</item>
 /// <item>Manual игнорирует retry-delay (пользователь явно просит).</item>
@@ -17,9 +18,8 @@ internal static class TriggerAcceptance {
 		TriggerSource source,
 		DateTimeOffset now
 	) {
-		// Terminating-инстансы — не существуют в смысле триггеров.
 		var state = instance.State;
-		if (state == InstanceLifecycleState.Terminating) return TriggerResult.NotFound;
+		if (state == InstanceLifecycleState.Terminating) return TriggerResult.Terminating;
 		if (state == InstanceLifecycleState.Running) return TriggerResult.AlreadyRunning;
 
 		// Один атомарный snapshot метрик — все поля согласованы и читаются один раз.
@@ -32,13 +32,13 @@ internal static class TriggerAcceptance {
 					return TriggerResult.WaitingRetry;
 				}
 			}
-			return TriggerResult.Started;
+			return TriggerResult.Accepted;
 		}
 
 		// source == Manual
 		if (m.LastAttempt.HasValue && (now - m.LastAttempt.Value) < instance.Stage.Debounce) {
 			return TriggerResult.Debounced;
 		}
-		return TriggerResult.Started;
+		return TriggerResult.Accepted;
 	}
 }

@@ -76,8 +76,9 @@ internal sealed class Instance {
 	public bool TryBeginRunning() => Interlocked.CompareExchange(ref _running, 1, 0) == 0;
 
 	/// <summary>
-	/// Снимает Running-флаг + pendingTick. Вызывается из <c>StageRunner.RunIterationAsync</c> finally —
-	/// гарантирует выход из Running при любом исходе итерации (success/failure/cancel/exception).
+	/// Снимает Running-флаг + pendingTick. Вызывается из <see cref="EventLoop"/> —
+	/// <c>HandleStageCompletedAsync</c>/<c>HandleStageFailedAsync</c> (finally) и
+	/// <c>DrainPendingRequests</c> при shutdown (late completion-события в Channel).
 	/// </summary>
 	public void EndRunning() {
 		Volatile.Write(ref _pendingTick, 0);

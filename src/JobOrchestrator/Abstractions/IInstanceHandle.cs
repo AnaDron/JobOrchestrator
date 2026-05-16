@@ -36,6 +36,7 @@ public interface IInstanceHandle {
 	/// <summary>
 	/// Запросить ручной запуск инстанса. Manual игнорирует retry-delay, но уважает debounce-окно.
 	/// Если инстанс не существует — <see cref="TriggerResult.NotFound"/>.
+	/// Если инстанс в каскадном удалении — <see cref="TriggerResult.Terminating"/>.
 	/// </summary>
 	Task<TriggerResult> TriggerAsync(CancellationToken ct = default);
 
@@ -47,8 +48,18 @@ public interface IInstanceHandle {
 	Task WaitForSuccessAsync(CancellationToken ct = default);
 
 	/// <summary>
-	/// Завершается на ПЕРВОМ ИСХОДЕ следующего цикла (Success/Failure/Cancelled).
-	/// Caller отвечает за порядок «Register → Trigger», если хочет ждать именно текущий запуск.
+	/// Завершается на ПЕРВОМ ИСХОДЕ (Success/Failure/Cancelled), произошедшем <b>после</b> регистрации.
+	/// <para>
+	/// <b>Без мемоизации.</b> В отличие от <see cref="WaitForSuccessAsync"/>, метод не возвращает
+	/// уже-произошедший исход: если runner завершил итерацию ДО вызова <c>WaitForOutcomeAsync</c>,
+	/// этот исход потерян для caller'а — Task будет ждать <i>следующий</i> цикл. Для periodic-стадий
+	/// следующий tick придёт через <c>Interval</c>; для one-shot/keyed-стадий без re-triggering Task
+	/// зависнет до cancellation.
+	/// </para>
+	/// <para>
+	/// Caller отвечает за порядок «Register → Trigger», если хочет ждать именно текущий запуск
+	/// (например, <c>var t = handle.WaitForOutcomeAsync(); await handle.TriggerAsync(); var outcome = await t;</c>).
+	/// </para>
 	/// </summary>
 	Task<StageOutcome> WaitForOutcomeAsync(CancellationToken ct = default);
 }
