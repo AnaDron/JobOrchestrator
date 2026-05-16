@@ -200,6 +200,13 @@ internal sealed class EventLoop(
 	}
 
 	/// <summary>
+	/// Сид BFS-обхода каскада (см. <see cref="CascadeKeyRemovalAsync"/>): какой эмитер и какой его ключ
+	/// инициировали удаление. <see cref="InstanceIdentity"/> иммутабельна — seed валиден даже после
+	/// удаления инстанса из <see cref="InstanceManager"/>.
+	/// </summary>
+	private readonly record struct CascadeSeed(InstanceIdentity Emitter, string Key);
+
+	/// <summary>
 	/// <b>Итеративный</b> cascade через BFS-очередь: каждый шаг очереди — это (эмитер-стадия, его ключи, удалённый ключ).
 	/// Для каждого аффектированного инстанса:
 	/// <list type="bullet">
@@ -210,11 +217,6 @@ internal sealed class EventLoop(
 	/// </list>
 	/// Преимущество vs рекурсия: глубокие графы не порождают цепочки async-state-machine-frame'ов в куче.
 	/// </summary>
-	/// <summary>
-	/// Сид BFS-обхода каскада: какой эмитер и какой его ключ инициировали удаление.
-	/// Identity иммутабельна — валидна даже после удаления инстанса из <c>InstanceManager</c>.
-	/// </summary>
-	private readonly record struct CascadeSeed(InstanceIdentity Emitter, string Key);
 
 	private async Task CascadeKeyRemovalAsync(InstanceIdentity emitter, string key, CancellationToken ct) {
 		var queue = new Queue<CascadeSeed>();
@@ -356,7 +358,11 @@ internal sealed class EventLoop(
 
 	private async Task FinalizeTerminatingAsync(Instance instance, CancellationToken ct) {
 		// Remove из InstanceManager БЕФОRE RemoveScopeAsync — следующие lookup'ы не найдут.
-		instances.Remove(instance);
+		// TryRemove работает как однократный CAS-гард: при race между cascade-веткой (Idle → finalize
+		// синхронно) и StageCompleted/Failed-handler-ом (тот же инстанс уже отстрелил completion-event)
+		// один вызывающий получит true, второй — false и просто выйдет. Это страхует от повторной
+		// сигнализации waiters и повторного RemoveScopeAsync.
+		if (!instances.Remove(instance)) return;
 
 		// Уведомляем waiters об отмене: success-ожидание получает InvalidOperationException,
 		// outcome-ожидание получает StageOutcomeKind.Cancelled. После этого Reset bucket-ы —

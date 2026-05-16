@@ -1,6 +1,6 @@
 namespace JobOrchestrator.Abstractions;
 
-/// <summary>Результат попытки запуска инстанса (<see cref="IJobOrchestrator.TriggerAsync"/> или внутренний Auto-тик).</summary>
+/// <summary>Результат попытки запуска инстанса (<see cref="IInstanceHandle.TriggerAsync"/> или внутренний Auto-тик).</summary>
 public enum TriggerResult {
 	/// <summary>Триггер принят, итерация поставлена в очередь.</summary>
 	Started,

@@ -13,7 +13,7 @@ public enum StageOutcomeKind {
 }
 
 /// <summary>
-/// Полный исход одного цикла стадии для <see cref="IJobOrchestrator.WaitForStageOutcomeAsync"/>.
+/// Полный исход одного цикла стадии для <see cref="IInstanceHandle.WaitForOutcomeAsync"/>.
 /// </summary>
 public sealed record StageOutcome {
 	public required StageOutcomeKind Kind { get; init; }

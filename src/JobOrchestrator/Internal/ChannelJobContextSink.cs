@@ -18,6 +18,15 @@ namespace JobOrchestrator.Internal;
 /// сервис мог рассчитывать, что ключ propagate'нулся, и продолжит работать с фиктивно-зарегистрированным
 /// state.
 /// </para>
+/// <para>
+/// <b>Sync-over-async fallback под backpressure.</b> Контракт <see cref="IJobContextSink"/> синхронный
+/// (<c>void AddKey/RemoveKey</c>) — это упрощает БЛ-сервисам жизнь: <c>ctx.AddKey("k")</c> читается как
+/// noблокирующая инлайн-операция. В 99.99% случаев <see cref="ChannelWriter{T}.TryWrite"/> уходит
+/// мгновенно (bounded-channel capacity 10k, event-loop её быстро дренит). НО если очередь полностью
+/// заполнена (event-loop встал или behind), <see cref="ChannelWriter{T}.WriteAsync"/> блокирует
+/// runner-поток (sync-over-async) до освобождения слота. Это намеренный backpressure: лучше затормозить
+/// конкретный сервис, чем потерять ключ или раздуть очередь без границ.
+/// </para>
 /// </summary>
 internal sealed class ChannelJobContextSink(
 	ChannelWriter<OrchestratorEvent> writer,
@@ -30,6 +39,7 @@ internal sealed class ChannelJobContextSink(
 	private void PublishOrThrow(OrchestratorEvent evt, string operation) {
 		try {
 			if (writer.TryWrite(evt)) return;
+			// Backpressure: event-loop отстаёт; блокируем runner до освобождения слота — см. summary.
 			writer.WriteAsync(evt).AsTask().GetAwaiter().GetResult();
 		} catch (ChannelClosedException ex) {
 			throw new InvalidOperationException(

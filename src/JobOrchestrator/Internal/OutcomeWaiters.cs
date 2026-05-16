@@ -1,7 +1,7 @@
 namespace JobOrchestrator.Internal;
 
 /// <summary>
-/// Реестр ожиданий <see cref="IJobOrchestrator.WaitForStageOutcomeAsync"/>: одна группа waiter-ов на
+/// Реестр ожиданий <see cref="IInstanceHandle.WaitForOutcomeAsync"/>: одна группа waiter-ов на
 /// <see cref="InstanceIdentity"/>. В отличие от <see cref="SuccessWaiters"/>, резолвится на ЛЮБОЙ
 /// первый исход стадии — Success/Failure/Cancelled.
 /// <para>

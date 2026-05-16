@@ -7,7 +7,7 @@ internal abstract record OrchestratorEvent;
 internal sealed record TimerTickedEvent(Instance Instance) : OrchestratorEvent;
 
 /// <summary>
-/// Запрос ручного триггера снаружи (через <see cref="IJobOrchestrator.TriggerAsync"/>).
+/// Запрос ручного триггера снаружи (через <see cref="IInstanceHandle.TriggerAsync"/>).
 /// <see cref="Identity"/> уже валидирован в <c>JobOrchestratorRuntime</c> (stage существует в графе,
 /// keys соответствуют <c>ExpectedKeyNames</c>) и pre-computed encoded-key — event-loop делает прямой
 /// <c>instances.Find(Identity)</c>, без повторного encode на каждый trigger.
@@ -20,7 +20,7 @@ internal sealed record ManualTriggerRequestedEvent(
 /// <summary>
 /// Регистрация ключа в keyspace инстанса-эмитера. <paramref name="Source"/> идентифицирует bucket —
 /// комбинация <c>Source.Stage.Name + Source.DependencyKeys</c>. Для внешнего
-/// <see cref="IJobOrchestrator.RegisterKey"/> Source резолвится в keyless-инстанс стадии (это работает
+/// <see cref="IStageHandle.RegisterKey"/> Source резолвится в keyless-инстанс стадии (это работает
 /// только для стадий без <c>DependsOnInstance</c>).
 /// </summary>
 internal sealed record KeyAddedEvent(Instance Source, string Key) : OrchestratorEvent;

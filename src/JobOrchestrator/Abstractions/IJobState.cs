@@ -7,7 +7,7 @@ namespace JobOrchestrator.Abstractions;
 /// <remarks>
 /// Scope автоматически изолирован per-инстанс: каждый инстанс с уникальным <see cref="JobContext.FullyQualifiedName"/>
 /// получает свой scope в <see cref="IJobStateStore"/>. При удалении инстанса (через <see cref="JobContext.RemoveKey"/>
-/// или <see cref="IJobOrchestrator.UnregisterKey"/>) scope полностью очищается через
+/// или <see cref="IStageHandle.UnregisterKey"/>) scope полностью очищается через
 /// <see cref="IJobStateStore.RemoveScopeAsync"/>.
 /// </remarks>
 public interface IJobState {
