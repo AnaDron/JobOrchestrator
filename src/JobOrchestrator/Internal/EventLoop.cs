@@ -75,13 +75,39 @@ internal sealed class EventLoop(
 		Log.Stopped(logger, null);
 	}
 
+	/// <summary>
+	/// Дочищает оставшиеся в Channel события после остановки event-loop (по <c>stoppingToken</c> либо
+	/// <see cref="ChannelClosedException"/>). Вызывается ДО <c>FailAll</c>-waiter-ов — это единственный
+	/// шанс отдать реальный исход подписчикам, которые иначе получат «оркестратор остановлен» вместо
+	/// фактического Success/Failure.
+	/// <para>
+	/// Для completion-событий копируем ИЗ event-loop-handler-а только waiter-сигналы — без
+	/// <c>SetMetrics</c> (метрики live-in-memory, не персистятся) и без cascade на first-success
+	/// (родил бы новые <c>CreateAndStart</c>-события в Channel, который мы уже не вычитаем).
+	/// </para>
+	/// </summary>
 	private void DrainPendingRequests() {
 		var stopReason = new InvalidOperationException("Оркестратор остановлен; ManualTrigger не может быть обслужен.");
 		while (channel.Reader.TryRead(out var evt)) {
-			if (evt is ManualTriggerRequestedEvent mt) {
-				// Точная семантика: InvalidOperationException (graceful shutdown), а не TriggerResult.Faulted
-				// (что подразумевает crash). Caller увидит чёткий exception вместо безмолвного «Faulted».
-				mt.Tcs.TrySetException(stopReason);
+			switch (evt) {
+				case ManualTriggerRequestedEvent mt:
+					// Точная семантика: InvalidOperationException (graceful shutdown), а не TriggerResult.Faulted
+					// (что подразумевает crash). Caller увидит чёткий exception вместо безмолвного «Faulted».
+					mt.Tcs.TrySetException(stopReason);
+					break;
+				// StageCompleted/Failed могут оказаться в Channel если runner опубликовал событие
+				// уже после того, как ReadAllAsync завершился (stoppingToken). EndRunning снимает
+				// _running-флаг + сигналим waiter-ам реальный исход (иначе FailAll ниже резолвит их
+				// «остановлен», маскируя фактический Success/Failure).
+				case StageCompletedEvent sc:
+					sc.Instance.EndRunning();
+					successWaiters.SignalSuccess(sc.Instance.Identity);
+					outcomeWaiters.Signal(sc.Instance.Identity, StageOutcome.Success);
+					break;
+				case StageFailedEvent sf:
+					sf.Instance.EndRunning();
+					outcomeWaiters.Signal(sf.Instance.Identity, StageOutcome.FromFailure(sf.Exception));
+					break;
 			}
 		}
 	}
@@ -142,32 +168,48 @@ internal sealed class EventLoop(
 		}
 		var now = time.GetUtcNow();
 		var decision = TriggerAcceptance.TryAccept(instance, TriggerSource.Manual, now);
-		evt.Tcs.TrySetResult(decision);
+		// BeginIteration вызывается ДО TrySetResult: если лимит ConcurrencyLimit выбран,
+		// возвращает WaitingRetry; если race на Running — AlreadyRunning. Caller получает
+		// точную семантику вместо ложного Started при фактически отложенном запуске.
 		if (decision == TriggerResult.Started) {
-			BeginIteration(instance, TriggerSource.Manual, ct);
+			decision = BeginIteration(instance, TriggerSource.Manual, ct);
 		}
+		evt.Tcs.TrySetResult(decision);
 	}
 
-	private void BeginIteration(Instance instance, TriggerSource trigger, CancellationToken ct) {
+	/// <summary>
+	/// Запускает итерацию инстанса. Возвращает фактический результат запуска:
+	/// <list type="bullet">
+	/// <item><see cref="TriggerResult.Started"/> — итерация запущена на ThreadPool.</item>
+	/// <item><see cref="TriggerResult.WaitingRetry"/> — лимит <see cref="StageDescriptor.ConcurrencyLimit"/> выбран; re-schedule через 1 сек.</item>
+	/// </list>
+	/// Возвращаемое значение используется <see cref="HandleManualTrigger"/> для точного TCS-результата.
+	/// При Auto-тике (TimerTick) результат игнорируется — DueScanner повторит при следующем scan.
+	/// </summary>
+	private TriggerResult BeginIteration(Instance instance, TriggerSource trigger, CancellationToken ct) {
 		// ConcurrencyLimit: если стадия уже на лимите — re-schedule инстанс через короткое окно
 		// (1 sec), не меняя State (остаётся Idle). DueScanner подберёт его снова, когда лимит откроется.
 		if (!concurrency.TryAcquire(instance.Stage)) {
 			Log.ConcurrencyDeferred(logger, instance.FullyQualifiedName, instance.Stage.Name, null);
 			instance.SetMetrics(instance.Metrics with { NextAutoUtc = time.GetUtcNow() + TimeSpan.FromSeconds(1) });
 			scanner.Wake();
-			return;
+			return TriggerResult.WaitingRetry;
 		}
-		// CAS-перевод в Running. Идемпотентно: если кто-то уже стартанул этот инстанс (race на dup
-		// TimerTickedEvent) — TryBeginRunning вернёт false и мы отпустим semaphore.
+		// Invariant assert: caller (HandleTimerTick/HandleManualTrigger) уже проверил !IsRunning через
+		// TriggerAcceptance, а event-loop single-threaded — race до сюда невозможен. Если CAS failed —
+		// нарушен контракт; бросаем явно, а не возвращаем семантически ложный AlreadyRunning.
 		if (!instance.TryBeginRunning()) {
 			concurrency.Release(instance.Stage);
-			return;
+			throw new InvalidOperationException(
+				$"Invariant violation: инстанс {instance.FullyQualifiedName} уже Running до BeginIteration. " +
+				"Event-loop single-threaded contract нарушен.");
 		}
 		instance.SetMetrics(instance.Metrics with { NextAutoUtc = null });
 		Log.BeginIteration(logger, instance.FullyQualifiedName, trigger, null);
 		// Fire-and-forget на ThreadPool: StageRunner внутри публикует StageCompleted/Failed в Channel.
 		// StageRunner.RunIterationAsync обязан вызвать concurrency.Release + instance.EndRunning в finally.
-		_ = Task.Run(async () => await runner.RunIterationAsync(instance, trigger, ct).ConfigureAwait(false), ct);
+		_ = Task.Run(() => runner.RunIterationAsync(instance, trigger, ct), ct);
+		return TriggerResult.Started;
 	}
 
 	private void HandleKeyAdded(Instance source, string key) {

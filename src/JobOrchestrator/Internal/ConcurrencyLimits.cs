@@ -1,3 +1,5 @@
+using System.Collections.Frozen;
+
 namespace JobOrchestrator.Internal;
 
 /// <summary>
@@ -11,17 +13,24 @@ namespace JobOrchestrator.Internal;
 /// <see cref="Release"/> вызывается из <see cref="StageRunner"/> finally — гарантирует release
 /// при любом исходе итерации.
 /// </para>
+/// <para>
+/// <b>Thread-safety.</b> Хранилище — <see cref="FrozenDictionary{TKey,TValue}"/>, immutable после
+/// конструктора. <see cref="TryAcquire"/> вызывается из event-loop-thread, <see cref="Release"/> —
+/// из ThreadPool runner-finally; concurrent reads безопасны, мутаций словаря после старта нет.
+/// </para>
 /// </summary>
 internal sealed class ConcurrencyLimits {
-	private readonly Dictionary<StageDescriptor, SemaphoreSlim> _byStage = [];
+	private readonly FrozenDictionary<StageDescriptor, SemaphoreSlim> _byStage;
 
 	public ConcurrencyLimits(StageRegistry registry) {
 		ArgumentNullException.ThrowIfNull(registry);
+		var seed = new Dictionary<StageDescriptor, SemaphoreSlim>();
 		foreach (var stage in registry.AllStages) {
 			if (stage.ConcurrencyLimit is { } limit) {
-				_byStage[stage] = new SemaphoreSlim(limit, limit);
+				seed[stage] = new SemaphoreSlim(limit, limit);
 			}
 		}
+		_byStage = seed.ToFrozenDictionary();
 	}
 
 	/// <summary>

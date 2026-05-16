@@ -31,24 +31,19 @@ internal sealed class OutcomeWaiters {
 				existing = new WaiterBucket();
 				_buckets[identity] = existing;
 			}
+			if (existing.LastOutcome is { } last) {
+				tcs.TrySetResult(last);
+				return tcs.Task;
+			}
+			existing.Pending.Add(tcs);
 			bucket = existing;
 		}
 
-		bool added = false;
-		lock (bucket.Lock) {
-			if (bucket.LastOutcome is { } last) {
-				tcs.TrySetResult(last);
-			} else {
-				bucket.Pending.Add(tcs);
-				added = true;
-			}
-		}
-
-		if (added && ct.CanBeCanceled) {
+		if (ct.CanBeCanceled) {
 			var reg = ct.Register(state => {
 				var t = (TaskCompletionSource<StageOutcome>)state!;
 				if (t.TrySetCanceled()) {
-					lock (bucket.Lock) bucket.Pending.Remove(t);
+					lock (_gate) bucket.Pending.Remove(t);
 				}
 			}, tcs);
 			tcs.Task.ContinueWith(static (_, r) => ((CancellationTokenRegistration)r!).Dispose(),
@@ -60,19 +55,15 @@ internal sealed class OutcomeWaiters {
 
 	/// <summary>Сигнализирует исход (Success/Failure/Cancelled), резолвит всех pending и запоминает.</summary>
 	public void Signal(InstanceIdentity identity, StageOutcome outcome) {
-		WaiterBucket bucket;
+		TaskCompletionSource<StageOutcome>[] toResolve;
 		lock (_gate) {
 			if (!_buckets.TryGetValue(identity, out var existing)) {
 				existing = new WaiterBucket();
 				_buckets[identity] = existing;
 			}
-			bucket = existing;
-		}
-		TaskCompletionSource<StageOutcome>[] toResolve;
-		lock (bucket.Lock) {
-			bucket.LastOutcome = outcome;
-			toResolve = [.. bucket.Pending];
-			bucket.Pending.Clear();
+			existing.LastOutcome = outcome;
+			toResolve = [.. existing.Pending];
+			existing.Pending.Clear();
 		}
 		foreach (var t in toResolve) t.TrySetResult(outcome);
 	}
@@ -96,7 +87,7 @@ internal sealed class OutcomeWaiters {
 		}
 		foreach (var bucket in all) {
 			TaskCompletionSource<StageOutcome>[] toResolve;
-			lock (bucket.Lock) {
+			lock (_gate) {
 				toResolve = [.. bucket.Pending];
 				bucket.Pending.Clear();
 			}
@@ -105,7 +96,6 @@ internal sealed class OutcomeWaiters {
 	}
 
 	private sealed class WaiterBucket {
-		public object Lock { get; } = new();
 		public List<TaskCompletionSource<StageOutcome>> Pending { get; } = [];
 		public StageOutcome? LastOutcome { get; set; }
 	}

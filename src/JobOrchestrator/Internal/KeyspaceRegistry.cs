@@ -64,14 +64,13 @@ internal sealed class KeyspaceRegistry {
 	/// стадии с merged DependencyKeys из emitter.Identity.DependencyKeys + ключ.
 	/// <para>
 	/// Возвращает materialized-список (а не yield-IEnumerable): caller итерирует один раз, нет
-	/// state-machine-overhead на iterator. Внутри уже делается snapshot через копирование emitters-set.
+	/// state-machine-overhead на iterator.
 	/// </para>
 	/// </summary>
 	public IReadOnlyList<EmitterBucket> SnapshotByStage(StageDescriptor stage) {
 		if (!_byStage.TryGetValue(stage, out var emitters) || emitters.Count == 0) return [];
-		// Snapshot emitter-set, чтобы итерация была безопасна при мутациях того же event-loop-thread'а.
 		var result = new List<EmitterBucket>(emitters.Count);
-		foreach (var emitter in emitters.ToArray()) {
+		foreach (var emitter in emitters) {
 			if (_buckets.TryGetValue(emitter, out var bucket)) result.Add(bucket);
 		}
 		return result;
