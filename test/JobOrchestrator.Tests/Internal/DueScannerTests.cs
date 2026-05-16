@@ -47,7 +47,6 @@ public sealed class DueScannerTests {
 		scanner.Wake();
 		cts.Cancel();
 		try { await loop.ConfigureAwait(false); } catch (OperationCanceledException) { }
-		scanner.Dispose();
 
 		var published = new List<OrchestratorEvent>();
 		while (channel.Reader.TryRead(out var evt)) published.Add(evt);
@@ -88,7 +87,6 @@ public sealed class DueScannerTests {
 
 		cts.Cancel();
 		try { await loop.ConfigureAwait(false); } catch (OperationCanceledException) { }
-		scanner.Dispose();
 
 		channel.Reader.TryRead(out var evt).Should().BeTrue();
 		evt.Should().BeOfType<TimerTickedEvent>()

@@ -46,7 +46,6 @@ public sealed class DueScannerBacklogWarningTests {
 		scanner.WarnOnChannelBacklog(DateTimeOffset.UtcNow);
 
 		capture.Records.Should().NotContain(r => r.EventId.Id == BacklogWarningEventId);
-		scanner.Dispose();
 	}
 
 	[Fact]
@@ -71,7 +70,6 @@ public sealed class DueScannerBacklogWarningTests {
 		scanner.WarnOnChannelBacklog(fakeTime.GetUtcNow().AddSeconds(31));
 		capture.Records.Count(r => r.EventId.Id == BacklogWarningEventId)
 			.Should().Be(2, "после истечения suppression-окна — повторный warning");
-		scanner.Dispose();
 	}
 
 	private static OrchestratorEvent CreateDummyEvent() {

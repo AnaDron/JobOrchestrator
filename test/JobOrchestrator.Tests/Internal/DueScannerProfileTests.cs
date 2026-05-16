@@ -76,7 +76,6 @@ public sealed class DueScannerProfileTests(ITestOutputHelper output) {
 		if (n == 10_000) {
 			avgMicros.Should().BeLessThan(20_000, "10k no-work scan должен быть < 20мс");
 		}
-		scanner.Dispose();
 	}
 
 	[Theory]
@@ -92,7 +91,6 @@ public sealed class DueScannerProfileTests(ITestOutputHelper output) {
 			scanner.Tick(DateTimeOffset.UtcNow);
 			// Drain channel чтобы GC не давил.
 			while (channel.Reader.TryRead(out _)) { }
-			scanner.Dispose();
 		}
 		sw.Stop();
 

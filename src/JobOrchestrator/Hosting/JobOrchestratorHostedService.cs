@@ -11,7 +11,7 @@ namespace JobOrchestrator.Hosting;
 /// При штатном shutdown закрывает channel через <see cref="OrchestratorLifecycle.CloseChannel"/>.
 /// <para>
 /// <see cref="StopAsync"/> идемпотентен через <c>Interlocked _stopGate</c>: повторный вызов — no-op,
-/// чтобы не двойному dispose-у scanner-а и not double-log shutdown.
+/// чтобы не дублировать shutdown-log.
 /// </para>
 /// </summary>
 internal sealed class JobOrchestratorHostedService(
@@ -34,11 +34,10 @@ internal sealed class JobOrchestratorHostedService(
 
 	public override async Task StopAsync(CancellationToken cancellationToken) {
 		// Идемпотентный StopAsync: первый вызов проходит весь shutdown, повторные — no-op.
-		// Без этого: BackgroundService.StopHost + manual.StopAsync дали бы 2 вызова → scanner.Dispose()
-		// уже на disposed object → ObjectDisposedException в логе.
+		// Без этого: BackgroundService.StopHost + manual.StopAsync дали бы 2 вызова → дублирующая
+		// строка в логе stopped.
 		if (Interlocked.Exchange(ref _stopGate, 1) != 0) return;
 		await base.StopAsync(cancellationToken).ConfigureAwait(false);
-		scanner.Dispose();
 		logger.LogInformation("JobOrchestratorHostedService stopped, instance={InstanceId}", _instanceId);
 	}
 

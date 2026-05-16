@@ -41,7 +41,6 @@ public sealed class DueScannerPendingTickTests {
 			if (e is TimerTickedEvent tt) published.Add(tt);
 		}
 		published.Should().ContainSingle("pendingTick-CAS должен отсечь второй tick до обработки первого");
-		scanner.Dispose();
 	}
 
 	[Fact]
@@ -74,6 +73,5 @@ public sealed class DueScannerPendingTickTests {
 
 		channel.Reader.TryRead(out var evt).Should().BeTrue("после полного жизненного цикла итерации pendingTick-флаг сброшен → новый tick");
 		evt.Should().BeOfType<TimerTickedEvent>();
-		scanner.Dispose();
 	}
 }

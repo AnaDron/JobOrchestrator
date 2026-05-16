@@ -34,7 +34,7 @@ internal sealed class DueScanner(
 	Channel<OrchestratorEvent> channel,
 	TimeProvider time,
 	ILogger<DueScanner> logger
-) : IDisposable {
+) {
 	// Минимально допустимый интервал сна — защита от busy-loop при NextAutoUtc=now на куче инстансов.
 	private static readonly TimeSpan MinSleep = TimeSpan.FromMilliseconds(1);
 	// Максимальный интервал сна, если нет ни одного инстанса с NextAutoUtc — просыпаемся периодически
@@ -46,24 +46,19 @@ internal sealed class DueScanner(
 	// Anti-spam: не чаще одного warning'а в 30 секунд.
 	private static readonly TimeSpan BacklogWarningInterval = TimeSpan.FromSeconds(30);
 
-	private CancellationTokenSource _wakeCts = new();
-	private readonly object _wakeLock = new();
+	private readonly AsyncManualResetEvent _wake = new();
 	private DateTimeOffset _lastBacklogWarning = DateTimeOffset.MinValue;
-	private bool _disposed;
 
 	/// <summary>Будит scanner: следующая итерация loop'а посмотрит на актуальный <c>NextAutoUtc</c>.</summary>
-	public void Wake() {
-		if (_disposed) return;
-		CancellationTokenSource? toCancel;
-		lock (_wakeLock) {
-			toCancel = _wakeCts;
-		}
-		try { toCancel?.Cancel(); } catch (ObjectDisposedException) { /* race на Dispose */ }
-	}
+	public void Wake() => _wake.Set();
 
 	public async Task RunAsync(CancellationToken stoppingToken) {
 		Log.Started(logger, null);
 		while (!stoppingToken.IsCancellationRequested) {
+			// Reset ДО scan: если Wake() придёт во время ScanAndPublishDue, флаг взведётся и
+			// следующий WaitAsync завершится мгновенно — wake-up не теряется.
+			_wake.Reset();
+
 			var now = time.GetUtcNow();
 			WarnOnChannelBacklog(now);
 			var nextDue = ScanAndPublishDue(now);
@@ -76,17 +71,16 @@ internal sealed class DueScanner(
 				sleep = delta < MinSleep ? MinSleep : delta > MaxSleep ? MaxSleep : delta;
 			}
 
-			CancellationTokenSource freshCts;
-			lock (_wakeLock) {
-				_wakeCts.Dispose();
-				_wakeCts = freshCts = new CancellationTokenSource();
-			}
-
-			using var linked = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken, freshCts.Token);
 			try {
-				await Task.Delay(sleep, time, linked.Token).ConfigureAwait(false);
+				// WaitAsync(TimeSpan, TimeProvider, ct) даёт timeout и cancel одной операцией — runtime
+				// сам зашедулит, и нам не нужно аллокировать/dispose-ить TokenSource на каждом цикле.
+				// Источники завершения: Wake (TrySetResult) → success; sleep → TimeoutException;
+				// stoppingToken → OperationCanceledException.
+				await _wake.WaitAsync().WaitAsync(sleep, time, stoppingToken).ConfigureAwait(false);
+			} catch (TimeoutException) {
+				// Sleep истёк — нормальное продолжение loop'а.
 			} catch (OperationCanceledException) {
-				// Либо shutdown, либо Wake() — в обоих случаях просто продолжаем loop.
+				// Shutdown — внешний while проверит stoppingToken и завершится.
 			}
 		}
 		Log.Stopped(logger, null);
@@ -95,7 +89,7 @@ internal sealed class DueScanner(
 	/// <summary>
 	/// Test/profile hook: однократный синхронный scan + publish, без внешнего loop'а. Открыт как
 	/// <c>internal</c> для микробенчмарков и unit-тестов. Реальный path в production — через
-	/// <see cref="RunAsync"/> с динамической задержкой и wake-up CTS.
+	/// <see cref="RunAsync"/> с динамической задержкой и wake-up через <see cref="AsyncManualResetEvent"/>.
 	/// </summary>
 	internal DateTimeOffset? Tick(DateTimeOffset now) => ScanAndPublishDue(now);
 
@@ -149,14 +143,6 @@ internal sealed class DueScanner(
 			if (nextDue is null || next.Value < nextDue.Value) nextDue = next;
 		}
 		return nextDue;
-	}
-
-	public void Dispose() {
-		if (_disposed) return;
-		_disposed = true;
-		lock (_wakeLock) {
-			_wakeCts.Dispose();
-		}
 	}
 
 	/// <summary>EventId-диапазон 5xxx — DueScanner.</summary>
