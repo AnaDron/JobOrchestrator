@@ -1,128 +1,83 @@
+using System.Collections.Concurrent;
+
 namespace JobOrchestrator.Internal;
 
 /// <summary>
-/// Реестр ожиданий <see cref="IInstanceHandle.WaitForSuccessAsync"/>: одна группа waiter-ов на
-/// <see cref="InstanceIdentity"/>. Сигнал об успехе резолвит все накопленные TCS этой группы и
-/// мемоизирует «уже отрабатывал» в отдельном <c>_completedOnce</c> — late-register, прибежавший ПОСЛЕ
-/// сигнала, получит уже-завершённый Task без bucket-аллокации.
+/// Реестр ожиданий <see cref="IInstanceHandle.WaitForSuccessAsync"/>: один
+/// <see cref="TaskCompletionSource"/> на <see cref="InstanceIdentity"/>. Lock-free через
+/// <see cref="ConcurrentDictionary{TKey,TValue}"/>.
 /// <para>
-/// Bucket-key — <see cref="InstanceIdentity"/>: Equals/GetHashCode уже определены через
-/// <c>(Stage.Name, EncodedKey)</c>, поэтому Dictionary-lookup корректен независимо от того,
-/// какой именно instance передан (любые две Identity с одинаковыми Stage+EncodedKey считаются
-/// равными).
+/// <b>Алгоритм.</b> <see cref="Register"/> и <see cref="SignalSuccess"/> оба используют
+/// <see cref="ConcurrentDictionary{TKey,TValue}.GetOrAdd(TKey, Func{TKey,TValue})"/> — порядок не важен:
+/// </para>
+/// <list type="bullet">
+/// <item>Register пришёл первым → создал pending-TCS, дальнейший Signal сделает <c>TrySetResult</c>.</item>
+/// <item>Signal пришёл первым → создал completed-TCS (<c>TrySetResult</c> ещё на свежесозданном TCS);
+///       последующий Register увидит уже-завершённый Task через memoization slot'а.</item>
+/// </list>
+/// <para>
+/// <b>Bucket-key — <see cref="InstanceIdentity"/></b>: Equals/GetHashCode определены через
+/// <c>(Stage.Name, EncodedKey)</c>, поэтому lookup корректен независимо от того, какой именно
+/// instance передан.
 /// </para>
 /// <para>
-/// <b>Bucket lifecycle.</b> <see cref="WaiterBucket"/> существует ТОЛЬКО пока есть pending TCS.
-/// <see cref="SignalSuccess"/> для identity, на которую никто не подписан, не аллоцирует bucket —
-/// просто добавляет identity в <c>_completedOnce</c>. Это удерживает <c>_buckets</c> компактным
-/// для long-lived keyless-инстансов, которых никто не ждёт.
-/// </para>
-/// <para>
-/// Корректность под race:
+/// <b>Корректность под race:</b>
 /// </para>
 /// <list type="number">
-/// <item><see cref="SignalSuccess"/> сначала отмечает <c>_completedOnce</c>, потом резолвит bucket →
-///       <see cref="Register"/>, прилетевший ПОСЛЕ сигнала, увидит флаг и резолвится сразу.</item>
-/// <item>Флаг <c>_stopped</c> закрывает регистрацию после <see cref="FailAll"/>: новые caller-ы
-///       немедленно получают исключение.</item>
-/// <item>CancellationToken: register-cleanup снимает TCS из bucket'а при отмене — не накапливаем
-///       отменённые ссылки.</item>
+/// <item><c>TrySetResult</c> идемпотентен: повторный Signal на ту же identity — no-op.</item>
+/// <item>Cancel заявителя обслуживается через <see cref="Task.WaitAsync(CancellationToken)"/> —
+///       только конкретный caller получает <c>OperationCanceledException</c>, slot и другие waiters не страдают.</item>
+/// <item>Флаг <c>_stopped</c> закрывает регистрацию после <see cref="FailAll"/>; <b>re-check после
+///       <c>GetOrAdd</c></b> гарантирует, что новый Register, проскочивший first-check, всё равно
+///       получит exception (его TCS будет завершён через TrySetException и/или через snapshot в FailAll).</item>
 /// </list>
 /// </summary>
 internal sealed class SuccessWaiters {
-	private readonly object _gate = new();
-	private readonly Dictionary<InstanceIdentity, WaiterBucket> _buckets = new();
-	private readonly HashSet<InstanceIdentity> _completedOnce = [];
-	private bool _stopped;
+	private readonly ConcurrentDictionary<InstanceIdentity, TaskCompletionSource> _slots = new();
+	private volatile bool _stopped;
 	private Exception? _stopReason;
 
 	public Task Register(InstanceIdentity identity, CancellationToken ct) {
 		ct.ThrowIfCancellationRequested();
-		var tcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+		if (_stopped) return Task.FromException(_stopReason!);
 
-		WaiterBucket bucket;
-		lock (_gate) {
-			if (_stopped) {
-				tcs.TrySetException(_stopReason!);
-				return tcs.Task;
-			}
-			if (_completedOnce.Contains(identity)) {
-				tcs.TrySetResult();
-				return tcs.Task;
-			}
-			if (!_buckets.TryGetValue(identity, out var existing)) {
-				existing = new WaiterBucket();
-				_buckets[identity] = existing;
-			}
-			bucket = existing;
-			bucket.Pending.Add(tcs);
-		}
+		var tcs = _slots.GetOrAdd(identity, _ => new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously));
+		// Re-check после GetOrAdd: если FailAll выставил _stopped между first-check и GetOrAdd,
+		// snapshot в FailAll мог не увидеть только что добавленный slot — TrySetException здесь
+		// закрывает этот race.
+		if (_stopped) tcs.TrySetException(_stopReason!);
 
-		if (ct.CanBeCanceled) {
-			var reg = ct.Register(state => {
-				var t = (TaskCompletionSource)state!;
-				if (t.TrySetCanceled()) {
-					lock (_gate) bucket.Pending.Remove(t);
-				}
-			}, tcs);
-			tcs.Task.ContinueWith(static (_, r) => ((CancellationTokenRegistration)r!).Dispose(),
-				reg, TaskScheduler.Default);
-		}
-
-		return tcs.Task;
+		return tcs.Task.WaitAsync(ct);
 	}
 
-	/// <summary>Сигнализирует success — резолвит всех pending и мемоизирует identity для late-register'ов.</summary>
+	/// <summary>Сигнализирует success — мемоизирует через TCS-slot, резолвит любых pending waiters.</summary>
 	public void SignalSuccess(InstanceIdentity identity) {
-		TaskCompletionSource[] toResolve;
-		lock (_gate) {
-			_completedOnce.Add(identity);
-			if (!_buckets.Remove(identity, out var bucket)) return;
-			toResolve = [.. bucket.Pending];
-			bucket.Pending.Clear();
-		}
-		foreach (var t in toResolve) t.TrySetResult();
+		if (_stopped) return;
+		var tcs = _slots.GetOrAdd(identity, _ => new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously));
+		tcs.TrySetResult();
 	}
 
 	/// <summary>
-	/// Удаляет bucket и memoized-флаг, завершает все pending исключением. Вызывается, когда инстанс
-	/// удалён каскадом — дальнейшее ожидание success бессмысленно. Будущие Register-ы на ту же Identity
+	/// Удаляет slot и завершает любых pending waiters исключением. Вызывается, когда инстанс удалён
+	/// каскадом — дальнейшее ожидание success бессмысленно. Будущие Register на ту же Identity
 	/// (если её переиспользует новый инстанс) начнут с чистого состояния.
 	/// </summary>
 	public void SignalCancellation(InstanceIdentity identity, Exception ex) {
-		TaskCompletionSource[] toResolve;
-		lock (_gate) {
-			_completedOnce.Remove(identity);
-			if (!_buckets.Remove(identity, out var bucket)) return;
-			toResolve = [.. bucket.Pending];
-			bucket.Pending.Clear();
-		}
-		foreach (var t in toResolve) t.TrySetException(ex);
+		if (_slots.TryRemove(identity, out var tcs)) tcs.TrySetException(ex);
 	}
 
 	/// <summary>
 	/// Завершает все pending исключением и блокирует будущие Register-ы. Вызывается при shutdown/fault.
 	/// </summary>
 	public void FailAll(Exception ex) {
-		WaiterBucket[] all;
-		lock (_gate) {
-			_stopped = true;
-			_stopReason = ex;
-			all = [.. _buckets.Values];
-			_buckets.Clear();
-			_completedOnce.Clear();
+		_stopReason = ex;
+		_stopped = true;
+		// Snapshot+Clear: GetEnumerator() ConcurrentDictionary даёт moment-in-time snapshot. После Clear
+		// возможно, что Register успел положить новый slot между snapshot и Clear — для него работает
+		// re-check после GetOrAdd в Register.
+		foreach (var kv in _slots) {
+			kv.Value.TrySetException(ex);
 		}
-		foreach (var bucket in all) {
-			TaskCompletionSource[] toResolve;
-			lock (_gate) {
-				toResolve = [.. bucket.Pending];
-				bucket.Pending.Clear();
-			}
-			foreach (var t in toResolve) t.TrySetException(ex);
-		}
-	}
-
-	private sealed class WaiterBucket {
-		public List<TaskCompletionSource> Pending { get; } = [];
+		_slots.Clear();
 	}
 }

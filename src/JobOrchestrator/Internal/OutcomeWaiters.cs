@@ -1,101 +1,73 @@
+using System.Collections.Concurrent;
+
 namespace JobOrchestrator.Internal;
 
 /// <summary>
-/// Реестр ожиданий <see cref="IInstanceHandle.WaitForOutcomeAsync"/>: одна группа waiter-ов на
-/// <see cref="InstanceIdentity"/>. В отличие от <see cref="SuccessWaiters"/>, резолвится на ЛЮБОЙ
-/// первый исход стадии — Success/Failure/Cancelled.
+/// Реестр ожиданий <see cref="IInstanceHandle.WaitForOutcomeAsync"/>: один
+/// <see cref="TaskCompletionSource{TResult}"/> на <see cref="InstanceIdentity"/>. Lock-free через
+/// <see cref="ConcurrentDictionary{TKey,TValue}"/>.
 /// <para>
-/// Bucket создаётся только при <see cref="Register"/>; <see cref="Signal"/> без подписчиков — no-op
-/// (нет накопления исходов для «холодных» инстансов). <c>LastOutcome</c> в bucket — для late-register
-/// внутри одного цикла ожидания. <see cref="Reset"/> очищает bucket при cascade-finalize.
+/// В отличие от <see cref="SuccessWaiters"/>, резолвится на ЛЮБОЙ первый исход — Success/Failure/Cancelled.
+/// Каждый последующий <see cref="Signal"/> на ту же identity <b>заменяет</b> completed-slot на свежий
+/// completed-TCS с новым outcome — соответствует семантике «LastOutcome выигрывает» прежнего реестра.
+/// </para>
+/// <para>
+/// <b>Cold Signal — no-op.</b> Если на момент Signal нет slot'а (никто не Register-ил), Signal ничего не
+/// создаёт. Поздний Register после такого Signal'а будет ждать СЛЕДУЮЩИЙ Signal. Это намеренное
+/// поведение реестра (см. тест <c>Signal_WithoutSubscribers_DoesNotCreateBucket</c>).
 /// </para>
 /// </summary>
 internal sealed class OutcomeWaiters {
-	private readonly object _gate = new();
-	private readonly Dictionary<InstanceIdentity, WaiterBucket> _buckets = new();
-	private bool _stopped;
+	private readonly ConcurrentDictionary<InstanceIdentity, TaskCompletionSource<StageOutcome>> _slots = new();
+	private volatile bool _stopped;
 	private Exception? _stopReason;
 
 	public Task<StageOutcome> Register(InstanceIdentity identity, CancellationToken ct) {
 		ct.ThrowIfCancellationRequested();
-		var tcs = new TaskCompletionSource<StageOutcome>(TaskCreationOptions.RunContinuationsAsynchronously);
+		if (_stopped) return Task.FromException<StageOutcome>(_stopReason!);
 
-		WaiterBucket bucket;
-		lock (_gate) {
-			if (_stopped) {
-				tcs.TrySetException(_stopReason!);
-				return tcs.Task;
-			}
-			if (!_buckets.TryGetValue(identity, out var existing)) {
-				existing = new WaiterBucket();
-				_buckets[identity] = existing;
-			}
-			if (existing.LastOutcome is { } last) {
-				tcs.TrySetResult(last);
-				return tcs.Task;
-			}
-			existing.Pending.Add(tcs);
-			bucket = existing;
-		}
+		var tcs = _slots.GetOrAdd(identity, _ => new TaskCompletionSource<StageOutcome>(TaskCreationOptions.RunContinuationsAsynchronously));
+		// Re-check после GetOrAdd — закрывает race с FailAll (см. SuccessWaiters.Register).
+		if (_stopped) tcs.TrySetException(_stopReason!);
 
-		if (ct.CanBeCanceled) {
-			var reg = ct.Register(state => {
-				var t = (TaskCompletionSource<StageOutcome>)state!;
-				if (t.TrySetCanceled()) {
-					lock (_gate) bucket.Pending.Remove(t);
-				}
-			}, tcs);
-			tcs.Task.ContinueWith(static (_, r) => ((CancellationTokenRegistration)r!).Dispose(),
-				reg, TaskScheduler.Default);
-		}
-
-		return tcs.Task;
+		return tcs.Task.WaitAsync(ct);
 	}
 
 	/// <summary>
-	/// Сигнализирует исход (Success/Failure/Cancelled) подписчикам. Bucket не создаётся, если на identity
-	/// никто не ждал — без накопления <c>LastOutcome</c> для «холодных» инстансов.
+	/// Сигнализирует исход. Если slot отсутствует — no-op (cold Signal не накапливается). Если slot
+	/// pending — резолвит. Если slot уже completed — CAS-replace на свежий completed (последний выигрывает).
 	/// </summary>
 	public void Signal(InstanceIdentity identity, StageOutcome outcome) {
-		TaskCompletionSource<StageOutcome>[] toResolve;
-		lock (_gate) {
-			if (!_buckets.TryGetValue(identity, out var bucket)) return;
-			bucket.LastOutcome = outcome;
-			toResolve = [.. bucket.Pending];
-			bucket.Pending.Clear();
+		if (_stopped) return;
+		while (true) {
+			if (!_slots.TryGetValue(identity, out var existing)) return;
+			if (existing.TrySetResult(outcome)) return;
+			// existing уже completed — пробуем заменить, чтобы поздние Register видели АКТУАЛЬНЫЙ outcome.
+			var fresh = CompletedTcs(outcome);
+			if (_slots.TryUpdate(identity, fresh, existing)) return;
+			// CAS-loser: другой Signal или Reset изменил slot — retry.
 		}
-		foreach (var t in toResolve) t.TrySetResult(outcome);
 	}
 
 	/// <summary>
-	/// Очищает bucket для <paramref name="identity"/>. Используется в <c>FinalizeTerminating</c> —
+	/// Очищает slot для <paramref name="identity"/>. Используется в <c>FinalizeTerminating</c> —
 	/// новый инстанс с теми же ключами не должен видеть исход предыдущего.
 	/// </summary>
-	public void Reset(InstanceIdentity identity) {
-		lock (_gate) _buckets.Remove(identity);
-	}
+	public void Reset(InstanceIdentity identity) => _slots.TryRemove(identity, out _);
 
 	/// <summary>Завершает все pending исключением и блокирует будущие Register-ы.</summary>
 	public void FailAll(Exception ex) {
-		WaiterBucket[] all;
-		lock (_gate) {
-			_stopped = true;
-			_stopReason = ex;
-			all = [.. _buckets.Values];
-			_buckets.Clear();
+		_stopReason = ex;
+		_stopped = true;
+		foreach (var kv in _slots) {
+			kv.Value.TrySetException(ex);
 		}
-		foreach (var bucket in all) {
-			TaskCompletionSource<StageOutcome>[] toResolve;
-			lock (_gate) {
-				toResolve = [.. bucket.Pending];
-				bucket.Pending.Clear();
-			}
-			foreach (var t in toResolve) t.TrySetException(ex);
-		}
+		_slots.Clear();
 	}
 
-	private sealed class WaiterBucket {
-		public List<TaskCompletionSource<StageOutcome>> Pending { get; } = [];
-		public StageOutcome? LastOutcome { get; set; }
+	private static TaskCompletionSource<StageOutcome> CompletedTcs(StageOutcome outcome) {
+		var tcs = new TaskCompletionSource<StageOutcome>(TaskCreationOptions.RunContinuationsAsynchronously);
+		tcs.TrySetResult(outcome);
+		return tcs;
 	}
 }
