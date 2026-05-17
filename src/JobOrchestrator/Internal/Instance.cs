@@ -37,7 +37,11 @@ internal sealed class Instance {
 	public StageDescriptor Stage => Identity.Stage;
 	public IReadOnlyDictionary<string, string> DependencyKeys => Identity.DependencyKeys;
 	public string FullyQualifiedName => Identity.FullyQualifiedName;
-	public string StateScope => Identity.StateScope;
+
+	// Lazy-кеш: StateScope — application-концерн (ключ state store), не часть Identity.
+	// Вычисляется один раз при первом обращении; обе части (Stage.Name, EncodedKey) уже кешированы в Identity.
+	private string? _stateScope;
+	public string StateScope => _stateScope ??= $"{Identity.Stage.Name}:{Identity.EncodedKey}";
 
 	JobMetrics _metrics = JobMetrics.Empty;
 	int _running;       // 0 = не Running, 1 = Running
@@ -120,4 +124,19 @@ internal sealed class Instance {
 	/// </summary>
 	public void ClearRunCtsIfEquals(CancellationTokenSource expected) =>
 		Interlocked.CompareExchange(ref _runCts, null, expected);
+
+	/// <summary>Проецирует текущее состояние инстанса в публичный snapshot. Вызывается из <see cref="InstanceManager"/> и InstanceHandle.</summary>
+	public InstanceInfo ToInstanceInfo() {
+		var m = Metrics;
+		return new InstanceInfo {
+			StageName = Identity.Stage.Name,
+			DependencyKeys = Identity.DependencyKeys,
+			FullyQualifiedName = Identity.FullyQualifiedName,
+			State = State,
+			LastSuccess = m.LastSuccess,
+			LastAttempt = m.LastAttempt,
+			ConsecutiveFailures = m.ConsecutiveFailures,
+			LastError = m.LastError,
+		};
+	}
 }

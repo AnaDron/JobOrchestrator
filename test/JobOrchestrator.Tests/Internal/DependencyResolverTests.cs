@@ -16,21 +16,21 @@ public sealed class DependencyResolverTests {
 	public void AreCompatible_NoSharedKeys_True() {
 		var a = new Dictionary<string, string> { ["x"] = "1" };
 		var b = new Dictionary<string, string> { ["y"] = "2" };
-		DependencyResolver.AreCompatible(a, b).Should().BeTrue();
+		DependencyHelpers.AreCompatible(a, b).Should().BeTrue();
 	}
 
 	[Fact]
 	public void AreCompatible_SameKey_SameValue_True() {
 		var a = new Dictionary<string, string> { ["shops"] = "u1" };
 		var b = new Dictionary<string, string> { ["shops"] = "u1" };
-		DependencyResolver.AreCompatible(a, b).Should().BeTrue();
+		DependencyHelpers.AreCompatible(a, b).Should().BeTrue();
 	}
 
 	[Fact]
 	public void AreCompatible_SameKey_DifferentValues_False() {
 		var a = new Dictionary<string, string> { ["shops"] = "u1" };
 		var b = new Dictionary<string, string> { ["shops"] = "u2" };
-		DependencyResolver.AreCompatible(a, b).Should().BeFalse();
+		DependencyHelpers.AreCompatible(a, b).Should().BeFalse();
 	}
 
 	[Fact]

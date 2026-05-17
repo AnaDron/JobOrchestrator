@@ -45,9 +45,6 @@ internal sealed class InstanceIdentity : IEquatable<InstanceIdentity> {
 	/// </summary>
 	public string FullyQualifiedName { get; }
 
-	/// <summary>Scope для <see cref="IJobStateStore"/>: <c>"{StageName}:{EncodedKey}"</c>.</summary>
-	public string StateScope => $"{Stage.Name}:{EncodedKey}";
-
 	// Lazy-cached hash. 0 = не вычислен (значение 0 заменяется на 1, чтобы не путаться с sentinel).
 	// Безопасно гонкам: разные потоки могут перевычислять детерминированное значение, последняя запись
 	// атомарна для int.

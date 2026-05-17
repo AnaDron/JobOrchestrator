@@ -17,23 +17,7 @@ internal sealed record class InstanceHandle(JobOrchestratorRuntime Runtime, Inst
 
 	public InstanceLifecycleState? State => Runtime.FindInstance(Identity)?.State;
 
-	public InstanceInfo? Snapshot {
-		get {
-			var instance = Runtime.FindInstance(Identity);
-			if (instance is null) return null;
-			var m = instance.Metrics;
-			return new InstanceInfo {
-				StageName = Identity.Stage.Name,
-				DependencyKeys = Identity.DependencyKeys,
-				FullyQualifiedName = Identity.FullyQualifiedName,
-				State = instance.State,
-				LastSuccess = m.LastSuccess,
-				LastAttempt = m.LastAttempt,
-				ConsecutiveFailures = m.ConsecutiveFailures,
-				LastError = m.LastError,
-			};
-		}
-	}
+	public InstanceInfo? Snapshot => Runtime.FindInstance(Identity)?.ToInstanceInfo();
 
 	public Task<TriggerResult> TriggerAsync(CancellationToken ct = default) =>
 		Runtime.TriggerAsync(Identity, ct);

@@ -4,10 +4,6 @@ namespace JobOrchestrator.Internal;
 /// Чистые функции проверки разрешения зависимостей и поиска парных инстансов.
 /// </summary>
 internal static class DependencyResolver {
-	/// <summary>Проверка совместимости двух словарей: общие ключи должны иметь одинаковые значения.</summary>
-	public static bool AreCompatible(IReadOnlyDictionary<string, string> a, IReadOnlyDictionary<string, string> b) =>
-		!a.Any(kv => b.TryGetValue(kv.Key, out var bv) && !string.Equals(bv, kv.Value, StringComparison.Ordinal));
-
 	/// <summary>
 	/// Найти инстанс <paramref name="target"/>, чьи <c>DependencyKeys</c> являются проекцией
 	/// <paramref name="candidateKeys"/> на множество имён ключей target-стадии (то есть все компоненты

@@ -50,20 +50,7 @@ internal sealed class InstanceManager {
 	/// </summary>
 	public InstancesOverview Snapshot() {
 		var infos = new List<InstanceInfo>(_instances.Count);
-		foreach (var i in _instances.Values) {
-			// Один атомарный snapshot метрик — все 5 полей согласованы между собой.
-			var m = i.Metrics;
-			infos.Add(new InstanceInfo {
-				StageName = i.Identity.Stage.Name,
-				DependencyKeys = i.Identity.DependencyKeys,
-				FullyQualifiedName = i.Identity.FullyQualifiedName,
-				State = i.State,
-				LastSuccess = m.LastSuccess,
-				LastAttempt = m.LastAttempt,
-				ConsecutiveFailures = m.ConsecutiveFailures,
-				LastError = m.LastError,
-			});
-		}
+		foreach (var i in _instances.Values) infos.Add(i.ToInstanceInfo());
 		return new InstancesOverview(infos);
 	}
 }

@@ -268,8 +268,15 @@ internal sealed class EventLoop(
 			var seed = queue.Dequeue();
 			var affected = seed.Emitter.Stage.AffectedByKeyRemoval
 				.SelectMany(s => instances.InstancesOf(s))
-				.Where(inst => !inst.IsTerminating)
-				.Where(inst => MatchesEmitter(inst, seed.Emitter, seed.Key))
+				.Where(inst => {
+					if (inst.IsTerminating) return false;
+					var depKeys = inst.DependencyKeys;
+					if (!depKeys.TryGetValue(seed.Emitter.Stage.Name, out var v) || !string.Equals(v, seed.Key, StringComparison.Ordinal)) return false;
+					foreach (var kv in seed.Emitter.DependencyKeys) {
+						if (!depKeys.TryGetValue(kv.Key, out var dv) || !string.Equals(dv, kv.Value, StringComparison.Ordinal)) return false;
+					}
+					return true;
+				})
 				.ToList();
 			if (affected.Count == 0) continue;
 
@@ -300,20 +307,6 @@ internal sealed class EventLoop(
 				}
 			}
 		}
-	}
-
-	/// <summary>
-	/// True, если <paramref name="candidate"/>-инстанс был порождён ИМЕННО ЭТОЙ комбинацией
-	/// <paramref name="emitter"/> + <paramref name="key"/>: его <c>DependencyKeys</c> содержит
-	/// <c>{emitter.Stage.Name: key}</c> и ВСЕ <c>emitter.DependencyKeys</c> с теми же значениями.
-	/// </summary>
-	private static bool MatchesEmitter(Instance candidate, InstanceIdentity emitter, string key) {
-		var depKeys = candidate.DependencyKeys;
-		if (!depKeys.TryGetValue(emitter.Stage.Name, out var v) || !string.Equals(v, key, StringComparison.Ordinal)) return false;
-		foreach (var kv in emitter.DependencyKeys) {
-			if (!depKeys.TryGetValue(kv.Key, out var dv) || !string.Equals(dv, kv.Value, StringComparison.Ordinal)) return false;
-		}
-		return true;
 	}
 
 	private async Task HandleStageCompletedAsync(Instance instance, DateTimeOffset at, CancellationToken ct) {
@@ -457,10 +450,6 @@ internal sealed class EventLoop(
 			LoggerMessage.Define<string, TriggerSource>(LogLevel.Debug, new EventId(3006, nameof(BeginIteration)),
 				"BeginIteration {Instance} (trigger={Trigger})");
 
-		public static readonly Action<ILogger, string, string, Exception?> ConcurrencyDeferred =
-			LoggerMessage.Define<string, string>(LogLevel.Debug, new EventId(3023, nameof(ConcurrencyDeferred)),
-				"Iteration {Instance} отложена: лимит ConcurrencyLimit стадии {StageName} выбран; re-schedule через 1s");
-
 		public static readonly Action<ILogger, string, string, string, Exception?> IgnoredAddKeyFromTerminating =
 			LoggerMessage.Define<string, string, string>(LogLevel.Debug, new EventId(3007, nameof(IgnoredAddKeyFromTerminating)),
 				"Ignored AddKey({StageName},{Key}) from terminating instance {Instance}");
@@ -512,6 +501,10 @@ internal sealed class EventLoop(
 		public static readonly Action<ILogger, string, Exception?> InstanceCreated =
 			LoggerMessage.Define<string>(LogLevel.Debug, new EventId(3022, nameof(InstanceCreated)),
 				"Создан инстанс {Instance}");
+
+		public static readonly Action<ILogger, string, string, Exception?> ConcurrencyDeferred =
+			LoggerMessage.Define<string, string>(LogLevel.Debug, new EventId(3023, nameof(ConcurrencyDeferred)),
+				"Iteration {Instance} отложена: лимит ConcurrencyLimit стадии {StageName} выбран; re-schedule через 1s");
 
 		public static readonly Action<ILogger, string, string, Exception?> LateStageEventForRemovedInstance =
 			LoggerMessage.Define<string, string>(LogLevel.Information, new EventId(3024, nameof(LateStageEventForRemovedInstance)),

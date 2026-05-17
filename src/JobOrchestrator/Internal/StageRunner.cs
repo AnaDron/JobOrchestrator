@@ -67,7 +67,7 @@ internal sealed class StageRunner(
 			if (stoppingToken.IsCancellationRequested) {
 				Log.IterationCancelledShutdown(_logger, instance.FullyQualifiedName, null);
 				failure = oce;
-			} else if (watchdogCts?.IsCancellationRequested == true) {
+			} else if (watchdogCts?.IsCancellationRequested is true) {
 				Log.IterationCancelledWatchdog(_logger, instance.FullyQualifiedName, null);
 				failure = new TimeoutException(
 					$"Стадия {instance.FullyQualifiedName} превысила ExecutionTimeout ({instance.Stage.ExecutionTimeout}).",
@@ -133,12 +133,12 @@ internal sealed class StageRunner(
 			LoggerMessage.Define<string>(LogLevel.Warning, new EventId(4004, nameof(IterationCancelledWatchdog)),
 				"Итерация {Instance} превысила ExecutionTimeout (watchdog).");
 
-		public static readonly Action<ILogger, string, Exception?> IterationCancelledCascade =
-			LoggerMessage.Define<string>(LogLevel.Information, new EventId(4006, nameof(IterationCancelledCascade)),
-				"Итерация {Instance} отменена при cascade-removal.");
-
 		public static readonly Action<ILogger, string, Exception?> IterationFailed =
 			LoggerMessage.Define<string>(LogLevel.Warning, new EventId(4005, nameof(IterationFailed)),
 				"Итерация {Instance} завершилась с ошибкой.");
+
+		public static readonly Action<ILogger, string, Exception?> IterationCancelledCascade =
+			LoggerMessage.Define<string>(LogLevel.Information, new EventId(4006, nameof(IterationCancelledCascade)),
+				"Итерация {Instance} отменена при cascade-removal.");
 	}
 }
