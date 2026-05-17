@@ -5,14 +5,15 @@ public sealed class OutcomeWaitersTests {
 		new(TestStages.Make("x"));
 
 	[Fact]
-	public void Signal_WithoutSubscribers_DoesNotCreateBucket() {
+	public async Task Signal_WithoutSubscribers_MemoizesForLateRegister() {
 		var waiters = new OutcomeWaiters();
 		var identity = MakeIdentity();
 
 		waiters.Signal(identity, StageOutcome.Success);
 
 		var task = waiters.Register(identity, CancellationToken.None);
-		task.IsCompleted.Should().BeFalse();
+		task.IsCompleted.Should().BeTrue("cold Signal создаёт completed-slot — late Register резолвится сразу");
+		(await task.ConfigureAwait(false)).Kind.Should().Be(StageOutcomeKind.Success);
 	}
 
 	[Fact]

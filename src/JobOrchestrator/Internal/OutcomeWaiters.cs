@@ -9,12 +9,13 @@ namespace JobOrchestrator.Internal;
 /// <para>
 /// В отличие от <see cref="SuccessWaiters"/>, резолвится на ЛЮБОЙ первый исход — Success/Failure/Cancelled.
 /// Каждый последующий <see cref="Signal"/> на ту же identity <b>заменяет</b> completed-slot на свежий
-/// completed-TCS с новым outcome — соответствует семантике «LastOutcome выигрывает» прежнего реестра.
+/// completed-TCS с новым outcome — семантика «последний outcome выигрывает».
 /// </para>
 /// <para>
-/// <b>Cold Signal — no-op.</b> Если на момент Signal нет slot'а (никто не Register-ил), Signal ничего не
-/// создаёт. Поздний Register после такого Signal'а будет ждать СЛЕДУЮЩИЙ Signal. Это намеренное
-/// поведение реестра (см. тест <c>Signal_WithoutSubscribers_DoesNotCreateBucket</c>).
+/// <b>Cold Signal мемоизируется.</b> Если на момент <see cref="Signal"/> ещё нет slot'а, создаётся свежий
+/// completed-slot с этим outcome. Поздний <see cref="Register"/> получит его завершённую <c>Task</c>
+/// немедленно. Симметрично <see cref="SuccessWaiters"/>: реестр помнит последний исход до
+/// <see cref="Reset"/> или <see cref="FailAll"/>.
 /// </para>
 /// </summary>
 internal sealed class OutcomeWaiters {
@@ -34,18 +35,26 @@ internal sealed class OutcomeWaiters {
 	}
 
 	/// <summary>
-	/// Сигнализирует исход. Если slot отсутствует — no-op (cold Signal не накапливается). Если slot
-	/// pending — резолвит. Если slot уже completed — CAS-replace на свежий completed (последний выигрывает).
+	/// Сигнализирует исход. Если slot pending — резолвит. Если slot уже completed — CAS-replace на свежий
+	/// completed (последний outcome выигрывает). Если slot отсутствует — атомарно создаёт свежий completed
+	/// slot, чтобы поздний <see cref="Register"/> получил исход немедленно.
 	/// </summary>
 	public void Signal(InstanceIdentity identity, StageOutcome outcome) {
-		if (_stopped) return;
 		while (true) {
-			if (!_slots.TryGetValue(identity, out var existing)) return;
-			if (existing.TrySetResult(outcome)) return;
-			// existing уже completed — пробуем заменить, чтобы поздние Register видели АКТУАЛЬНЫЙ outcome.
-			var fresh = CompletedTcs(outcome);
-			if (_slots.TryUpdate(identity, fresh, existing)) return;
-			// CAS-loser: другой Signal или Reset изменил slot — retry.
+			// Re-check внутри цикла: FailAll, прилетевший между retry-итерациями, не должен дать нам
+			// зарегистрировать slot в уже-остановленном реестре (FailAll сделал _slots.Clear()).
+			if (_stopped) return;
+			if (_slots.TryGetValue(identity, out var existing)) {
+				if (existing.TrySetResult(outcome)) return;
+				// Slot уже completed — заменяем на свежий, чтобы поздние Register видели актуальный outcome.
+				var fresh = CompletedTcs(outcome);
+				if (_slots.TryUpdate(identity, fresh, existing)) return;
+				continue; // CAS-loser: другой Signal/Reset изменил slot — retry.
+			}
+			// Cold Signal — создаём completed-slot для будущих late-register'ов (мемоизация).
+			var cold = CompletedTcs(outcome);
+			if (_slots.TryAdd(identity, cold)) return;
+			// CAS-loser: между TryGetValue и TryAdd кто-то Register-нул — retry основной ветки.
 		}
 	}
 
