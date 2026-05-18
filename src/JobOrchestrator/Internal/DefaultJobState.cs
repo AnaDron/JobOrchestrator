@@ -9,6 +9,7 @@ namespace JobOrchestrator.Internal;
 internal sealed class DefaultJobState(IJobStateStore store, string scope) : IJobState {
 	private static readonly JsonSerializerOptions JsonOptions = new() {
 		PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+		PropertyNameCaseInsensitive = true,
 	};
 
 	public async Task<T?> GetAsync<T>(string key, CancellationToken ct = default) {

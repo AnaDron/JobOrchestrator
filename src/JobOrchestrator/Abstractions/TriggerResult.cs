@@ -4,15 +4,9 @@ namespace JobOrchestrator.Abstractions;
 public enum TriggerResult {
 	/// <summary>
 	/// Итерация фактически запущена: <c>TryBeginRunning</c> прошёл, runner поставлен на ThreadPool.
-	/// Для <see cref="IInstanceHandle.TriggerAsync"/> — только после успешного <c>BeginIteration</c>
-	/// (не путать с внутренним <see cref="TriggerResult.Accepted"/>).
+	/// Для <see cref="IInstanceHandle.TriggerAsync"/> — только после успешного <c>BeginIteration</c>.
 	/// </summary>
 	Started,
-	/// <summary>
-	/// Политика триггера пройдена (retry/debounce/running), но итерация ещё не начата.
-	/// Внутренний gate для event loop; <see cref="IInstanceHandle.TriggerAsync"/> это значение не возвращает.
-	/// </summary>
-	Accepted,
 	/// <summary>Инстанс уже исполняется.</summary>
 	AlreadyRunning,
 	/// <summary>Manual-триггер отвергнут окном дебаунса (от LastAttempt, вне зависимости от исхода последней попытки).</summary>
@@ -26,6 +20,11 @@ public enum TriggerResult {
 	Terminating,
 	/// <summary>Auto-триггер в окне retry-delay после неуспеха. Manual игнорирует это окно.</summary>
 	WaitingRetry,
+	/// <summary>
+	/// Запуск отложен: исчерпан <c>ConcurrencyLimit</c> стадии или глобальный лимит итераций.
+	/// Итерация не начата (<c>TryBeginRunning</c> не вызывался).
+	/// </summary>
+	ConcurrencyDeferred,
 	/// <summary>
 	/// Набор имён в <c>DependencyKeys</c> не соответствует <c>DependsOnInstance</c>-зависимостям стадии.
 	/// Передан wrong-key-set (например, переданы ключи которых стадия не требует, или отсутствуют требуемые).

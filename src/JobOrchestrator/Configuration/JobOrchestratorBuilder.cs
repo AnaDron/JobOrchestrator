@@ -184,7 +184,7 @@ public sealed class JobOrchestratorBuilder {
 
 		// Step 3: registry. Дескрипторы внутри ещё с null!-computed-полями — допустимо только
 		// потому, что наружу регистр уйдёт лишь после Step 5 (атомарность с точки зрения callers).
-		var registry = new StageRegistry(descriptors);
+		var registry = new StageRegistry(descriptors, _defaults.GlobalConcurrencyLimit);
 
 		// Step 4: pre-compute by-name мап. Initializer резолвит string-имена в descriptor-refs
 		// через registry, поэтому требует уже-построенный registry из Step 3.

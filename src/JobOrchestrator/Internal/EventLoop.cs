@@ -38,6 +38,7 @@ internal sealed class EventLoop(
 	StageRunner runner,
 	DueScanner scanner,
 	ConcurrencyLimits concurrency,
+	GlobalIterationLimiter globalLimiter,
 	SuccessWaiters successWaiters,
 	OutcomeWaiters outcomeWaiters,
 	Channel<OrchestratorEvent> channel,
@@ -45,6 +46,8 @@ internal sealed class EventLoop(
 	ILogger<EventLoop> logger,
 	TimeProvider time
 ) {
+	private int _handlerCrashCount;
+
 	public async Task RunAsync(CancellationToken stoppingToken) {
 		Log.Starting(logger, registry.AllStages.Count, null);
 		BootstrapInitialInstances();
@@ -54,8 +57,13 @@ internal sealed class EventLoop(
 			await foreach (var evt in channel.Reader.ReadAllAsync(stoppingToken).ConfigureAwait(false)) {
 				try {
 					await HandleEventAsync(evt, stoppingToken).ConfigureAwait(false);
+					_handlerCrashCount = 0;
 				} catch (Exception ex) {
+					_handlerCrashCount++;
 					Log.HandlerCrashed(logger, evt.GetType().Name, ex);
+					if (_handlerCrashCount >= 3) {
+						Log.RepeatedHandlerCrashes(logger, _handlerCrashCount, null);
+					}
 				}
 			}
 		} catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) {
@@ -154,7 +162,7 @@ internal sealed class EventLoop(
 		if (instance.IsTerminating || instance.IsRunning) return;
 		var now = time.GetUtcNow();
 		var decision = TriggerAcceptance.TryAccept(instance, TriggerSource.Auto, now);
-		if (decision == TriggerResult.Accepted) {
+		if (decision.IsAccepted) {
 			BeginIteration(instance, TriggerSource.Auto, ct);
 		}
 	}
@@ -168,48 +176,57 @@ internal sealed class EventLoop(
 		}
 		var now = time.GetUtcNow();
 		var decision = TriggerAcceptance.TryAccept(instance, TriggerSource.Manual, now);
-		// BeginIteration вызывается ДО TrySetResult: если лимит ConcurrencyLimit выбран,
-		// возвращает WaitingRetry; если race на Running — AlreadyRunning. Caller получает
-		// точную семантику вместо ложного Started при фактически отложенном запуске.
-		if (decision == TriggerResult.Accepted) {
-			decision = BeginIteration(instance, TriggerSource.Manual, ct);
+		// BeginIteration вызывается ДО TrySetResult: ConcurrencyDeferred / WaitingRetry / Started.
+		if (decision.IsAccepted) {
+			evt.Tcs.TrySetResult(BeginIteration(instance, TriggerSource.Manual, ct));
+		} else {
+			evt.Tcs.TrySetResult(decision.Rejection!.Value);
 		}
-		evt.Tcs.TrySetResult(decision);
 	}
 
 	/// <summary>
 	/// Запускает итерацию инстанса. Возвращает фактический результат запуска:
 	/// <list type="bullet">
 	/// <item><see cref="TriggerResult.Started"/> — итерация запущена на ThreadPool.</item>
-	/// <item><see cref="TriggerResult.WaitingRetry"/> — лимит <see cref="StageDescriptor.ConcurrencyLimit"/> выбран; re-schedule через 1 сек.</item>
+	/// <item><see cref="TriggerResult.ConcurrencyDeferred"/> — глобальный или per-stage лимит; re-schedule через 1 сек.</item>
 	/// </list>
 	/// Возвращаемое значение используется <see cref="HandleManualTrigger"/> для точного TCS-результата.
 	/// При Auto-тике (TimerTick) результат игнорируется — DueScanner повторит при следующем scan.
 	/// </summary>
 	private TriggerResult BeginIteration(Instance instance, TriggerSource trigger, CancellationToken ct) {
-		// ConcurrencyLimit: если стадия уже на лимите — re-schedule инстанс через короткое окно
-		// (1 sec), не меняя State (остаётся Idle). DueScanner подберёт его снова, когда лимит откроется.
-		if (!concurrency.TryAcquire(instance.Stage)) {
-			Log.ConcurrencyDeferred(logger, instance.FullyQualifiedName, instance.Stage.Name, null);
-			instance.SetMetrics(instance.Metrics with { NextAutoUtc = time.GetUtcNow() + TimeSpan.FromSeconds(1) });
-			scanner.Wake();
-			return TriggerResult.WaitingRetry;
+		if (!globalLimiter.TryAcquire()) {
+			DeferIteration(instance);
+			return TriggerResult.ConcurrencyDeferred;
 		}
-		// Invariant assert: caller (HandleTimerTick/HandleManualTrigger) уже проверил !IsRunning через
-		// TriggerAcceptance, а event-loop single-threaded — race до сюда невозможен. Если CAS failed —
-		// нарушен контракт; бросаем явно, а не возвращаем семантически ложный AlreadyRunning.
+		if (!concurrency.TryAcquire(instance.Stage)) {
+			globalLimiter.Release();
+			DeferIteration(instance);
+			return TriggerResult.ConcurrencyDeferred;
+		}
 		if (!instance.TryBeginRunning()) {
 			concurrency.Release(instance.Stage);
+			globalLimiter.Release();
 			throw new InvalidOperationException(
 				$"Invariant violation: инстанс {instance.FullyQualifiedName} уже Running до BeginIteration. " +
 				"Event-loop single-threaded contract нарушен.");
 		}
 		instance.SetMetrics(instance.Metrics with { NextAutoUtc = null });
-		Log.BeginIteration(logger, instance.FullyQualifiedName, trigger, null);
-		// Fire-and-forget на ThreadPool: StageRunner внутри публикует StageCompleted/Failed в Channel.
-		// StageRunner.RunIterationAsync обязан вызвать concurrency.Release в finally; EndRunning — в event-loop handler.
-		_ = Task.Run(() => runner.RunIterationAsync(instance, trigger, ct), ct);
-		return TriggerResult.Started;
+		try {
+			Log.BeginIteration(logger, instance.FullyQualifiedName, trigger, null);
+			_ = Task.Run(() => runner.RunIterationAsync(instance, trigger, ct), ct);
+			return TriggerResult.Started;
+		} catch {
+			instance.EndRunning();
+			concurrency.Release(instance.Stage);
+			globalLimiter.Release();
+			throw;
+		}
+	}
+
+	private void DeferIteration(Instance instance) {
+		Log.ConcurrencyDeferred(logger, instance.FullyQualifiedName, instance.Stage.Name, null);
+		instance.SetMetrics(instance.Metrics with { NextAutoUtc = time.GetUtcNow() + TimeSpan.FromSeconds(1) });
+		scanner.Wake();
 	}
 
 	private void HandleKeyAdded(Instance source, string key) {
@@ -509,5 +526,9 @@ internal sealed class EventLoop(
 		public static readonly Action<ILogger, string, string, Exception?> LateStageEventForRemovedInstance =
 			LoggerMessage.Define<string, string>(LogLevel.Information, new EventId(3024, nameof(LateStageEventForRemovedInstance)),
 				"{EventType} прибыл для уже удалённого инстанса {Instance} — игнорируем (event-loop drained late event без потери)");
+
+		public static readonly Action<ILogger, int, Exception?> RepeatedHandlerCrashes =
+			LoggerMessage.Define<int>(LogLevel.Warning, new EventId(3025, nameof(RepeatedHandlerCrashes)),
+				"Event loop: {CrashCount} подряд сбоев обработчиков событий — проверьте исключения выше");
 	}
 }

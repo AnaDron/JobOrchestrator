@@ -8,8 +8,8 @@ namespace JobOrchestrator.IntegrationTests;
 /// завершения текущего <c>ExecuteAsync</c>. Зависимый инстанс создаётся и стартует, пока эмитер
 /// ещё внутри <c>ExecuteAsync</c>.
 /// <para>
-/// Regression-coverage: если кто-то заменит синхронную <c>Channel.Writer.Publish(KeyAddedEvent)</c>
-/// на batched-after-success flush — мы потеряем reactivity → этот тест упадёт.
+/// Regression-coverage: если кто-то отложит публикацию KeyAdded до after-success flush
+/// (вместо немедленного <c>WriteAsync</c> в event loop) — мы потеряем reactivity → тест упадёт.
 /// </para>
 /// </summary>
 public sealed class ScenarioReactiveKeysTests {

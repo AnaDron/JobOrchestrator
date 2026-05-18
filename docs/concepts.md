@@ -153,7 +153,7 @@ var documents = jobs.Stage("documents").HandledBy<DocumentsService>()
 | Сущность | Кол-во | Примеры |
 |---|---|---|
 | `Stage`-объекты в `StageRegistry` | 5 | `shops`, `employees`, `productGroups`, `products`, `documents` |
-| `Instance`-объекты в `InstanceManager` | 14 | `shops[]`, `employees[]`, `productGroups[shops=u1..u3]` (×3), `products[shops=u1..u3]` (×3), `documents[shops=u1..u3]` (×3) — итого 1+1+3+3+3 = 11; до первого успеха `employees`/`products`/`documents` будут только частично созданы. После полной волны bootstrap — 11. Точно 14 будет в более широких сценариях с partial keys. |
+| `Instance`-объекты в `InstanceManager` | 11 после полной волны | `shops[]`, `employees[]`, `productGroups[shops=u1..u3]` (×3), `products[shops=u1..u3]` (×3), `documents[shops=u1..u3]` (×3) — итого 1+1+3+3+3. До первого успеха `employees`/`products`/`documents` создаются постепенно; в таблице — steady-state после bootstrap. |
 | Jobs (итерации в час, грубо) | сотни | timer каждой стадии тикает по своему интервалу |
 
 Каждый `Instance` имеет один Timer (`InstanceTimer`). При его тике публикуется `TimerTickedEvent(Instance)`. EventLoop принимает решение, запускать ли итерацию (=Job).

@@ -14,6 +14,7 @@ internal sealed class StageRunner(
 	Channel<OrchestratorEvent> channel,
 	OrchestratorLifecycle lifecycle,
 	ConcurrencyLimits concurrency,
+	GlobalIterationLimiter globalLimiter,
 	TimeProvider time,
 	ILoggerFactory loggerFactory
 ) {
@@ -42,6 +43,7 @@ internal sealed class StageRunner(
 		// EventLoop вызывает Cancel() на cascadeCts (через instance.RunCts) для cascade-removal.
 		instance.RunCts = cascadeCts;
 
+		var completionPublished = false;
 		try {
 			var service = (IJobService)scope.ServiceProvider.GetRequiredService(instance.Stage.ServiceType);
 			var jobState = new DefaultJobState(stateStore, instance.StateScope);
@@ -60,7 +62,10 @@ internal sealed class StageRunner(
 			Log.IterationStart(_logger, instance.FullyQualifiedName, trigger, null);
 			await service.ExecuteAsync(jobContext, runCts.Token).ConfigureAwait(false);
 			Log.IterationCompleted(_logger, instance.FullyQualifiedName, null);
-			channel.Writer.Publish(new StageCompletedEvent(instance, time.GetUtcNow()));
+			completionPublished = channel.Writer.Publish(new StageCompletedEvent(instance, time.GetUtcNow()));
+			if (!completionPublished) {
+				Log.CompletionNotPublished(_logger, instance.FullyQualifiedName, nameof(StageCompletedEvent), null);
+			}
 		} catch (OperationCanceledException oce) {
 			// Различаем источник cancel — даёт точный StageFailed.Exception для подписчика.
 			Exception failure;
@@ -80,10 +85,10 @@ internal sealed class StageRunner(
 				Log.IterationFailed(_logger, instance.FullyQualifiedName, oce);
 				failure = oce;
 			}
-			channel.Writer.Publish(new StageFailedEvent(instance, failure, time.GetUtcNow()));
+			completionPublished = PublishFailed(instance, failure);
 		} catch (Exception ex) {
 			Log.IterationFailed(_logger, instance.FullyQualifiedName, ex);
-			channel.Writer.Publish(new StageFailedEvent(instance, ex, time.GetUtcNow()));
+			completionPublished = PublishFailed(instance, ex);
 		} finally {
 			// CAS-clear RunCts: только если это всё ещё «наш» cts. Защищает от race с уже стартовавшим
 			// следующим runner-ом (он установил свой CTS — мы не должны его обнулять).
@@ -91,12 +96,22 @@ internal sealed class StageRunner(
 			runCts.Dispose();
 			watchdogCts?.Dispose();
 			cascadeCts.Dispose();
-			// Release ВСЕГДА: семафор был Acquire'нут в EventLoop.BeginIteration перед запуском runner-а.
 			concurrency.Release(instance.Stage);
-			// EndRunning делает ТОЛЬКО event-loop handler (StageCompleted/Failed) — это единый источник
-			// истины для _running-флага. Если вызвать здесь — будет race с уже стартовавшим следующим
-			// runner-ом (мы сбросим его свежевзведённый _running=1).
+			globalLimiter.Release();
+			// При успешной публикации EndRunning делает event-loop handler — иначе race с уже
+			// стартовавшим следующим runner-ом. Если channel закрыт — событие не дойдёт, снимаем здесь.
+			if (!completionPublished) {
+				instance.EndRunning();
+			}
 		}
+	}
+
+	private bool PublishFailed(Instance instance, Exception failure) {
+		if (channel.Writer.Publish(new StageFailedEvent(instance, failure, time.GetUtcNow()))) {
+			return true;
+		}
+		Log.CompletionNotPublished(_logger, instance.FullyQualifiedName, nameof(StageFailedEvent), null);
+		return false;
 	}
 
 	private static Dictionary<string, object> BuildLogScopeFields(Instance instance, string correlationId) {
@@ -140,5 +155,9 @@ internal sealed class StageRunner(
 		public static readonly Action<ILogger, string, Exception?> IterationCancelledCascade =
 			LoggerMessage.Define<string>(LogLevel.Information, new EventId(4006, nameof(IterationCancelledCascade)),
 				"Итерация {Instance} отменена при cascade-removal.");
+
+		public static readonly Action<ILogger, string, string, Exception?> CompletionNotPublished =
+			LoggerMessage.Define<string, string>(LogLevel.Debug, new EventId(4007, nameof(CompletionNotPublished)),
+				"Итерация {Instance}: {EventType} не опубликован (channel закрыт); Running сброшен в StageRunner.");
 	}
 }

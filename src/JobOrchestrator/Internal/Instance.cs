@@ -80,9 +80,9 @@ internal sealed class Instance {
 	public bool TryBeginRunning() => Interlocked.CompareExchange(ref _running, 1, 0) == 0;
 
 	/// <summary>
-	/// Снимает Running-флаг + pendingTick. Вызывается из <see cref="EventLoop"/> —
-	/// <c>HandleStageCompletedAsync</c>/<c>HandleStageFailedAsync</c> (finally) и
-	/// <c>DrainPendingRequests</c> при shutdown (late completion-события в Channel).
+	/// Снимает Running-флаг + pendingTick. Вызывается из <see cref="EventLoop"/>
+	/// (<c>HandleStageCompletedAsync</c>/<c>HandleStageFailedAsync</c>, <c>DrainPendingRequests</c>)
+	/// или из <see cref="StageRunner"/> в <c>finally</c>, если completion не опубликован в channel.
 	/// </summary>
 	public void EndRunning() {
 		Volatile.Write(ref _pendingTick, 0);

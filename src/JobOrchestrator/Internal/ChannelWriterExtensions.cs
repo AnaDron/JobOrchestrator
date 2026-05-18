@@ -3,32 +3,23 @@ using System.Threading.Channels;
 namespace JobOrchestrator.Internal;
 
 /// <summary>
-/// Helper-методы публикации в <see cref="ChannelWriter{T}"/> с уважением к bounded-channel backpressure.
+/// Sync-обёртка над <see cref="ChannelWriter{T}.WriteAsync"/> для call-site'ов без <c>async</c>
+/// (<see cref="DueScanner"/>, completion в <see cref="StageRunner"/>, внешний RegisterKey/UnregisterKey).
 /// <para>
-/// <b>Жёсткий контракт backpressure.</b> Fast path — <see cref="ChannelWriter{T}.TryWrite"/>; если
-/// bounded-channel (capacity 10 000) заполнен, caller-thread <b>синхронно блокируется</b> через
-/// <c>WriteAsync().GetAwaiter().GetResult()</c> до освобождения слота. Это намеренно: лучше
-/// затормозить producer (runner, DueScanner, <see cref="IJobContextSink"/>), чем потерять событие
-/// или раздуть очередь без границ. Вызывать только с потоков, где блокировка допустима
-/// (ThreadPool runner, не UI/ASP.NET request thread).
-/// </para>
-/// <para>
-/// <c>ChannelClosedException</c> поглощается после shutdown/fault — событие в закрытый channel
-/// не ставится в очередь; completion-события при shutdown дочищаются в <see cref="EventLoop.DrainPendingRequests"/>.
+/// BCL <see cref="ChannelWriter{T}.WriteAsync"/> уже делает <see cref="ChannelWriter{T}.TryWrite"/>-fast-path
+/// внутри (zero-alloc на success), поэтому отдельная async-обёртка не нужна — async-caller'ы зовут
+/// <c>writer.WriteAsync(...)</c> напрямую. <see cref="Publish{T}"/> добавляет ровно две вещи поверх
+/// BCL-семантики: (1) sync-block при переполнении вместо <c>await</c>; (2) <see cref="ChannelClosedException"/>
+/// → <c>false</c> (вместо throw), чтобы call-site'ы при shutdown молча пропускали публикацию.
 /// </para>
 /// </summary>
 internal static class ChannelWriterExtensions {
-	/// <summary>
-	/// Синхронная публикация. Fast path — <see cref="ChannelWriter{T}.TryWrite"/>; при заполненном
-	/// bounded-channel блокирует caller-thread через <c>WriteAsync().GetResult()</c> до освобождения места.
-	/// <c>ChannelClosedException</c> поглощается (orchestrator stopped/faulted — события дальше не нужны).
-	/// </summary>
-	public static void Publish<T>(this ChannelWriter<T> writer, T item) {
+	public static bool Publish<T>(this ChannelWriter<T> writer, T item) {
 		try {
-			if (writer.TryWrite(item)) return;
 			writer.WriteAsync(item).AsTask().GetAwaiter().GetResult();
+			return true;
 		} catch (ChannelClosedException) {
-			// Orchestrator shutdown/faulted — событие больше не нужно.
+			return false;
 		}
 	}
 }

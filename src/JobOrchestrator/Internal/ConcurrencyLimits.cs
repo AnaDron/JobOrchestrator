@@ -9,7 +9,7 @@ namespace JobOrchestrator.Internal;
 /// <para>
 /// Семантика: <see cref="TryAcquire"/> синхронно (event-loop-thread) пытается захватить токен;
 /// если лимит выбран — возвращает <c>false</c>, и event loop пропускает iteration (DueScanner / Manual trigger
-/// получают <see cref="TriggerResult.WaitingRetry"/> для Auto или эквивалент для Manual).
+/// получают <see cref="TriggerResult.ConcurrencyDeferred"/>).
 /// <see cref="Release"/> вызывается из <see cref="StageRunner"/> finally — гарантирует release
 /// при любом исходе итерации.
 /// </para>

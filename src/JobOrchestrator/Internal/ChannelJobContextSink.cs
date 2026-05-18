@@ -19,9 +19,9 @@ namespace JobOrchestrator.Internal;
 /// </para>
 /// <para>
 /// <b>Fast path / slow path.</b> 99.99% вызовов уходят через <see cref="ChannelWriter{T}.TryWrite"/>
-/// и возвращают синхронно завершённый <see cref="ValueTask"/> без аллокации. При полном bounded-channel
-/// caller получает honest async-ожидание через <see cref="ChannelWriter{T}.WriteAsync"/> — естественный
-/// backpressure без блокировки runner-потока.
+/// и возвращают синхронно завершённый <see cref="ValueTask"/> без state-machine-аллокации.
+/// При полном bounded-channel slow-path выделен в отдельный <c>async</c>-метод — fast-path остаётся
+/// без async-builder'а на горячем пути <see cref="JobContext.AddKey"/>/<see cref="JobContext.RemoveKey"/>.
 /// </para>
 /// </summary>
 internal sealed class ChannelJobContextSink(
@@ -29,12 +29,12 @@ internal sealed class ChannelJobContextSink(
 	Instance source
 ) : IJobContextSink {
 	public ValueTask AddKeyAsync(string key, CancellationToken ct = default) =>
-		PublishAsync(new KeyAddedEvent(source, key), "AddKey", key, ct);
+		Publish(new KeyAddedEvent(source, key), "AddKey", key, ct);
 
 	public ValueTask RemoveKeyAsync(string key, CancellationToken ct = default) =>
-		PublishAsync(new KeyRemovedEvent(source, key), "RemoveKey", key, ct);
+		Publish(new KeyRemovedEvent(source, key), "RemoveKey", key, ct);
 
-	private ValueTask PublishAsync(OrchestratorEvent evt, string operation, string key, CancellationToken ct) {
+	private ValueTask Publish(OrchestratorEvent evt, string operation, string key, CancellationToken ct) {
 		try {
 			if (writer.TryWrite(evt)) return ValueTask.CompletedTask;
 		} catch (ChannelClosedException ex) {

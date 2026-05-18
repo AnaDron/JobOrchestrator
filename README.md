@@ -93,6 +93,13 @@ SDK оперирует тремя сущностями: **Stage** (immutable д�
 
 Описание устройства SDK (single-threaded event loop, dynamic-delay DueScanner, каскадное удаление с deferred cleanup, backtracking-merge при создании инстансов, lock-free `GetOverview()` через atomic-fields, lifecycle/IsFaulted, структурное логирование) — в [docs/architecture.md](docs/architecture.md).
 
+### Эксплуатация (Aura)
+
+- **Рестарт процесса** — граф стадий, keyspace и метрики инстансов в RAM; после рестарта нужен bootstrap (`RegisterKey`, первые sync-итерации). Персистентность — через `IJobState` / `IJobStateStore`.
+- **Backpressure** — очередь bounded (10 000), единый `ChannelWriterExtensions` (fast `TryWrite` / slow `WriteAsync`). Внутри `IJobService` и `TriggerAsync` — `PublishAsync` (async). Sync-`Publish` — completion runner-а, DueScanner, `RegisterKey`/`UnregisterKey`; не с HTTP-request thread.
+- **Глобальный лимит** — `jobs.Defaults.GlobalConcurrencyLimit = N` ограничивает суммарный параллелизм итераций поверх `WithConcurrencyLimit` per-stage.
+- **`WaitForOutcomeAsync`** — мемоизирует последний исход (Success/Failure/Cancelled): если итерация уже завершилась, Task резолвится сразу с этим outcome. Чтобы дождаться конкретного запуска — сначала `WaitForOutcomeAsync()`, затем `TriggerAsync()` (см. XML на `IInstanceHandle`).
+
 ## Сборка и тесты
 
 ```

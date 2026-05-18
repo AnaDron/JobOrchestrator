@@ -17,4 +17,10 @@ public sealed class JobDefaults {
 
 	/// <summary>Watchdog-таймаут одной итерации. <c>null</c> — без таймаута.</summary>
 	public TimeSpan? ExecutionTimeout { get; set; }
+
+	/// <summary>
+	/// Максимум одновременных итераций по всем стадиям. <c>null</c> — без глобального лимита
+	/// (остаётся только per-stage <c>WithConcurrencyLimit</c>).
+	/// </summary>
+	public int? GlobalConcurrencyLimit { get; set; }
 }

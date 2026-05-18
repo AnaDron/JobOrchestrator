@@ -13,32 +13,30 @@ namespace JobOrchestrator.Internal;
 /// </list>
 /// </summary>
 internal static class TriggerAcceptance {
-	public static TriggerResult TryAccept(
+	public static TriggerAcceptanceDecision TryAccept(
 		Instance instance,
 		TriggerSource source,
 		DateTimeOffset now
 	) {
 		var state = instance.State;
-		if (state == InstanceLifecycleState.Terminating) return TriggerResult.Terminating;
-		if (state == InstanceLifecycleState.Running) return TriggerResult.AlreadyRunning;
+		if (state == InstanceLifecycleState.Terminating) return TriggerAcceptanceDecision.Reject(TriggerResult.Terminating);
+		if (state == InstanceLifecycleState.Running) return TriggerAcceptanceDecision.Reject(TriggerResult.AlreadyRunning);
 
-		// Один атомарный snapshot метрик — все поля согласованы и читаются один раз.
 		var m = instance.Metrics;
 
 		if (source == TriggerSource.Auto) {
 			if (m.ConsecutiveFailures > 0 && m.LastAttempt.HasValue) {
 				var retryDelay = instance.Stage.RetryPolicy.ComputeDelay(m.ConsecutiveFailures);
 				if (now - m.LastAttempt.Value < retryDelay) {
-					return TriggerResult.WaitingRetry;
+					return TriggerAcceptanceDecision.Reject(TriggerResult.WaitingRetry);
 				}
 			}
-			return TriggerResult.Accepted;
+			return TriggerAcceptanceDecision.Accept;
 		}
 
-		// source == Manual
 		if (m.LastAttempt.HasValue && (now - m.LastAttempt.Value) < instance.Stage.Debounce) {
-			return TriggerResult.Debounced;
+			return TriggerAcceptanceDecision.Reject(TriggerResult.Debounced);
 		}
-		return TriggerResult.Accepted;
+		return TriggerAcceptanceDecision.Accept;
 	}
 }

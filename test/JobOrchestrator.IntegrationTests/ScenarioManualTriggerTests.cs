@@ -114,7 +114,7 @@ public sealed class ScenarioManualTriggerTests {
 	}
 
 	[Fact]
-	public async Task TriggerAsync_WhenConcurrencyLimitExhausted_ReturnsWaitingRetryNotStarted() {
+	public async Task TriggerAsync_WhenConcurrencyLimitExhausted_ReturnsConcurrencyDeferredNotStarted() {
 		var shopsFake = new FakeServiceA();
 		shopsFake.ExecuteHandler = async (ctx, ct) => {
 			for (int i = 0; i < 3; i++) await ctx.AddKeyAsync($"shop-{i}", ct);
@@ -154,7 +154,7 @@ public sealed class ScenarioManualTriggerTests {
 
 			var orchestrator = host.Services.GetRequiredService<IJobOrchestrator>();
 			var result = await orchestrator["productGroups"][("shops", idleShop)].TriggerAsync().ConfigureAwait(false);
-			result.Should().Be(TriggerResult.WaitingRetry,
+			result.Should().Be(TriggerResult.ConcurrencyDeferred,
 				"Manual trigger при занятом ConcurrencyLimit не должен возвращать Started до TryBeginRunning");
 		} finally {
 			await host.StopAsync().ConfigureAwait(false);

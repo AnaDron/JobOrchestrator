@@ -15,8 +15,12 @@ namespace JobOrchestrator.Internal;
 internal sealed class StageRegistry {
 	private readonly Dictionary<string, StageDescriptor> _byName;
 
-	public StageRegistry(IReadOnlyList<StageDescriptor> stages) {
+	/// <summary>Глобальный лимит параллельных итераций из <see cref="Configuration.JobDefaults.GlobalConcurrencyLimit"/>.</summary>
+	public int? GlobalConcurrencyLimit { get; }
+
+	public StageRegistry(IReadOnlyList<StageDescriptor> stages, int? globalConcurrencyLimit = null) {
 		ArgumentNullException.ThrowIfNull(stages);
+		GlobalConcurrencyLimit = globalConcurrencyLimit;
 		_byName = new Dictionary<string, StageDescriptor>(stages.Count, StringComparer.Ordinal);
 		foreach (var s in stages) {
 			if (!_byName.TryAdd(s.Name, s)) {

@@ -124,6 +124,7 @@ public static class ServiceCollectionExtensions {
 		services.AddSingleton<InstanceManager>();
 		services.AddSingleton<KeyspaceRegistry>();
 		services.AddSingleton<ConcurrencyLimits>();
+		services.AddSingleton<GlobalIterationLimiter>();
 		services.AddSingleton<SuccessWaiters>();
 		services.AddSingleton<OutcomeWaiters>();
 		services.AddSingleton<InstanceCreator>();
@@ -181,6 +182,7 @@ public static class ServiceCollectionExtensions {
 
 		// Keyed-сервисы с keyed-зависимостями — авто-пропагация ключа через wrapper.
 		services.AddKeyedSingletonWithPropagation<ConcurrencyLimits>(tenantKey);
+		services.AddKeyedSingletonWithPropagation<GlobalIterationLimiter>(tenantKey);
 		services.AddKeyedSingletonWithPropagation<OrchestratorLifecycle>(tenantKey);
 		services.AddKeyedSingletonWithPropagation<InstanceCreator>(tenantKey);
 		services.AddKeyedSingletonWithPropagation<StageRunner>(tenantKey);

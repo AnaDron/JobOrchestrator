@@ -28,10 +28,10 @@ Job Orchestrator — SDK периодических задач с зависим
    IJobOrchestrator.GetOverview() ──► (lock-free) InstanceManager.Snapshot()  — НЕ идёт в event loop
 ```
 
-Все публикации идут через `ChannelWriter<T>.Publish` (см. `ChannelWriterExtensions`):
+Все публикации идут через `ChannelWriterExtensions` (`PublishAsync` / sync-`Publish`):
 
-- **Backpressure (жёсткий контракт):** fast-path `TryWrite`; при заполнении bounded-channel (10 000) caller-thread **синхронно блокируется** через `WriteAsync().GetAwaiter().GetResult()` до слота. Это касается runner-а (`StageCompleted`/`Failed`), `ctx.AddKeyAsync`/`RemoveKeyAsync` и внешних API. Блокировка допустима только на ThreadPool-потоках итераций, не на UI/HTTP request thread.
-- **Shutdown:** `ChannelClosedException` при `Publish` поглощается; completion-события, уже лежащие в channel, дочищаются в `EventLoop.DrainPendingRequests` (`EndRunning` + сигнал waiters).
+- **Backpressure:** bounded-channel (10 000). Общий fast-path `TryWrite`; slow-path — `WriteAsync`. `PublishAsync` — `ctx.AddKeyAsync`/`RemoveKeyAsync`, `TriggerAsync` (async ожидание слота). Sync-`Publish` — completion runner-а, `TimerTicked`, `RegisterKey`/`UnregisterKey` (блокирует caller); не с UI/HTTP request thread.
+- **Shutdown:** `ChannelClosedException` при `Publish` поглощается; `StageRunner` снимает `Running`, если completion не опубликован; события, уже лежащие в channel, дочищаются в `EventLoop.DrainPendingRequests` (`EndRunning` + сигнал waiters).
 
 ## DueScanner
 
@@ -105,19 +105,20 @@ TryAccept(instance, source, now):
     if source == Auto:
         if ConsecutiveFailures > 0 && now - LastAttempt < RetryDelay(ConsecutiveFailures):
             return WaitingRetry
-        return Accepted
+        policy OK → BeginIteration
 
     # source == Manual: retry-delay НЕ блокирует, debounce уважается
     if LastAttempt != null && now - LastAttempt < Debounce:
         return Debounced
-    return Accepted
+    policy OK → BeginIteration
 
-BeginIteration (после Accepted):
-    if ConcurrencyLimit exhausted: return WaitingRetry
+BeginIteration (после принятия политики):
+    if GlobalConcurrencyLimit or ConcurrencyLimit exhausted: return ConcurrencyDeferred
     TryBeginRunning → Started (runner на ThreadPool)
 ```
 
-- `Accepted` — политика пройдена; `Started` — только после успешного `TryBeginRunning` (в TCS `TriggerAsync` попадает результат `BeginIteration`).
+- `Started` — только после успешного `TryBeginRunning` (в TCS `TriggerAsync` попадает результат `BeginIteration`).
+- `ConcurrencyDeferred` — лимит параллелизма (глобальный или per-stage), не путать с `WaitingRetry` (retry-delay после неуспеха).
 - `Retry-delay` — защита downstream от Auto-spam после неуспеха. Manual игнорирует — пользователь явно просит.
 - `Debounce` — анти-spam-click для Manual. От `LastAttempt`, не от `LastSuccess`, поэтому работает и после успеха, и после неуспеха.
 - `Auto` debounce не проверяет — scheduled tick через interval сам по себе соблюдает темп.
@@ -229,11 +230,11 @@ Equality по `(StageName, EncodedKey)`. Используется как primary
 - `CancellationRank(name)` — глубина «вниз по графу» (лист = 0, корень = max), используется для сортировки cascade-removal без повторного topo-sort-а каждый раз.
 - `ExpectedKeyNames(name)` — транзитивно унаследованные имена ключей через цепочку `DependsOn`/`DependsOnInstance`, используется в `ValidateKeys` (TriggerAsync).
 
-## ConcurrencyLimits
+## ConcurrencyLimits и GlobalIterationLimiter
 
-Per-stage `SemaphoreSlim` для ограничения параллельных итераций одной стадии. Acquire — в `EventLoop.BeginIteration` ДО запуска runner-а; если лимит выбран — re-schedule инстанс через 1 sec, DueScanner подберёт его снова. Release — в `StageRunner.RunIterationAsync` finally — гарантирует release при любом исходе.
+**Per-stage** (`ConcurrencyLimits`): `SemaphoreSlim` на стадию с `WithConcurrencyLimit(int)`. **Глобальный** (`GlobalIterationLimiter`): `jobs.Defaults.GlobalConcurrencyLimit = N` — суммарный cap итераций по всем стадиям.
 
-Стадии без лимита не имеют семафора (TryAcquire — no-op true). Конфигурируется через `IStageBuilder.WithConcurrencyLimit(int)`.
+Acquire в `EventLoop.BeginIteration` (сначала global, затем per-stage) до `TryBeginRunning`. При исчерпании — `TriggerResult.ConcurrencyDeferred`, re-schedule через 1 sec. Release — в `StageRunner.RunIterationAsync` finally.
 
 ## Out of scope
 
