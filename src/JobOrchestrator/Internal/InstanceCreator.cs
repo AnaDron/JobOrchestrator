@@ -116,10 +116,11 @@ internal sealed class InstanceCreator(
 			}
 			return result;
 		}
-		return instances.InstancesOf(dep.Target)
-			.Where(inst => inst.Metrics.LastSuccess.HasValue)
-			.Select(inst => inst.DependencyKeys)
-			.ToList();
+		var result = new List<IReadOnlyDictionary<string, string>>();
+		foreach (var inst in instances.InstancesOf(dep.Target)) {
+			if (inst.Metrics.LastSuccess.HasValue) result.Add(inst.DependencyKeys);
+		}
+		return result;
 	}
 
 	private Instance MaterializeInstance(InstanceIdentity identity) {

@@ -22,5 +22,8 @@ internal sealed class GlobalIterationLimiter : IDisposable {
 		if (_sem is not null) _sem.Release();
 	}
 
-	public void Dispose() => _sem?.Dispose();
+	public void Dispose() {
+		_sem?.Dispose();
+		GC.SuppressFinalize(this);
+	}
 }

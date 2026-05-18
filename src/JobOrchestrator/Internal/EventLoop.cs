@@ -311,18 +311,22 @@ internal sealed class EventLoop(
 
 		while (queue.Count > 0) {
 			var seed = queue.Dequeue();
-			var affected = seed.Emitter.Stage.AffectedByKeyRemoval
-				.SelectMany(s => instances.InstancesOf(s))
-				.Where(inst => {
-					if (inst.IsTerminating) return false;
+			var affected = new List<Instance>();
+			foreach (var s in seed.Emitter.Stage.AffectedByKeyRemoval) {
+				foreach (var inst in instances.InstancesOf(s)) {
+					if (inst.IsTerminating) continue;
 					var depKeys = inst.DependencyKeys;
-					if (!depKeys.TryGetValue(seed.Emitter.Stage.Name, out var v) || !string.Equals(v, seed.Key, StringComparison.Ordinal)) return false;
+					if (!depKeys.TryGetValue(seed.Emitter.Stage.Name, out var v) || !string.Equals(v, seed.Key, StringComparison.Ordinal)) continue;
+					bool emitterKeysMatch = true;
 					foreach (var kv in seed.Emitter.DependencyKeys) {
-						if (!depKeys.TryGetValue(kv.Key, out var dv) || !string.Equals(dv, kv.Value, StringComparison.Ordinal)) return false;
+						if (!depKeys.TryGetValue(kv.Key, out var dv) || !string.Equals(dv, kv.Value, StringComparison.Ordinal)) {
+							emitterKeysMatch = false;
+							break;
+						}
 					}
-					return true;
-				})
-				.ToList();
+					if (emitterKeysMatch) affected.Add(inst);
+				}
+			}
 			if (affected.Count == 0) continue;
 
 			// Сортировка по pre-computed cancellation rank (листья — меньший ранг — отменяются первыми).

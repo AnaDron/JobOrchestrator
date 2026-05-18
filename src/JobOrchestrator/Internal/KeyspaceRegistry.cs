@@ -76,9 +76,4 @@ internal sealed class KeyspaceRegistry {
 		return result;
 	}
 
-	/// <summary>
-	/// Bucket эмитера: его <see cref="InstanceIdentity"/> (через который доступны Stage и DependencyKeys
-	/// для cross-merge при создании зависимых инстансов) + Keys, которые он опубликовал.
-	/// </summary>
-	internal sealed record EmitterBucket(InstanceIdentity Emitter, HashSet<string> Keys);
 }

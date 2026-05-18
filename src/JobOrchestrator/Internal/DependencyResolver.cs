@@ -10,10 +10,19 @@ internal static class DependencyResolver {
 	/// target присутствуют в candidate с теми же значениями). Для безключевой target — единственный
 	/// инстанс с пустыми DependencyKeys.
 	/// </summary>
-	public static Instance? FindPairedInstance(InstanceManager instances, StageDescriptor target, IReadOnlyDictionary<string, string> candidateKeys) =>
-		instances.InstancesOf(target)
-			.FirstOrDefault(inst => inst.DependencyKeys.All(kv =>
-				candidateKeys.TryGetValue(kv.Key, out var v) && string.Equals(v, kv.Value, StringComparison.Ordinal)));
+	public static Instance? FindPairedInstance(InstanceManager instances, StageDescriptor target, IReadOnlyDictionary<string, string> candidateKeys) {
+		foreach (var inst in instances.InstancesOf(target)) {
+			bool match = true;
+			foreach (var kv in inst.DependencyKeys) {
+				if (!candidateKeys.TryGetValue(kv.Key, out var v) || !string.Equals(v, kv.Value, StringComparison.Ordinal)) {
+					match = false;
+					break;
+				}
+			}
+			if (match) return inst;
+		}
+		return null;
+	}
 
 	/// <summary>
 	/// Проверить, разрешены ли все зависимости стадии <paramref name="stage"/> для кандидата с ключами <paramref name="keys"/>.
@@ -39,15 +48,19 @@ internal static class DependencyResolver {
 		IReadOnlyDictionary<string, string> keys,
 		InstanceManager instances,
 		KeyspaceRegistry keyspace
-	) => stage.Dependencies.All(dep => {
-		var paired = FindPairedInstance(instances, dep.Target, keys);
-		if (paired is null) return false;
-		if (dep.Mode == DependencyMode.Whole) {
-			// DependsOn: child наследует ключи только успешного родителя.
-			return paired.Metrics.LastSuccess is not null;
+	) {
+		foreach (var dep in stage.Dependencies) {
+			var paired = FindPairedInstance(instances, dep.Target, keys);
+			if (paired is null) return false;
+			if (dep.Mode == DependencyMode.Whole) {
+				// DependsOn: child наследует ключи только успешного родителя.
+				if (paired.Metrics.LastSuccess is null) return false;
+			} else {
+				// DependsOnInstance: reactive — LastSuccess эмитера НЕ требуется.
+				// Per-emitter keyspace-check защищает от race «KeyAdded → KeyRemoved».
+				if (!keys.TryGetValue(dep.Target.Name, out var k) || !keyspace.Contains(paired.Identity, k)) return false;
+			}
 		}
-		// DependsOnInstance: reactive — LastSuccess эмитера НЕ требуется.
-		// Per-emitter keyspace-check защищает от race «KeyAdded → KeyRemoved».
-		return keys.TryGetValue(dep.Target.Name, out var k) && keyspace.Contains(paired.Identity, k);
-	});
+		return true;
+	}
 }

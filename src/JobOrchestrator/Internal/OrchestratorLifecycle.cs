@@ -50,5 +50,6 @@ internal sealed class OrchestratorLifecycle(Channel<OrchestratorEvent> channel) 
 		if (_disposed) return;
 		_disposed = true;
 		_workersCts.Dispose();
+		GC.SuppressFinalize(this);
 	}
 }
