@@ -13,13 +13,15 @@ namespace JobOrchestrator.InMemory;
 /// </para>
 /// </summary>
 internal sealed class InMemoryJobStateStore : IJobStateStore {
+	private static readonly Task<string?> MissResult = Task.FromResult<string?>(null);
+
 	private readonly ConcurrentDictionary<string, ConcurrentDictionary<string, string>> _scopes = new(StringComparer.Ordinal);
 
 	public Task<string?> GetAsync(string scope, string key, CancellationToken ct) {
 		if (_scopes.TryGetValue(scope, out var dict) && dict.TryGetValue(key, out var value)) {
 			return Task.FromResult<string?>(value);
 		}
-		return Task.FromResult<string?>(null);
+		return MissResult;
 	}
 
 	public Task SetAsync(string scope, string key, string value, CancellationToken ct) {

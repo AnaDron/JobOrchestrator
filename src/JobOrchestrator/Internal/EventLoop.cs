@@ -211,18 +211,21 @@ internal sealed class EventLoop(
 	/// При Auto-тике (TimerTick) результат игнорируется — DueScanner повторит при следующем scan.
 	/// </summary>
 	private TriggerResult BeginIteration(Instance instance, TriggerSource trigger, CancellationToken ct) {
-		if (!globalLimiter.TryAcquire()) {
+		// Сначала per-stage — он чаще узкий (типично 1-2). Только после успеха per-stage захватываем
+		// глобальный, чтобы не делать холостые global-acquire/release-циклы под нагрузкой
+		// «много стадий с ConcurrencyLimit=1 + длинные runner-ы».
+		if (!concurrency.TryAcquire(instance.Stage)) {
 			DeferIteration(instance);
 			return TriggerResult.ConcurrencyDeferred;
 		}
-		if (!concurrency.TryAcquire(instance.Stage)) {
-			globalLimiter.Release();
+		if (!globalLimiter.TryAcquire()) {
+			concurrency.Release(instance.Stage);
 			DeferIteration(instance);
 			return TriggerResult.ConcurrencyDeferred;
 		}
 		if (!instance.TryBeginRunning()) {
-			concurrency.Release(instance.Stage);
 			globalLimiter.Release();
+			concurrency.Release(instance.Stage);
 			throw new InvalidOperationException(
 				$"Invariant violation: инстанс {instance.FullyQualifiedName} уже Running до BeginIteration. " +
 				"Event-loop single-threaded contract нарушен.");
@@ -234,8 +237,8 @@ internal sealed class EventLoop(
 			return TriggerResult.Started;
 		} catch {
 			instance.EndRunning();
-			concurrency.Release(instance.Stage);
 			globalLimiter.Release();
+			concurrency.Release(instance.Stage);
 			throw;
 		}
 	}

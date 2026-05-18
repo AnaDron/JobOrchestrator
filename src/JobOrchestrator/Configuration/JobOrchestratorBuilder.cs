@@ -18,10 +18,22 @@ public sealed class JobOrchestratorBuilder {
 	/// На lazy-pass (DI-singleton builder, переиспользуемый <see cref="Hosting.IJobsConfigure.Apply"/>)
 	/// — <c>null</c>: ServiceCollection уже заморожен, регистрации невозможны.
 	/// <para>
-	/// Backend-extension'ы (<c>jobs.UseInMemoryStateStore()</c>, <c>jobs.UseRedisStateStore(...)</c> и т.п.)
-	/// читают <see cref="Services"/> и <see cref="TenantKey"/>, чтобы сразу зарегистрировать соответствующий
-	/// <see cref="IJobStateStore"/> в нужной форме — non-keyed singleton либо keyed под текущим tenant'ом.
-	/// На lazy-pass extension должен no-op'нуться через проверку <c>Services is null</c>.
+	/// <b>Контракт backend-extension'ов</b> (<c>jobs.UseInMemoryStateStore()</c>,
+	/// <c>jobs.UseRedisStateStore(...)</c> и т.п.):
+	/// </para>
+	/// <list type="number">
+	/// <item><b>Обязательный no-op guard.</b> Первым делом extension <b>обязан</b> проверить
+	/// <c>if (builder.Services is null) return builder;</c>. На lazy-pass регистрации уже выполнены
+	/// на probe-pass — повторно их применять не нужно (и невозможно).</item>
+	/// <item><b>Чтение TenantKey</b> для выбора между non-keyed и keyed-singleton-регистрацией:
+	/// <c>TenantKey is null</c> → <c>Services.TryAddSingleton</c>, иначе <c>Services.TryAddKeyedSingleton(TenantKey)</c>.</item>
+	/// <item><b>Идемпотентность через TryAdd*.</b> Повторный вызов того же extension'а под одним и
+	/// тем же tenant'ом — no-op (first-wins). См. документацию SDK про backend-resolve-семантику.</item>
+	/// </list>
+	/// <para>
+	/// Прямые мутации <see cref="Services"/> вне backend-extension-pattern'а (например,
+	/// <c>builder.Services.Clear()</c> или подмена SDK-инфраструктуры) — undefined behavior. SDK не
+	/// валидирует целостность ServiceCollection после возврата из configure-action.
 	/// </para>
 	/// </summary>
 	public IServiceCollection? Services { get; }

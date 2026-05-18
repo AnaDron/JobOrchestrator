@@ -40,7 +40,7 @@ internal sealed class JobOrchestratorRuntime : IJobOrchestrator {
 		_outcomeWaiters = outcomeWaiters;
 		_logger = logger;
 
-		_stageHandles = registry.AllStages.ToDictionary(x => x.Name, x => new StageHandle(this, x));
+		_stageHandles = registry.AllStages.ToDictionary(x => x.Name, x => new StageHandle(this, x), StringComparer.Ordinal);
 
 		// Pre-compute набор известных доменов — извлекаем префикс до DomainSeparator из имени каждой
 		// стадии. Стадия без префикса (например, "global") — в _knownDomains не попадает, что корректно:

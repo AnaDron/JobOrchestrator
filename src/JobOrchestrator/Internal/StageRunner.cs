@@ -41,6 +41,9 @@ internal sealed class StageRunner(
 			? CancellationTokenSource.CreateLinkedTokenSource(stoppingToken, lifecycle.WorkersCancellationToken, watchdogCts.Token, cascadeCts.Token)
 			: CancellationTokenSource.CreateLinkedTokenSource(stoppingToken, lifecycle.WorkersCancellationToken, cascadeCts.Token);
 		// EventLoop вызывает Cancel() на cascadeCts (через instance.RunCts) для cascade-removal.
+		// Не CAS: event-loop single-threaded, между EndRunning предыдущего runner-а и стартом этого
+		// нет concurrent-writer'а к RunCts. Race в обратную сторону (cascade vs наш ClearRunCtsIfEquals
+		// в finally) уже защищён CAS-clear'ом.
 		instance.RunCts = cascadeCts;
 
 		var completionPublished = false;

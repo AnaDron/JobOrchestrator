@@ -30,8 +30,10 @@ public static class ServiceCollectionExtensions {
 	/// </para>
 	/// </summary>
 	/// <remarks>
-	/// Требует, чтобы в контейнере был зарегистрирован <see cref="IJobStateStore"/> — например, через
-	/// <c>services.AddInMemoryJobStateStore()</c> (пакет <c>JobOrchestrator.InMemory</c>) или внешний backend.
+	/// Требует, чтобы в configure-action был вызван хотя бы один backend-extension для <see cref="IJobStateStore"/> —
+	/// например, <c>jobs.UseInMemoryStateStore()</c> (пакет <c>JobOrchestrator.InMemory</c>) или аналог из
+	/// внешнего backend-пакета. Отсутствие регистрации диагностируется fail-fast при первом resolve
+	/// <see cref="Internal.StageRegistry"/>.
 	/// </remarks>
 	public static IServiceCollection AddJobOrchestrator(
 		this IServiceCollection services,
@@ -136,7 +138,9 @@ public static class ServiceCollectionExtensions {
 		services.AddSingleton<StageRegistry>(sp => {
 			var builder = sp.GetRequiredService<JobOrchestratorBuilder>();
 			foreach (var c in sp.GetServices<IJobsConfigure>()) c.Apply(builder);
-			return builder.BuildRegistry();
+			var registry = builder.BuildRegistry();
+			EnsureStateStoreRegistered(sp, tenantKey: null);
+			return registry;
 		});
 
 		services.AddSingleton<InstanceManager>();
@@ -187,7 +191,9 @@ public static class ServiceCollectionExtensions {
 			var k = (string)key!;
 			var builder = sp.GetRequiredKeyedService<JobOrchestratorBuilder>(k);
 			foreach (var c in sp.GetKeyedServices<IJobsConfigure>(k)) c.Apply(builder);
-			return builder.BuildRegistry();
+			var registry = builder.BuildRegistry();
+			EnsureStateStoreRegistered(sp, tenantKey: k);
+			return registry;
 		});
 
 		// Per-tenant bounded channel — фабрика обязательна (у Channel нет конструктора).
@@ -226,6 +232,34 @@ public static class ServiceCollectionExtensions {
 			SingleWriter = false,
 			FullMode = BoundedChannelFullMode.Wait,
 		});
+
+	/// <summary>
+	/// Fail-fast диагностика для забытого <c>jobs.UseInMemoryStateStore()</c> (или аналога из
+	/// внешнего backend-пакета). Вызывается из <see cref="StageRegistry"/>-factory — момент, когда
+	/// все configure-action'ы уже выполнились (включая multi-call accumulation), и можно надёжно
+	/// проверить итоговый набор регистраций.
+	/// <para>
+	/// Для tenant'ового orchestrator-а ищем <b>именно</b> keyed-descriptor под <paramref name="tenantKey"/>:
+	/// fallback на non-keyed singleton <c>IJobStateStore</c> через <see cref="Keyed.KeyedAwareServiceProvider"/>
+	/// технически работал бы, но нарушил бы tenant-изоляцию (общий store на нескольких tenant'ов с
+	/// возможным cross-contamination по <see cref="Instance.StateScope"/>). Требуем явный keyed-store
+	/// — это симметрично контракту «tenant — полная изоляция инфраструктуры».
+	/// </para>
+	/// </summary>
+	private static void EnsureStateStoreRegistered(IServiceProvider sp, string? tenantKey) {
+		IJobStateStore? store = tenantKey is null
+			? sp.GetService<IJobStateStore>()
+			: sp.GetKeyedService<IJobStateStore>(tenantKey);
+		if (store is not null) return;
+		string qualifier = tenantKey is null
+			? "AddJobOrchestrator(...)"
+			: $"AddJobOrchestrator(\"{tenantKey}\", ...)";
+		string hint = tenantKey is null
+			? "jobs.UseInMemoryStateStore() (или аналог из backend-пакета)"
+			: $"jobs.UseInMemoryStateStore() (или аналог) внутри configure-action — backend поднимется как keyed-singleton под '{tenantKey}'";
+		throw new InvalidOperationException(
+			$"Для {qualifier} не зарегистрирован IJobStateStore. Вызовите {hint}.");
+	}
 
 	/// <summary>
 	/// Регистрирует <typeparamref name="T"/> как keyed-singleton под <paramref name="key"/>,
