@@ -24,8 +24,8 @@ public sealed class ScenarioTerminatingFilterTests {
 		b.Services.AddSingleton<RootStage>();
 		b.Services.AddSingleton(mid);
 		b.Services.AddSingleton(leaf);
-		b.Services.AddInMemoryJobStateStore();
 		b.Services.AddJobOrchestrator(jobs => {
+			jobs.UseInMemoryStateStore();
 			jobs.Defaults.Debounce = TimeSpan.FromMilliseconds(10);
 			jobs.Defaults.RetryAfterFailure = RetryPolicy.FixedDelay(TimeSpan.FromSeconds(30));
 

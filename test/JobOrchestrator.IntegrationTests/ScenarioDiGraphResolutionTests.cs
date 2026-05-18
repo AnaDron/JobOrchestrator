@@ -28,7 +28,6 @@ public sealed class ScenarioDiGraphResolutionTests {
 	private static IHost Build(Action<IServiceCollection> register) {
 		var builder = Host.CreateApplicationBuilder();
 		builder.Logging.ClearProviders();
-		builder.Services.AddInMemoryJobStateStore();
 		register(builder.Services);
 		return builder.Build();
 	}
@@ -36,9 +35,12 @@ public sealed class ScenarioDiGraphResolutionTests {
 	[Fact]
 	public void Unkeyed_RootGraph_Resolves() {
 		using var host = Build(s => {
-			s.AddJobOrchestrator(jobs => jobs.Stage("solo")
-				.HandledBy<FakeServiceA>()
-				.RunPeriodically(TimeSpan.FromMinutes(1)));
+			s.AddJobOrchestrator(jobs => {
+				jobs.UseInMemoryStateStore();
+				jobs.Stage("solo")
+					.HandledBy<FakeServiceA>()
+					.RunPeriodically(TimeSpan.FromMinutes(1));
+			});
 		});
 
 		// Каждый Action в списке — Invoking-проверка: ловим первое же исключение в графе.
@@ -69,10 +71,13 @@ public sealed class ScenarioDiGraphResolutionTests {
 	public void SingleTenant_KeyedRootGraph_Resolves() {
 		const string tenant = "evotor";
 		using var host = Build(s => {
-			s.AddJobOrchestrator(tenant, jobs => jobs.WithDomain(tenant, evotor =>
-				evotor.Stage("shops")
-					.HandledBy<FakeServiceA>()
-					.RunPeriodically(TimeSpan.FromMinutes(1))));
+			s.AddJobOrchestrator(tenant, jobs => {
+				jobs.UseInMemoryStateStore();
+				jobs.WithDomain(tenant, evotor =>
+					evotor.Stage("shops")
+						.HandledBy<FakeServiceA>()
+						.RunPeriodically(TimeSpan.FromMinutes(1)));
+			});
 			// Stage-service подменяем keyed-singleton'ом, чтобы probe-pass TryAddKeyedScoped
 			// был перекрыт нашей фиксированной реализацией (см. ScenarioKeyedMultiTenancyTests).
 			s.AddKeyedSingleton<FakeServiceA>(tenant, new FakeServiceA());
@@ -104,14 +109,20 @@ public sealed class ScenarioDiGraphResolutionTests {
 	[Fact]
 	public void MultiTenant_BothGraphsResolveIndependently() {
 		using var host = Build(s => {
-			s.AddJobOrchestrator("evotor", jobs => jobs.WithDomain("evotor", evotor =>
-				evotor.Stage("shops")
-					.HandledBy<FakeServiceA>()
-					.RunPeriodically(TimeSpan.FromMinutes(1))));
-			s.AddJobOrchestrator("ozon", jobs => jobs.WithDomain("ozon", ozon =>
-				ozon.Stage("offers")
-					.HandledBy<FakeServiceB>()
-					.RunPeriodically(TimeSpan.FromMinutes(1))));
+			s.AddJobOrchestrator("evotor", jobs => {
+				jobs.UseInMemoryStateStore();
+				jobs.WithDomain("evotor", evotor =>
+					evotor.Stage("shops")
+						.HandledBy<FakeServiceA>()
+						.RunPeriodically(TimeSpan.FromMinutes(1)));
+			});
+			s.AddJobOrchestrator("ozon", jobs => {
+				jobs.UseInMemoryStateStore();
+				jobs.WithDomain("ozon", ozon =>
+					ozon.Stage("offers")
+						.HandledBy<FakeServiceB>()
+						.RunPeriodically(TimeSpan.FromMinutes(1)));
+			});
 			s.AddKeyedSingleton<FakeServiceA>("evotor", new FakeServiceA());
 			s.AddKeyedSingleton<FakeServiceB>("ozon", new FakeServiceB());
 		});

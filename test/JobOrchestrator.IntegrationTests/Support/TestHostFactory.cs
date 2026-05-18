@@ -24,8 +24,10 @@ internal static class TestHostFactory {
 		if (timeProvider is not null) {
 			builder.Services.AddSingleton(timeProvider);
 		}
-		builder.Services.AddInMemoryJobStateStore();
-		builder.Services.AddJobOrchestrator(configure);
+		builder.Services.AddJobOrchestrator(jobs => {
+			jobs.UseInMemoryStateStore();
+			configure(jobs);
+		});
 		// registerFakes — после остальных регистраций, чтобы тест мог переопределить любую (последняя
 		// регистрация singleton выигрывает при resolve).
 		registerFakes?.Invoke(builder.Services);

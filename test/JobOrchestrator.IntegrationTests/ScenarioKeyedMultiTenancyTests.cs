@@ -15,7 +15,6 @@ public sealed class ScenarioKeyedMultiTenancyTests {
 	private static IHost BuildHost(Action<IServiceCollection> register) {
 		var builder = Host.CreateApplicationBuilder();
 		builder.Logging.ClearProviders();
-		builder.Services.AddInMemoryJobStateStore();
 		register(builder.Services);
 		return builder.Build();
 	}
@@ -23,10 +22,16 @@ public sealed class ScenarioKeyedMultiTenancyTests {
 	[Fact]
 	public void KeyedMultiTenancy_TwoTenants_HaveIsolatedRegistries() {
 		using var host = BuildHost(s => {
-			s.AddJobOrchestrator("evotor", jobs => jobs.WithDomain("evotor", evotor =>
-				evotor.Stage("shops").HandledBy<FakeServiceA>().RunPeriodically(TimeSpan.FromMinutes(1))));
-			s.AddJobOrchestrator("ozon", jobs => jobs.WithDomain("ozon", ozon =>
-				ozon.Stage("offers").HandledBy<FakeServiceB>().RunPeriodically(TimeSpan.FromMinutes(1))));
+			s.AddJobOrchestrator("evotor", jobs => {
+				jobs.UseInMemoryStateStore();
+				jobs.WithDomain("evotor", evotor =>
+					evotor.Stage("shops").HandledBy<FakeServiceA>().RunPeriodically(TimeSpan.FromMinutes(1)));
+			});
+			s.AddJobOrchestrator("ozon", jobs => {
+				jobs.UseInMemoryStateStore();
+				jobs.WithDomain("ozon", ozon =>
+					ozon.Stage("offers").HandledBy<FakeServiceB>().RunPeriodically(TimeSpan.FromMinutes(1)));
+			});
 			// Keyed-singleton: overrides probe-pass TryAddKeyedScoped, чтобы test и runner видели один инстанс.
 			s.AddKeyedSingleton<FakeServiceA>("evotor", new FakeServiceA());
 			s.AddKeyedSingleton<FakeServiceB>("ozon", new FakeServiceB());
@@ -55,10 +60,16 @@ public sealed class ScenarioKeyedMultiTenancyTests {
 	[Fact]
 	public async Task KeyedMultiTenancy_BothOrchestratorsRunEndToEnd() {
 		using var host = BuildHost(s => {
-			s.AddJobOrchestrator("evotor", jobs => jobs.WithDomain("evotor", evotor =>
-				evotor.Stage("shops").HandledBy<FakeServiceA>().RunPeriodically(TimeSpan.FromMinutes(1))));
-			s.AddJobOrchestrator("ozon", jobs => jobs.WithDomain("ozon", ozon =>
-				ozon.Stage("offers").HandledBy<FakeServiceB>().RunPeriodically(TimeSpan.FromMinutes(1))));
+			s.AddJobOrchestrator("evotor", jobs => {
+				jobs.UseInMemoryStateStore();
+				jobs.WithDomain("evotor", evotor =>
+					evotor.Stage("shops").HandledBy<FakeServiceA>().RunPeriodically(TimeSpan.FromMinutes(1)));
+			});
+			s.AddJobOrchestrator("ozon", jobs => {
+				jobs.UseInMemoryStateStore();
+				jobs.WithDomain("ozon", ozon =>
+					ozon.Stage("offers").HandledBy<FakeServiceB>().RunPeriodically(TimeSpan.FromMinutes(1)));
+			});
 			s.AddKeyedSingleton<FakeServiceA>("evotor", new FakeServiceA());
 			s.AddKeyedSingleton<FakeServiceB>("ozon", new FakeServiceB());
 		});
@@ -81,10 +92,16 @@ public sealed class ScenarioKeyedMultiTenancyTests {
 	public void KeyedMultiTenancy_MultipleAddJobOrchestratorPerTenant_AccumulateInSameTenant() {
 		// Два вызова с tenantKey="evotor" — должны объединиться в один tenant'ный registry.
 		using var host = BuildHost(s => {
-			s.AddJobOrchestrator("evotor", jobs => jobs.WithDomain("evotor", evotor =>
-				evotor.Stage("shops").HandledBy<FakeServiceA>().RunPeriodically(TimeSpan.FromMinutes(1))));
-			s.AddJobOrchestrator("evotor", jobs => jobs.WithDomain("evotor", evotor =>
-				evotor.Stage("products").HandledBy<FakeServiceB>().RunPeriodically(TimeSpan.FromMinutes(1))));
+			s.AddJobOrchestrator("evotor", jobs => {
+				jobs.UseInMemoryStateStore();
+				jobs.WithDomain("evotor", evotor =>
+					evotor.Stage("shops").HandledBy<FakeServiceA>().RunPeriodically(TimeSpan.FromMinutes(1)));
+			});
+			s.AddJobOrchestrator("evotor", jobs => {
+				jobs.UseInMemoryStateStore();
+				jobs.WithDomain("evotor", evotor =>
+					evotor.Stage("products").HandledBy<FakeServiceB>().RunPeriodically(TimeSpan.FromMinutes(1)));
+			});
 			s.AddKeyedSingleton<FakeServiceA>("evotor", new FakeServiceA());
 			s.AddKeyedSingleton<FakeServiceB>("evotor", new FakeServiceB());
 		});
@@ -98,11 +115,16 @@ public sealed class ScenarioKeyedMultiTenancyTests {
 	public void UnkeyedAndKeyedCoexist() {
 		using var host = BuildHost(s => {
 			// Unkeyed (single-tenant) — стандартный сценарий.
-			s.AddJobOrchestrator(jobs =>
-				jobs.Stage("global").HandledBy<FakeServiceA>().RunPeriodically(TimeSpan.FromMinutes(1)));
+			s.AddJobOrchestrator(jobs => {
+				jobs.UseInMemoryStateStore();
+				jobs.Stage("global").HandledBy<FakeServiceA>().RunPeriodically(TimeSpan.FromMinutes(1));
+			});
 			// Keyed tenant в том же ServiceCollection — отдельный orchestrator.
-			s.AddJobOrchestrator("evotor", jobs => jobs.WithDomain("evotor", evotor =>
-				evotor.Stage("shops").HandledBy<FakeServiceB>().RunPeriodically(TimeSpan.FromMinutes(1))));
+			s.AddJobOrchestrator("evotor", jobs => {
+				jobs.UseInMemoryStateStore();
+				jobs.WithDomain("evotor", evotor =>
+					evotor.Stage("shops").HandledBy<FakeServiceB>().RunPeriodically(TimeSpan.FromMinutes(1)));
+			});
 			s.AddSingleton<FakeServiceA>();    // unkeyed для unkeyed-orchestrator
 			s.AddKeyedSingleton<FakeServiceB>("evotor", new FakeServiceB());
 		});
@@ -130,10 +152,16 @@ public sealed class ScenarioKeyedMultiTenancyTests {
 		var evotorInstance = new SharedStage();
 		var ozonInstance = new SharedStage();
 		using var host = BuildHost(s => {
-			s.AddJobOrchestrator("evotor", jobs => jobs.WithDomain("evotor", evotor =>
-				evotor.Stage("work").HandledBy<SharedStage>().RunPeriodically(TimeSpan.FromMinutes(1))));
-			s.AddJobOrchestrator("ozon", jobs => jobs.WithDomain("ozon", ozon =>
-				ozon.Stage("work").HandledBy<SharedStage>().RunPeriodically(TimeSpan.FromMinutes(1))));
+			s.AddJobOrchestrator("evotor", jobs => {
+				jobs.UseInMemoryStateStore();
+				jobs.WithDomain("evotor", evotor =>
+					evotor.Stage("work").HandledBy<SharedStage>().RunPeriodically(TimeSpan.FromMinutes(1)));
+			});
+			s.AddJobOrchestrator("ozon", jobs => {
+				jobs.UseInMemoryStateStore();
+				jobs.WithDomain("ozon", ozon =>
+					ozon.Stage("work").HandledBy<SharedStage>().RunPeriodically(TimeSpan.FromMinutes(1)));
+			});
 			s.AddKeyedSingleton("evotor", evotorInstance);
 			s.AddKeyedSingleton("ozon", ozonInstance);
 		});

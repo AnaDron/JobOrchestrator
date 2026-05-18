@@ -20,8 +20,8 @@ builder.Logging.AddSimpleConsole(o => {
 	o.TimestampFormat = "HH:mm:ss ";
 });
 
-builder.Services.AddInMemoryJobStateStore();
 builder.Services.AddJobOrchestrator(jobs => {
+	jobs.UseInMemoryStateStore();
 	jobs.Defaults = new JobDefaults {
 		Debounce = TimeSpan.FromSeconds(1),
 		RetryAfterFailure = RetryPolicy.ExponentialBackoff(

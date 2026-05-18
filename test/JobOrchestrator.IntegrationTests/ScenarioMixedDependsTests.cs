@@ -55,8 +55,8 @@ public sealed class ScenarioMixedDependsTests {
 		b.Services.AddSingleton<ShopsStub>(_ => new ShopsStub(shops));
 		b.Services.AddSingleton<EmployeesStub>(_ => new EmployeesStub(employees));
 		b.Services.AddSingleton<GroupsStub>(_ => new GroupsStub(groups));
-		b.Services.AddInMemoryJobStateStore();
 		b.Services.AddJobOrchestrator(jobs => {
+			jobs.UseInMemoryStateStore();
 			jobs.Defaults.Debounce = TimeSpan.FromMilliseconds(10);
 			jobs.Defaults.RetryAfterFailure = RetryPolicy.FixedDelay(TimeSpan.FromSeconds(30));
 
@@ -143,8 +143,8 @@ public sealed class ScenarioMixedDependsTests {
 		b.Services.AddSingleton<ShopsStub>(_ => new ShopsStub(shops));
 		b.Services.AddSingleton<EmployeesStub>(_ => new EmployeesStub(employees));
 		b.Services.AddSingleton<GroupsStub>(_ => new GroupsStub(groups));
-		b.Services.AddInMemoryJobStateStore();
 		b.Services.AddJobOrchestrator(jobs => {
+			jobs.UseInMemoryStateStore();
 			jobs.Defaults.Debounce = TimeSpan.FromMilliseconds(10);
 			jobs.Defaults.RetryAfterFailure = RetryPolicy.FixedDelay(TimeSpan.FromSeconds(30));
 

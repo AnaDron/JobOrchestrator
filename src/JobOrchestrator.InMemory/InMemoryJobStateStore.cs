@@ -6,6 +6,11 @@ namespace JobOrchestrator.InMemory;
 /// <summary>
 /// In-memory backend для <see cref="IJobStateStore"/>. Дефолтный выбор для типового сценария «single-instance app».
 /// Не персистирует данные между рестартами процесса — рестарт = полный bootstrap графа стадий с нуля.
+/// <para>
+/// Tenant-изоляция обеспечивается DI-уровнем: tenant'овый <c>AddJobOrchestrator(tenantKey, …)</c>
+/// регистрирует InMemoryJobStateStore как keyed-singleton под tenantKey, каждый tenant получает свой
+/// независимый экземпляр (а значит — отдельный backing <see cref="ConcurrentDictionary{TKey,TValue}"/>).
+/// </para>
 /// </summary>
 internal sealed class InMemoryJobStateStore : IJobStateStore {
 	private readonly ConcurrentDictionary<string, ConcurrentDictionary<string, string>> _scopes = new(StringComparer.Ordinal);

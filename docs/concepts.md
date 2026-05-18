@@ -1,6 +1,6 @@
 # Концепции SDK
 
-Job Orchestrator оперирует тремя смысловыми сущностями: **Stage**, **StageInstance** и **Job (итерация)**. Их разделение — фундаментальное; без него невозможен fan-out по динамическому набору ключей. Этот документ объясняет каждую сущность, их соотношение и то, как они называются в публичном и внутреннем API.
+Job Orchestrator оперирует тремя смысловыми сущностями: **Stage**, **Instance** и **Job (итерация)**. Их разделение — фундаментальное; без него невозможен fan-out по динамическому набору ключей. Этот документ объясняет каждую сущность, их соотношение и то, как они называются в публичном и внутреннем API.
 
 ## Триада «декларация → экземпляр → итерация»
 
@@ -14,7 +14,7 @@ Job Orchestrator оперирует тремя смысловыми сущнос
                        │  1 : N
                        ▼
         ┌───────────────────────────────┐
-        │ StageInstance (runtime-экз.)  │  long-lived, по одному на
+        │ Instance (runtime-экз.)        │  long-lived, по одному на
         │  Stage, DependencyKeys,        │  ключевую комбинацию
         │  LastSuccess, LastAttempt,     │
         │  ConsecutiveFailures, RunCts   │
@@ -28,7 +28,7 @@ Job Orchestrator оперирует тремя смысловыми сущнос
         └───────────────────────────────┘
 ```
 
-Цифры: `Stage:Instance = 1:N`, `Instance:Job = 1:M`. На один Stage может быть от 0 до тысяч `StageInstance`, и каждый из них переживает множество итераций.
+Цифры: `Stage:Instance = 1:N`, `Instance:Job = 1:M`. На один Stage может быть от 0 до тысяч `Instance`, и каждый из них переживает множество итераций.
 
 ## Stage — декларация
 
@@ -58,9 +58,9 @@ var products = jobs.Stage("products")
 - Публично: `IStageBuilder` (Configuration), `Stage(name)` в `JobOrchestratorBuilder`.
 - Внутренне: `StageDescriptor` (`Internal/StageDescriptor.cs`) — финальный immutable снимок после сборки. Все `StageDescriptor` собраны в `StageRegistry` (`Internal/StageRegistry.cs`).
 
-## StageInstance — runtime-экземпляр
+## Instance — runtime-экземпляр
 
-**Что это.** Конкретный исполнительный экземпляр стадии с уникальным композитным ключом (`DependencyKeys`). Существует столько `StageInstance`-ов, сколько комбинаций ключей удовлетворяет зависимостям стадии.
+**Что это.** Конкретный исполнительный экземпляр стадии с уникальным композитным ключом (`DependencyKeys`). Существует столько `Instance`-ов, сколько комбинаций ключей удовлетворяет зависимостям стадии.
 
 Например, при `productGroups.DependsOnInstance(shops)` и keyspace `shops = {u1, u2, u3}` существует ровно три инстанса:
 - `productGroups[shops=u1]`
@@ -79,35 +79,35 @@ var products = jobs.Stage("products")
 - Создаётся **динамически** через `InstanceCreator.EvaluateAndCreate(stage)` когда:
   - все `DependsOnInstance(X)` зависимости имеют нужные ключи в keyspace(X) + парный X-инстанс успешен (`LastSuccess != null`);
   - все `DependsOn(Y)` зависимости имеют парный успешный Y-инстанс.
-- Удаляется через каскад `RemoveKey`/`UnregisterKey` — графически вниз по транзитивному замыканию зависимостей, в топологически обратном порядке (листья перед корнями).
+- Удаляется через каскад `RemoveKeyAsync`/`UnregisterKey` — графически вниз по транзитивному замыканию зависимостей, в топологически обратном порядке (листья перед корнями).
 - **Mutable runtime-state** — изменяется единственным consumer-потоком event loop'а (single-threaded), поэтому без блокировок и без CAS.
 - Существует от момента создания до удаления; переживает множество итераций.
 
 **Где в коде:**
-- Внутренне: `StageInstance` (`Internal/StageInstance.cs`); коллекция в `InstanceManager` (`Internal/InstanceManager.cs`).
-- Снаружи через диагностику: `JobInfo` (`Abstractions/JobInfo.cs`) — снапшот одного `StageInstance` для `JobOverview`. Имя `JobInfo` сохранено в публичном API по причине, описанной ниже в § «Двойственность слова Job».
+- Внутренне: `Instance` (`Internal/Instance.cs`); коллекция в `InstanceManager` (`Internal/InstanceManager.cs`).
+- Снаружи через диагностику: `InstanceInfo` (`Abstractions/InstanceInfo.cs`) — снапшот одного `Instance` для `InstancesOverview` (`Abstractions/InstancesOverview.cs`).
 
 **Pending состояния нет** — инстанс физически не существует до момента разрешения зависимостей. Это упрощает state machine: только `Idle`/`Running` (см. `InstanceLifecycleState`).
 
 ## Job — итерация
 
-**Что это.** Одна материализация работы — один вызов `IJobService.ExecuteAsync(JobContext ctx, CancellationToken ct)` для конкретного `StageInstance`. В коде это **не отдельный тип**, а просто scope + context для одного вызова. Время жизни — от запуска до завершения метода.
+**Что это.** Одна материализация работы — один вызов `IJobService.ExecuteAsync(JobContext ctx, CancellationToken ct)` для конкретного `Instance`. В коде это **не отдельный тип**, а просто scope + context для одного вызова. Время жизни — от запуска до завершения метода.
 
 **Триггеры запуска:**
-- `Auto` — internal timer тикает по `StageInstance.NextTickAtMs`.
-- `Manual` — `IJobOrchestrator.TriggerAsync(stageName, dependencyKeys)`.
+- `Auto` — internal timer тикает по `Instance.NextTickAtMs`.
+- `Manual` — `orchestrator["stageName"][(keyName, keyValue), ...].TriggerAsync()`.
 
 **Что происходит вокруг одной итерации:**
 1. EventLoop принимает решение `TryAccept(instance, source)` — проверяет `Running`/`AlreadyRunning`, retry-delay (для Auto), debounce (для Manual).
 2. Переход `instance.State = Running`.
 3. `StageRunner.RunIterationAsync` создаёт fresh DI-scope, watchdog-CTS, формирует `JobContext`, кладёт в `logger.BeginScope` структурные поля (`FullyQualifiedName`, `StageName`, `{depStage}Key`).
-4. `service.ExecuteAsync(ctx, ct)` — пользовательский код. Может вызывать `ctx.AddKey/RemoveKey` любое число раз, может работать с `ctx.State` (`IJobState`), читает `ctx.LastSuccessAt`, `ctx.DependencyKeys`.
+4. `service.ExecuteAsync(ctx, ct)` — пользовательский код. Может вызывать `ctx.AddKeyAsync/RemoveKeyAsync` любое число раз, может работать с `ctx.State` (`IJobState`), читает `ctx.LastSuccessAt`, `ctx.DependencyKeys`.
 5. По завершении публикуется `StageCompletedEvent` (если без исключения) или `StageFailedEvent`.
 6. EventLoop обновляет `instance.LastAttempt`, `LastSuccess` / `ConsecutiveFailures`, и перепланирует следующий тик.
 
 **Где в коде это «нейминг»:**
-- Публично: `IJobService.ExecuteAsync` — выполняет одну итерацию. `JobContext` — контекст этой итерации. `JobInfo.StageName` / `FullyQualifiedName` — описывает инстанс, в чью «биографию» эта итерация попадёт.
-- Внутренне явного типа `Job` нет. `StageRunner.RunIterationAsync(StageInstance instance, ...)` принимает инстанс и проигрывает одну итерацию.
+- Публично: `IJobService.ExecuteAsync` — выполняет одну итерацию. `JobContext` — контекст этой итерации. `InstanceInfo.StageName` / `FullyQualifiedName` — описывает инстанс, в чью «биографию» эта итерация попадёт.
+- Внутренне явного типа `Job` нет. `StageRunner.RunIterationAsync(Instance instance, ...)` принимает инстанс и проигрывает одну итерацию.
 
 ## Двойственность слова Job
 
@@ -117,13 +117,13 @@ var products = jobs.Stage("products")
 |---|---|
 | `IJobService.ExecuteAsync` | «job» = одна итерация (одна материализация работы) |
 | `JobContext` | «контекст job-а» = контекст итерации |
-| `JobInfo` / `JobOverview` | «job» = single execution unit во view-модели; описывает long-lived state одного StageInstance |
+| `InstanceInfo` / `InstancesOverview` | view-модель long-lived state одного `Instance` (см. § «Где в коде» в разделе Instance) |
 | `IJobOrchestrator` | «orchestrator of jobs» = общая фраза, контракт управления |
 | `JobOrchestratorBuilder` / `JobConfigurationException` / `JobOrchestratorHostedService` / `JobDefaults` / `IJobState` / `IJobStateStore` | широкая агрегированная семантика — «всё, что касается job-ов» |
 
-Внутренний рантайм-объект называется `StageInstance` (не `Job`), потому что long-lived runtime-сущность с mutable state — это **экземпляр стадии**, не «job». Это разделение проще всего запомнить через два правила:
+Внутренний рантайм-объект называется `Instance` (не `Job`), потому что long-lived runtime-сущность с mutable state — это **экземпляр стадии**, не «job». Это разделение проще всего запомнить через два правила:
 - В public API слово «Job» = «work unit» в самом общем смысле (итерация, конфигурация, контракт).
-- Во внутреннем коде («что я держу в `Dictionary`?») — это `StageInstance`.
+- Во внутреннем коде («что я держу в `Dictionary`?») — это `Instance`.
 
 ## Эвотор — иллюстрация на полном графе
 
@@ -148,21 +148,21 @@ var documents = jobs.Stage("documents").HandledBy<DocumentsService>()
     .RunPeriodically(TimeSpan.FromMinutes(2));
 ```
 
-После трёх вызовов `ctx.AddKey("uuid-N")` в `ShopsService` имеем:
+После трёх вызовов `ctx.AddKeyAsync("uuid-N")` в `ShopsService` имеем:
 
 | Сущность | Кол-во | Примеры |
 |---|---|---|
 | `Stage`-объекты в `StageRegistry` | 5 | `shops`, `employees`, `productGroups`, `products`, `documents` |
-| `StageInstance`-объекты в `InstanceManager` | 14 | `shops[]`, `employees[]`, `productGroups[shops=u1..u3]` (×3), `products[shops=u1..u3]` (×3), `documents[shops=u1..u3]` (×3) — итого 1+1+3+3+3 = 11; до первого успеха `employees`/`products`/`documents` будут только частично созданы. После полной волны bootstrap — 11. Точно 14 будет в более широких сценариях с partial keys. |
+| `Instance`-объекты в `InstanceManager` | 14 | `shops[]`, `employees[]`, `productGroups[shops=u1..u3]` (×3), `products[shops=u1..u3]` (×3), `documents[shops=u1..u3]` (×3) — итого 1+1+3+3+3 = 11; до первого успеха `employees`/`products`/`documents` будут только частично созданы. После полной волны bootstrap — 11. Точно 14 будет в более широких сценариях с partial keys. |
 | Jobs (итерации в час, грубо) | сотни | timer каждой стадии тикает по своему интервалу |
 
-Каждый `StageInstance` имеет один Timer (`InstanceTimer`). При его тике публикуется `TimerTickedEvent(Instance)`. EventLoop принимает решение, запускать ли итерацию (=Job).
+Каждый `Instance` имеет один Timer (`InstanceTimer`). При его тике публикуется `TimerTickedEvent(Instance)`. EventLoop принимает решение, запускать ли итерацию (=Job).
 
 ## Чек-лист для понимания при чтении кода SDK
 
 - Видишь `StageDescriptor` — это **декларация** (статика).
-- Видишь `StageInstance` или поле `Instance` в event-record — это **runtime-экземпляр** (long-lived).
+- Видишь `Instance` или поле `Instance` в event-record — это **runtime-экземпляр** (long-lived).
 - Видишь `IJobService.ExecuteAsync` или `JobContext` — это **итерация** (одна материализация работы).
-- `InstanceManager` — owner всех `StageInstance`-объектов.
+- `InstanceManager` — owner всех `Instance`-объектов.
 - `StageRegistry` — owner всех `StageDescriptor`-объектов.
-- `JobOverview` / `JobInfo` — снапшот всех `StageInstance` для диагностики (имя `Job*` — публичная конвенция, см. § «Двойственность»).
+- `InstancesOverview` / `InstanceInfo` — снапшот всех `Instance` для диагностики.

@@ -19,8 +19,8 @@ public sealed class ScenarioStructuredLoggingTests {
 		builder.Logging.ClearProviders();
 		builder.Logging.AddProvider(capturing);
 
-		builder.Services.AddInMemoryJobStateStore();
 		builder.Services.AddJobOrchestrator(jobs => {
+			jobs.UseInMemoryStateStore();
 			var shops = jobs.Stage("shops")
 				.HandledBy<FakeServiceA>()
 				.RunPeriodically(TimeSpan.FromMinutes(1));

@@ -69,8 +69,9 @@ internal sealed class JobOrchestratorRuntime : IJobOrchestrator {
 	}
 
 	/// <summary>
-	/// Итерация всех зарегистрированных стадий через cached <see cref="StageHandle"/>-ы. Zero-allocation
-	/// (за исключением enumerator-state-machine от Dictionary.ValueCollection).
+	/// Итерация всех зарегистрированных стадий через cached <see cref="StageHandle"/>-ы. Аллокация —
+	/// один <see cref="Dictionary{TKey,TValue}.ValueCollection"/>-enumerator (boxed через интерфейс),
+	/// сами handle-объекты переиспользуются.
 	/// </summary>
 	public IEnumerator<IStageHandle> GetEnumerator() => _stageHandles.Values.GetEnumerator();
 	IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();

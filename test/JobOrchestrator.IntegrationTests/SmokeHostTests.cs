@@ -10,8 +10,8 @@ public sealed class SmokeHostTests {
 		var builder = Host.CreateApplicationBuilder();
 		builder.Services.AddLogging();
 		builder.Services.AddScoped<NoopJob>();
-		builder.Services.AddInMemoryJobStateStore();
 		builder.Services.AddJobOrchestrator(jobs => {
+			jobs.UseInMemoryStateStore();
 			jobs.Stage("noop").HandledBy<NoopJob>().RunPeriodically(TimeSpan.FromHours(1));
 		});
 

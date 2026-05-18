@@ -1,4 +1,5 @@
 using JobOrchestrator.Configuration.Internal;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace JobOrchestrator.Configuration;
 
@@ -10,6 +11,48 @@ public sealed class JobOrchestratorBuilder {
 	private readonly Dictionary<string, StageBuilder> _stages = new(StringComparer.Ordinal);
 	private JobDefaults _defaults = new();
 	private string? _currentDomain;
+
+	/// <summary>
+	/// <see cref="IServiceCollection"/>, переданный в <c>AddJobOrchestrator</c>. Доступен <b>только
+	/// на probe-pass</b> (когда builder создаётся внутри extension'а с прямой ссылкой на services).
+	/// На lazy-pass (DI-singleton builder, переиспользуемый <see cref="Hosting.IJobsConfigure.Apply"/>)
+	/// — <c>null</c>: ServiceCollection уже заморожен, регистрации невозможны.
+	/// <para>
+	/// Backend-extension'ы (<c>jobs.UseInMemoryStateStore()</c>, <c>jobs.UseRedisStateStore(...)</c> и т.п.)
+	/// читают <see cref="Services"/> и <see cref="TenantKey"/>, чтобы сразу зарегистрировать соответствующий
+	/// <see cref="IJobStateStore"/> в нужной форме — non-keyed singleton либо keyed под текущим tenant'ом.
+	/// На lazy-pass extension должен no-op'нуться через проверку <c>Services is null</c>.
+	/// </para>
+	/// </summary>
+	public IServiceCollection? Services { get; }
+
+	/// <summary>
+	/// Tenant-ключ текущего orchestrator-а: непустой при keyed-регистрации
+	/// (<c>services.AddJobOrchestrator(tenantKey, ...)</c>); <c>null</c> для одиночного
+	/// <c>services.AddJobOrchestrator(...)</c>. Используется backend-extension'ами для выбора между
+	/// non-keyed и keyed DI-регистрацией backend'а.
+	/// </summary>
+	public string? TenantKey { get; }
+
+	/// <summary>
+	/// Probe-pass конструктор: builder получает прямую ссылку на <see cref="IServiceCollection"/>
+	/// и текущий <paramref name="tenantKey"/>. Вызывается из <c>AddJobOrchestrator</c>.
+	/// </summary>
+	internal JobOrchestratorBuilder(IServiceCollection services, string? tenantKey) {
+		Services = services;
+		TenantKey = tenantKey;
+	}
+
+	/// <summary>
+	/// Default-конструктор для lazy-pass: builder создаётся DI как singleton (<c>AddSingleton&lt;JobOrchestratorBuilder&gt;()</c>)
+	/// и переиспользуется аккумулятором <see cref="Hosting.IJobsConfigure"/>. На этом pass'е
+	/// <see cref="Services"/> и <see cref="TenantKey"/> равны <c>null</c>; backend-регистрации уже выполнены
+	/// на probe-pass, повторно их применять не нужно.
+	/// </summary>
+	public JobOrchestratorBuilder() {
+		Services = null;
+		TenantKey = null;
+	}
 
 	/// <summary>
 	/// Дефолтные настройки, применяемые к стадиям в момент их объявления.
@@ -45,12 +88,13 @@ public sealed class JobOrchestratorBuilder {
 	/// </summary>
 	public JobOrchestratorBuilder WithDomain(string domain, Action<JobOrchestratorBuilder> configure) {
 		ArgumentNullException.ThrowIfNull(configure);
-		var saved = _currentDomain;
+		// EnterDomain отвергает вложенные WithDomain (бросает при _currentDomain != null), поэтому
+		// к моменту finally сохранять нечего — восстанавливаем безусловно в null.
 		EnterDomain(domain);
 		try {
 			configure(this);
 		} finally {
-			_currentDomain = saved;
+			_currentDomain = null;
 		}
 		return this;
 	}

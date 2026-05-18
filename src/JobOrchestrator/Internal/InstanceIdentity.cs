@@ -148,12 +148,14 @@ internal sealed class InstanceIdentity : IEquatable<InstanceIdentity> {
 
 	public override int GetHashCode() {
 		// Lazy-cache: первое чтение вычисляет, последующие — атомарный read. Race detected → safe
-		// (детерминированное значение, повторное вычисление даёт то же).
-		if (_hashCode != 0) return _hashCode;
+		// (детерминированное значение, повторное вычисление даёт то же). Volatile делает интент явным.
+		var cached = Volatile.Read(ref _hashCode);
+		if (cached != 0) return cached;
 		var hash = HashCode.Combine(Stage.Name, EncodedKey);
 		// 0 — sentinel «не вычислен»; маппим в 1, чтобы избежать ложного re-compute.
-		_hashCode = hash == 0 ? 1 : hash;
-		return _hashCode;
+		cached = hash == 0 ? 1 : hash;
+		Volatile.Write(ref _hashCode, cached);
+		return cached;
 	}
 
 	public override string ToString() => FullyQualifiedName;

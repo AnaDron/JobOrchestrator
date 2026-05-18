@@ -30,8 +30,5 @@ internal sealed class StageRegistry {
 			? s
 			: throw new KeyNotFoundException($"Стадия '{name}' не найдена в реестре.");
 
-	public bool TryGet(string name, out StageDescriptor? descriptor) =>
-		_byName.TryGetValue(name, out descriptor);
-
 	public IReadOnlyCollection<StageDescriptor> AllStages => _byName.Values;
 }

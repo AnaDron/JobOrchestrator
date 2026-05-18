@@ -9,11 +9,12 @@ namespace JobOrchestrator.Internal;
 /// вызовы <c>WithDomain</c> с одинаковым ключом возвращают тот же объект.
 /// </para>
 /// </summary>
-internal sealed record DomainScopedJobOrchestrator(JobOrchestratorRuntime Runtime, string Domain) : IDomainScopedJobOrchestrator {
+internal sealed class DomainScopedJobOrchestrator(JobOrchestratorRuntime runtime, string domain)
+	: IDomainScopedJobOrchestrator {
 	public IStageHandle this[string stageName] {
 		get {
 			ArgumentException.ThrowIfNullOrEmpty(stageName);
-			return Runtime[$"{Domain}{JobOrchestratorBuilder.DomainSeparator}{stageName}"];
+			return runtime[$"{domain}{JobOrchestratorBuilder.DomainSeparator}{stageName}"];
 		}
 	}
 }

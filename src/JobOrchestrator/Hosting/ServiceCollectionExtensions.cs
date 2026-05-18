@@ -1,4 +1,3 @@
-using System.Linq;
 using System.Threading.Channels;
 using JobOrchestrator.Hosting.Keyed;
 using Microsoft.Extensions.DependencyInjection;
@@ -47,7 +46,10 @@ public static class ServiceCollectionExtensions {
 		//     DI-registrations нельзя добавить после BuildServiceProvider.
 		// Cross-call валидация (collision имён между двумя AddJobOrchestrator-вызовами) откладывается
 		// до первого resolve StageRegistry.
-		var probe = new JobOrchestratorBuilder();
+		// Probe-builder получает прямую ссылку на services + tenantKey=null. Backend-extension'ы
+		// внутри configure (например, jobs.UseInMemoryStateStore()) сразу регистрируют свои сервисы
+		// на основе builder.Services / builder.TenantKey.
+		var probe = new JobOrchestratorBuilder(services, tenantKey: null);
 		configure(probe);
 		var probeRegistry = probe.BuildRegistry();
 		foreach (var stage in probeRegistry.AllStages) {
@@ -88,8 +90,9 @@ public static class ServiceCollectionExtensions {
 		ArgumentException.ThrowIfNullOrEmpty(tenantKey);
 		ArgumentNullException.ThrowIfNull(configure);
 
-		// Probe-pass: per-call валидация + извлечение stage-service-типов.
-		var probe = new JobOrchestratorBuilder();
+		// Probe-builder с прямым доступом к services и текущим tenantKey. Backend-extension'ы
+		// (jobs.UseInMemoryStateStore() и т.п.) сразу регистрируют keyed-backend под этим ключом.
+		var probe = new JobOrchestratorBuilder(services, tenantKey);
 		configure(probe);
 		var probeRegistry = probe.BuildRegistry();
 		foreach (var stage in probeRegistry.AllStages) {

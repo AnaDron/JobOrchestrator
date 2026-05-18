@@ -36,10 +36,10 @@ internal static class TestHostBuilder {
 		b.Services.AddScoped<ProductsStageService>();
 		b.Services.AddScoped<EmployeesStageService>();
 		b.Services.AddScoped<DocumentsStageService>();
-		b.Services.AddInMemoryJobStateStore();
 		extra?.Invoke(b.Services);
 
 		b.Services.AddJobOrchestrator(jobs => {
+			jobs.UseInMemoryStateStore();
 			jobs.Defaults.Debounce = TimeSpan.FromMilliseconds(10);
 			jobs.Defaults.RetryAfterFailure = RetryPolicy.FixedDelay(TimeSpan.FromMilliseconds(50));
 

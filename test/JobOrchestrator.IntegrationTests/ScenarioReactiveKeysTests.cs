@@ -23,8 +23,8 @@ public sealed class ScenarioReactiveKeysTests {
 		b.Logging.SetMinimumLevel(LogLevel.Warning);
 		b.Services.AddSingleton(emitter);
 		b.Services.AddSingleton(child);
-		b.Services.AddInMemoryJobStateStore();
 		b.Services.AddJobOrchestrator(jobs => {
+			jobs.UseInMemoryStateStore();
 			jobs.Defaults.Debounce = TimeSpan.FromMilliseconds(10);
 			jobs.Defaults.RetryAfterFailure = RetryPolicy.FixedDelay(TimeSpan.FromSeconds(30));
 

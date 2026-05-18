@@ -14,7 +14,6 @@ public sealed class ScenarioMultiCallAccumulationTests {
 	private static IHost BuildHost(Action<IServiceCollection> register) {
 		var builder = Host.CreateApplicationBuilder();
 		builder.Logging.ClearProviders();
-		builder.Services.AddInMemoryJobStateStore();
 		register(builder.Services);
 		return builder.Build();
 	}
@@ -22,10 +21,16 @@ public sealed class ScenarioMultiCallAccumulationTests {
 	[Fact]
 	public void MultipleAddJobOrchestrator_AccumulateIntoSingleRegistry() {
 		using var host = BuildHost(s => {
-			s.AddJobOrchestrator(jobs => jobs.WithDomain("evotor", evotor =>
-				evotor.Stage("shops").HandledBy<FakeServiceA>().RunPeriodically(TimeSpan.FromMinutes(1))));
-			s.AddJobOrchestrator(jobs => jobs.WithDomain("ozon", ozon =>
-				ozon.Stage("offers").HandledBy<FakeServiceB>().RunPeriodically(TimeSpan.FromMinutes(1))));
+			s.AddJobOrchestrator(jobs => {
+				jobs.UseInMemoryStateStore();
+				jobs.WithDomain("evotor", evotor =>
+					evotor.Stage("shops").HandledBy<FakeServiceA>().RunPeriodically(TimeSpan.FromMinutes(1)));
+			});
+			s.AddJobOrchestrator(jobs => {
+				jobs.UseInMemoryStateStore();
+				jobs.WithDomain("ozon", ozon =>
+					ozon.Stage("offers").HandledBy<FakeServiceB>().RunPeriodically(TimeSpan.FromMinutes(1)));
+			});
 			s.AddSingleton<FakeServiceA>();
 			s.AddSingleton<FakeServiceB>();
 		});
@@ -41,10 +46,16 @@ public sealed class ScenarioMultiCallAccumulationTests {
 	[Fact]
 	public async Task MultipleAddJobOrchestrator_RunsEndToEnd() {
 		using var host = BuildHost(s => {
-			s.AddJobOrchestrator(jobs => jobs.WithDomain("evotor", evotor =>
-				evotor.Stage("shops").HandledBy<FakeServiceA>().RunPeriodically(TimeSpan.FromMinutes(1))));
-			s.AddJobOrchestrator(jobs => jobs.WithDomain("ozon", ozon =>
-				ozon.Stage("offers").HandledBy<FakeServiceB>().RunPeriodically(TimeSpan.FromMinutes(1))));
+			s.AddJobOrchestrator(jobs => {
+				jobs.UseInMemoryStateStore();
+				jobs.WithDomain("evotor", evotor =>
+					evotor.Stage("shops").HandledBy<FakeServiceA>().RunPeriodically(TimeSpan.FromMinutes(1)));
+			});
+			s.AddJobOrchestrator(jobs => {
+				jobs.UseInMemoryStateStore();
+				jobs.WithDomain("ozon", ozon =>
+					ozon.Stage("offers").HandledBy<FakeServiceB>().RunPeriodically(TimeSpan.FromMinutes(1)));
+			});
 			s.AddSingleton<FakeServiceA>();
 			s.AddSingleton<FakeServiceB>();
 		});
@@ -67,10 +78,16 @@ public sealed class ScenarioMultiCallAccumulationTests {
 	public void MultipleAddJobOrchestrator_OrderIndependent() {
 		// Те же два модуля, но в обратном порядке регистрации — итоговый набор стадий идентичен.
 		using var host = BuildHost(s => {
-			s.AddJobOrchestrator(jobs => jobs.WithDomain("ozon", ozon =>
-				ozon.Stage("offers").HandledBy<FakeServiceB>().RunPeriodically(TimeSpan.FromMinutes(1))));
-			s.AddJobOrchestrator(jobs => jobs.WithDomain("evotor", evotor =>
-				evotor.Stage("shops").HandledBy<FakeServiceA>().RunPeriodically(TimeSpan.FromMinutes(1))));
+			s.AddJobOrchestrator(jobs => {
+				jobs.UseInMemoryStateStore();
+				jobs.WithDomain("ozon", ozon =>
+					ozon.Stage("offers").HandledBy<FakeServiceB>().RunPeriodically(TimeSpan.FromMinutes(1)));
+			});
+			s.AddJobOrchestrator(jobs => {
+				jobs.UseInMemoryStateStore();
+				jobs.WithDomain("evotor", evotor =>
+					evotor.Stage("shops").HandledBy<FakeServiceA>().RunPeriodically(TimeSpan.FromMinutes(1)));
+			});
 			s.AddSingleton<FakeServiceA>();
 			s.AddSingleton<FakeServiceB>();
 		});
@@ -84,10 +101,14 @@ public sealed class ScenarioMultiCallAccumulationTests {
 		// Два configure-action'а декларируют одно и то же имя — collision ловится на lazy-resolve
 		// StageRegistry, а не на этапе AddJobOrchestrator (probe-pass работает per-call).
 		using var host = BuildHost(s => {
-			s.AddJobOrchestrator(jobs =>
-				jobs.Stage("shared").HandledBy<FakeServiceA>().RunPeriodically(TimeSpan.FromMinutes(1)));
-			s.AddJobOrchestrator(jobs =>
-				jobs.Stage("shared").HandledBy<FakeServiceB>().RunPeriodically(TimeSpan.FromMinutes(1)));
+			s.AddJobOrchestrator(jobs => {
+				jobs.UseInMemoryStateStore();
+				jobs.Stage("shared").HandledBy<FakeServiceA>().RunPeriodically(TimeSpan.FromMinutes(1));
+			});
+			s.AddJobOrchestrator(jobs => {
+				jobs.UseInMemoryStateStore();
+				jobs.Stage("shared").HandledBy<FakeServiceB>().RunPeriodically(TimeSpan.FromMinutes(1));
+			});
 			s.AddSingleton<FakeServiceA>();
 			s.AddSingleton<FakeServiceB>();
 		});
@@ -102,10 +123,14 @@ public sealed class ScenarioMultiCallAccumulationTests {
 		// IJobService-типы из всех configure-вызовов резолвятся через DI как scoped — это
 		// должно произойти ДО первого resolve IJobOrchestrator (probe-pass eager-регистрирует).
 		using var host = BuildHost(s => {
-			s.AddJobOrchestrator(jobs =>
-				jobs.Stage("a").HandledBy<FakeServiceA>().RunPeriodically(TimeSpan.FromMinutes(1)));
-			s.AddJobOrchestrator(jobs =>
-				jobs.Stage("b").HandledBy<FakeServiceB>().RunPeriodically(TimeSpan.FromMinutes(1)));
+			s.AddJobOrchestrator(jobs => {
+				jobs.UseInMemoryStateStore();
+				jobs.Stage("a").HandledBy<FakeServiceA>().RunPeriodically(TimeSpan.FromMinutes(1));
+			});
+			s.AddJobOrchestrator(jobs => {
+				jobs.UseInMemoryStateStore();
+				jobs.Stage("b").HandledBy<FakeServiceB>().RunPeriodically(TimeSpan.FromMinutes(1));
+			});
 			// FakeServiceA/B не регистрируем явно — probe-pass должен сделать TryAddScoped автоматически.
 		});
 

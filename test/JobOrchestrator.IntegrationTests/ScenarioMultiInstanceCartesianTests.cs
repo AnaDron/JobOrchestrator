@@ -26,8 +26,8 @@ public sealed class ScenarioMultiInstanceCartesianTests {
 		b.Services.AddScoped<ShopsStageService>();
 		b.Services.AddScoped<CurrenciesStageService>();
 		b.Services.AddScoped<DocumentsStageService>();
-		b.Services.AddInMemoryJobStateStore();
 		b.Services.AddJobOrchestrator(jobs => {
+			jobs.UseInMemoryStateStore();
 			jobs.Defaults.Debounce = TimeSpan.FromMilliseconds(10);
 			jobs.Defaults.RetryAfterFailure = RetryPolicy.FixedDelay(TimeSpan.FromMilliseconds(50));
 			var shops = jobs.Stage("shops")
