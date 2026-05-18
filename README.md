@@ -95,10 +95,12 @@ SDK оперирует тремя сущностями: **Stage** (immutable д�
 
 ### Эксплуатация (Aura)
 
+- **Один оркестратор на процесс** — граф, keyspace и waiters in-memory; горизонтальное масштабирование нескольких writer'ов без внешнего lease не поддерживается (см. `TODO.md`).
 - **Рестарт процесса** — граф стадий, keyspace и метрики инстансов в RAM; после рестарта нужен bootstrap (`RegisterKey`, первые sync-итерации). Персистентность — через `IJobState` / `IJobStateStore`.
 - **Backpressure** — очередь bounded (10 000), единый `ChannelWriterExtensions` (fast `TryWrite` / slow `WriteAsync`). Внутри `IJobService` и `TriggerAsync` — `PublishAsync` (async). Sync-`Publish` — completion runner-а, DueScanner, `RegisterKey`/`UnregisterKey`; не с HTTP-request thread.
 - **Глобальный лимит** — `jobs.Defaults.GlobalConcurrencyLimit = N` ограничивает суммарный параллелизм итераций поверх `WithConcurrencyLimit` per-stage.
 - **`WaitForOutcomeAsync`** — мемоизирует последний исход (Success/Failure/Cancelled): если итерация уже завершилась, Task резолвится сразу с этим outcome. Чтобы дождаться конкретного запуска — сначала `WaitForOutcomeAsync()`, затем `TriggerAsync()` (см. XML на `IInstanceHandle`).
+- **Устойчивость** — сбой handler'а event loop: `ManualTrigger` TCS завершается исключением; после `HandlerCrashFaultThreshold` подряд (по умолчанию 3) — `MarkFaulted`. Опционально `ConfigureJobOrchestratorHost(o => o.ShutdownIterationTimeout = …)` форсирует cancel running-итераций после graceful shutdown.
 
 ## Сборка и тесты
 

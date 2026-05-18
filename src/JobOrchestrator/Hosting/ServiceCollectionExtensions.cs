@@ -1,4 +1,5 @@
 using System.Threading.Channels;
+using JobOrchestrator.Configuration;
 using JobOrchestrator.Hosting.Keyed;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -63,6 +64,23 @@ public static class ServiceCollectionExtensions {
 		// Append configure в accumulator — multi-singleton-registration.
 		services.AddSingleton<IJobsConfigure>(new JobsConfigure(configure));
 
+		return services;
+	}
+
+	/// <summary>
+	/// Настраивает <see cref="JobOrchestratorHostOptions"/> (fault-threshold handler'ов, shutdown-timeout итераций).
+	/// Вызывать до первого resolve <see cref="Internal.EventLoop"/>; при повторных вызовах побеждает первая регистрация
+	/// (<see cref="ServiceCollectionExtensions.TryAddSingleton{T}(IServiceCollection)"/>).
+	/// </summary>
+	public static IServiceCollection ConfigureJobOrchestratorHost(
+		this IServiceCollection services,
+		Action<JobOrchestratorHostOptions> configure
+	) {
+		ArgumentNullException.ThrowIfNull(services);
+		ArgumentNullException.ThrowIfNull(configure);
+		var options = new JobOrchestratorHostOptions();
+		configure(options);
+		services.AddSingleton(options);
 		return services;
 	}
 
@@ -137,6 +155,7 @@ public static class ServiceCollectionExtensions {
 		services.AddSingleton(_ => CreateEventChannel());
 
 		services.AddSingleton<OrchestratorLifecycle>();
+		services.TryAddSingleton<JobOrchestratorHostOptions>();
 		services.AddSingleton<IJobOrchestrator, JobOrchestratorRuntime>();
 		services.AddHostedService<JobOrchestratorHostedService>();
 
@@ -184,6 +203,7 @@ public static class ServiceCollectionExtensions {
 		services.AddKeyedSingletonWithPropagation<ConcurrencyLimits>(tenantKey);
 		services.AddKeyedSingletonWithPropagation<GlobalIterationLimiter>(tenantKey);
 		services.AddKeyedSingletonWithPropagation<OrchestratorLifecycle>(tenantKey);
+		services.TryAddSingleton<JobOrchestratorHostOptions>();
 		services.AddKeyedSingletonWithPropagation<InstanceCreator>(tenantKey);
 		services.AddKeyedSingletonWithPropagation<StageRunner>(tenantKey);
 		services.AddKeyedSingletonWithPropagation<DueScanner>(tenantKey);

@@ -1,4 +1,6 @@
+using JobOrchestrator.Configuration;
 using JobOrchestrator.Configuration.Internal;
+using JobOrchestrator.Internal;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
@@ -20,6 +22,7 @@ internal sealed class JobOrchestratorHostedService(
 	StageRegistry registry,
 	IServiceProvider services,
 	OrchestratorLifecycle lifecycle,
+	JobOrchestratorHostOptions hostOptions,
 	ILogger<JobOrchestratorHostedService> logger
 ) : BackgroundService {
 	private readonly Guid _instanceId = Guid.NewGuid();
@@ -47,8 +50,10 @@ internal sealed class JobOrchestratorHostedService(
 			await eventLoop.RunAsync(stoppingToken).ConfigureAwait(false);
 			// Штатный shutdown — закрываем channel, чтобы внешние вызовы получили fail-fast вместо подвисания.
 			lifecycle.CloseChannel();
+			await ApplyShutdownIterationTimeoutAsync(stoppingToken).ConfigureAwait(false);
 		} catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) {
 			lifecycle.CloseChannel();
+			await ApplyShutdownIterationTimeoutAsync(stoppingToken).ConfigureAwait(false);
 		} catch (Exception ex) {
 			logger.LogCritical(ex, "JobOrchestrator event loop crashed; оркестрация отключена до рестарта приложения.");
 			lifecycle.MarkFaulted();
@@ -63,6 +68,17 @@ internal sealed class JobOrchestratorHostedService(
 		}
 	}
 
+	private async Task ApplyShutdownIterationTimeoutAsync(CancellationToken stoppingToken) {
+		if (hostOptions.ShutdownIterationTimeout is not { } timeout) return;
+		try {
+			await Task.Delay(timeout, stoppingToken).ConfigureAwait(false);
+		} catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) {
+			// Host уже отменяет stoppingToken — всё равно форсируем cancel workers ниже.
+		}
+		lifecycle.CancelRunningWorkers();
+		Log.ShutdownWorkersCancelled(logger, timeout, null);
+	}
+
 	/// <summary>Pre-allocated delegates для hot-path логов HostedService. EventId-ы 7xxx.</summary>
 	private static class Log {
 		public static readonly Action<ILogger, Guid, Exception?> Starting =
@@ -72,5 +88,9 @@ internal sealed class JobOrchestratorHostedService(
 		public static readonly Action<ILogger, Guid, Exception?> Stopped =
 			LoggerMessage.Define<Guid>(LogLevel.Information, new EventId(7002, nameof(Stopped)),
 				"JobOrchestratorHostedService stopped, instance={InstanceId}.");
+
+		public static readonly Action<ILogger, TimeSpan, Exception?> ShutdownWorkersCancelled =
+			LoggerMessage.Define<TimeSpan>(LogLevel.Information, new EventId(7003, nameof(ShutdownWorkersCancelled)),
+				"Shutdown: running-итерации отменены после ожидания {Timeout}.");
 	}
 }

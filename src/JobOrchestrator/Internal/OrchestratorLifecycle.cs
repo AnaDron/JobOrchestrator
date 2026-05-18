@@ -1,4 +1,5 @@
 using System.Threading.Channels;
+using JobOrchestrator.Configuration;
 
 namespace JobOrchestrator.Internal;
 
@@ -35,6 +36,14 @@ internal sealed class OrchestratorLifecycle(Channel<OrchestratorEvent> channel) 
 	/// <summary>Закрывает Channel без выставления Faulted и без cancel running workers (graceful shutdown).</summary>
 	public void CloseChannel() {
 		channel.Writer.TryComplete();
+	}
+
+	/// <summary>
+	/// Отменяет running-итерации без fault-флага (graceful shutdown после
+	/// <see cref="JobOrchestratorHostOptions.ShutdownIterationTimeout"/>).
+	/// </summary>
+	public void CancelRunningWorkers() {
+		try { _workersCts.Cancel(); } catch (ObjectDisposedException) { }
 	}
 
 	public void Dispose() {

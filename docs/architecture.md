@@ -8,7 +8,7 @@ Job Orchestrator — SDK периодических задач с зависим
 2. **Multi-threaded publishers.** Внешние API (`IJobOrchestrator`), `DueScanner`, fire-and-forget runner-ы публикуют события в Channel из любых потоков. Channel-Writer thread-safe by design.
 3. **Lock-free read API.** `IJobOrchestrator.GetOverview()` — синхронный snapshot через atomic `Volatile.Read` всех мутирующихся полей `Instance` (UtcTicks-encoded). Не идёт через event loop, не блокирует и не аллоцирует CTS.
 4. **DI scope per iteration.** На каждую итерацию `IJobService.ExecuteAsync` создаётся свежий `IServiceScope`. Scoped-сервисы (например, `DbContext`) уникальны для одной итерации — достаточно для большинства транзакционных требований.
-5. **In-memory only.** Граф стадий, состояние инстансов, keyspace, retry-счётчики — RAM. Рестарт = bootstrap с нуля. Состояние БЛ persists через `IJobState` (нейтральный key-value bag), backend через `IJobStateStore` (по умолчанию `InMemoryJobStateStore`; внешние backends — отдельные пакеты).
+5. **In-memory only, single orchestrator per process.** Граф стадий, состояние инстансов, keyspace, retry-счётчики — RAM одного процесса. Несколько инстансов приложения, пишущих в один «логический» граф без внешней координации (lease/leader), **не поддерживаются** — см. `TODO.md` (distributed execution). Рестарт = bootstrap с нуля. Состояние БЛ persists через `IJobState` (нейтральный key-value bag), backend через `IJobStateStore` (по умолчанию `InMemoryJobStateStore`; внешние backends — отдельные пакеты).
 
 ## Поток событий
 
@@ -127,11 +127,16 @@ BeginIteration (после принятия политики):
 
 `OrchestratorLifecycle` владеет тремя состояниями: **Running** (нормальная работа), **Faulted** (краш event loop), **Stopped** (graceful shutdown).
 
-- `MarkFaulted` — выставляет `IsFaulted = true`, cancel-ит `WorkersCancellationToken` (running iterations завершаются досрочно), `channel.Writer.Complete()`. Вызывается из `JobOrchestratorHostedService.ExecuteAsync` в `catch (Exception)`.
-- `CloseChannel` — `channel.Writer.Complete()` без cancel workers. Вызывается при graceful shutdown (workers уже cancel через `BackgroundService.stoppingToken`).
+- `MarkFaulted` — выставляет `IsFaulted = true`, cancel-ит `WorkersCancellationToken` (running iterations завершаются досрочно), `channel.Writer.Complete()`. Вызывается из `JobOrchestratorHostedService.ExecuteAsync` при необработанном исключении всего loop, либо из `EventLoop` после `JobOrchestratorHostOptions.HandlerCrashFaultThreshold` подряд сбоев handler'ов.
+- `CloseChannel` — `channel.Writer.Complete()` без cancel workers. Вызывается при graceful shutdown.
+- `CancelRunningWorkers` — cancel `WorkersCancellationToken` **без** fault; после `CloseChannel` + `ShutdownIterationTimeout` (если задан в `JobOrchestratorHostOptions`).
+
+**Сбой отдельного handler'а** (исключение в `HandleEventAsync`): логируется, loop продолжается; `ManualTriggerRequestedEvent` → `Tcs.TrySetException(ex)`. После N подряд (`HandlerCrashFaultThreshold`, default 3) → `MarkFaulted` и выход из loop.
+
+**Итерации на ThreadPool:** `RunIterationSafeAsync` ловит необработанные исключения runner'а (вне `StageFailed`) и логирует — unobserved task fault не теряется.
 
 После выхода из `EventLoop.RunAsync` любой причиной (cancel/exception/channel-closed) `finally`-блок:
-1. `DrainPendingRequests` — оставшиеся `ManualTriggerRequestedEvent` получают `TrySetResult(Faulted)`. Иначе caller-ы зависли бы на `await tcs.Task`.
+1. `DrainPendingRequests` — `ManualTrigger` → `TrySetException` (shutdown); `StageCompleted`/`Failed` → `EndRunning` + waiters; `TimerTicked` → `ReleasePendingTick` (не залипает pendingTick); прочие события — debug-log и discard.
 2. `FinalizeAllTerminatingAsync` — для застрявших terminating-инстансов вызывается `RemoveScopeAsync` (best-effort, исключения логируются).
 
 После Faulted внешний API (`IJobOrchestrator`):

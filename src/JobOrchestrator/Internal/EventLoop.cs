@@ -1,4 +1,5 @@
 using System.Threading.Channels;
+using JobOrchestrator.Configuration;
 using Microsoft.Extensions.Logging;
 
 namespace JobOrchestrator.Internal;
@@ -43,6 +44,8 @@ internal sealed class EventLoop(
 	OutcomeWaiters outcomeWaiters,
 	Channel<OrchestratorEvent> channel,
 	IJobStateStore stateStore,
+	OrchestratorLifecycle lifecycle,
+	JobOrchestratorHostOptions hostOptions,
 	ILogger<EventLoop> logger,
 	TimeProvider time
 ) {
@@ -61,8 +64,13 @@ internal sealed class EventLoop(
 				} catch (Exception ex) {
 					_handlerCrashCount++;
 					Log.HandlerCrashed(logger, evt.GetType().Name, ex);
-					if (_handlerCrashCount >= 3) {
+					if (evt is ManualTriggerRequestedEvent mt) {
+						mt.Tcs.TrySetException(ex);
+					}
+					if (_handlerCrashCount >= hostOptions.HandlerCrashFaultThreshold) {
 						Log.RepeatedHandlerCrashes(logger, _handlerCrashCount, null);
+						lifecycle.MarkFaulted();
+						break;
 					}
 				}
 			}
@@ -115,6 +123,15 @@ internal sealed class EventLoop(
 				case StageFailedEvent sf:
 					sf.Instance.EndRunning();
 					outcomeWaiters.Signal(sf.Instance.Identity, StageOutcome.FromFailure(sf.Exception));
+					break;
+				case TimerTickedEvent tt:
+					tt.Instance.ReleasePendingTick();
+					break;
+				case KeyAddedEvent ka:
+					Log.DrainDiscardedEvent(logger, nameof(KeyAddedEvent), ka.Source.FullyQualifiedName, ka.Key, null);
+					break;
+				case KeyRemovedEvent kr:
+					Log.DrainDiscardedEvent(logger, nameof(KeyRemovedEvent), kr.Source.FullyQualifiedName, kr.Key, null);
 					break;
 			}
 		}
@@ -213,13 +230,21 @@ internal sealed class EventLoop(
 		instance.SetMetrics(instance.Metrics with { NextAutoUtc = null });
 		try {
 			Log.BeginIteration(logger, instance.FullyQualifiedName, trigger, null);
-			_ = Task.Run(() => runner.RunIterationAsync(instance, trigger, ct), ct);
+			_ = Task.Run(() => RunIterationSafeAsync(instance, trigger, ct), ct);
 			return TriggerResult.Started;
 		} catch {
 			instance.EndRunning();
 			concurrency.Release(instance.Stage);
 			globalLimiter.Release();
 			throw;
+		}
+	}
+
+	private async Task RunIterationSafeAsync(Instance instance, TriggerSource trigger, CancellationToken ct) {
+		try {
+			await runner.RunIterationAsync(instance, trigger, ct).ConfigureAwait(false);
+		} catch (Exception ex) {
+			Log.UnhandledIterationFault(logger, instance.FullyQualifiedName, ex);
 		}
 	}
 
@@ -529,6 +554,14 @@ internal sealed class EventLoop(
 
 		public static readonly Action<ILogger, int, Exception?> RepeatedHandlerCrashes =
 			LoggerMessage.Define<int>(LogLevel.Warning, new EventId(3025, nameof(RepeatedHandlerCrashes)),
-				"Event loop: {CrashCount} подряд сбоев обработчиков событий — проверьте исключения выше");
+				"Event loop: {CrashCount} подряд сбоев обработчиков событий — оркестратор переведён в fault");
+
+		public static readonly Action<ILogger, string, Exception?> UnhandledIterationFault =
+			LoggerMessage.Define<string>(LogLevel.Error, new EventId(3027, nameof(UnhandledIterationFault)),
+				"Необработанное исключение итерации {Instance} (runner завершился вне StageFailed)");
+
+		public static readonly Action<ILogger, string, string, string, Exception?> DrainDiscardedEvent =
+			LoggerMessage.Define<string, string, string>(LogLevel.Debug, new EventId(3028, nameof(DrainDiscardedEvent)),
+				"Shutdown drain: событие {EventType} для {Instance} (key={Key}) снято без обработки");
 	}
 }
