@@ -107,11 +107,10 @@ internal sealed class StageInitializer : IStageInitializer {
 				list.Add(dependent);
 			}
 		}
-		var w = new Dictionary<string, IReadOnlyList<StageDescriptor>>(whole.Count, StringComparer.Ordinal);
-		foreach (var kv in whole) w[kv.Key] = kv.Value;
-		var i = new Dictionary<string, IReadOnlyList<StageDescriptor>>(instance.Count, StringComparer.Ordinal);
-		foreach (var kv in instance) i[kv.Key] = kv.Value;
-		return (w, i);
+		return (
+			whole.ToDictionary(kv => kv.Key, kv => (IReadOnlyList<StageDescriptor>)kv.Value, StringComparer.Ordinal),
+			instance.ToDictionary(kv => kv.Key, kv => (IReadOnlyList<StageDescriptor>)kv.Value, StringComparer.Ordinal)
+		);
 	}
 
 	/// <summary>
@@ -122,18 +121,7 @@ internal sealed class StageInitializer : IStageInitializer {
 		StageRegistry registry,
 		IReadOnlyDictionary<string, IReadOnlyList<(string TargetName, DependencyMode Mode)>> rawDeps
 	) {
-		// Forward adjacency: parentName → имена стадий, которые на него зависят (любым modes).
-		var forward = new Dictionary<string, List<string>>(StringComparer.Ordinal);
-		foreach (var kv in rawDeps) {
-			foreach (var rd in kv.Value) {
-				if (!forward.TryGetValue(rd.TargetName, out var list)) {
-					list = [];
-					forward[rd.TargetName] = list;
-				}
-				list.Add(kv.Key);
-			}
-		}
-
+		var forward = BuildForwardAdjacency(rawDeps);
 		var result = new Dictionary<string, IReadOnlyList<StageDescriptor>>(rawDeps.Count, StringComparer.Ordinal);
 		foreach (var rootName in rawDeps.Keys) {
 			var visited = new HashSet<string>(StringComparer.Ordinal);
@@ -142,8 +130,7 @@ internal sealed class StageInitializer : IStageInitializer {
 			queue.Enqueue(rootName);
 			while (queue.Count > 0) {
 				var current = queue.Dequeue();
-				if (!forward.TryGetValue(current, out var children)) continue;
-				foreach (var child in children) {
+				foreach (var child in forward[current]) {
 					if (visited.Add(child)) {
 						closure.Add(registry.Get(child));
 						queue.Enqueue(child);
@@ -161,15 +148,7 @@ internal sealed class StageInitializer : IStageInitializer {
 	private static Dictionary<string, int> ComputeCancellationRank(
 		IReadOnlyDictionary<string, IReadOnlyList<(string TargetName, DependencyMode Mode)>> rawDeps
 	) {
-		// Forward adjacency: parentName → имена стадий, которые на него зависят.
-		var forward = new Dictionary<string, List<string>>(StringComparer.Ordinal);
-		foreach (var name in rawDeps.Keys) forward[name] = [];
-		foreach (var kv in rawDeps) {
-			foreach (var rd in kv.Value) {
-				if (forward.TryGetValue(rd.TargetName, out var list)) list.Add(kv.Key);
-			}
-		}
-
+		var forward = BuildForwardAdjacency(rawDeps);
 		var rank = new Dictionary<string, int>(rawDeps.Count, StringComparer.Ordinal);
 		foreach (var name in rawDeps.Keys) _ = Compute(name);
 		return rank;
@@ -184,5 +163,23 @@ internal sealed class StageInitializer : IStageInitializer {
 			rank[node] = max;
 			return max;
 		}
+	}
+
+	/// <summary>
+	/// Строит forward-граф: parentName → список имён стадий, зависящих от него (любым режимом).
+	/// Все ключи rawDeps предварительно инициализированы пустыми списками, поэтому прямой доступ
+	/// по индексатору безопасен для любого известного имени стадии.
+	/// </summary>
+	private static Dictionary<string, List<string>> BuildForwardAdjacency(
+		IReadOnlyDictionary<string, IReadOnlyList<(string TargetName, DependencyMode Mode)>> rawDeps
+	) {
+		var forward = new Dictionary<string, List<string>>(rawDeps.Count, StringComparer.Ordinal);
+		foreach (var name in rawDeps.Keys) forward[name] = [];
+		foreach (var (stageName, deps) in rawDeps) {
+			foreach (var (targetName, _) in deps) {
+				if (forward.TryGetValue(targetName, out var list)) list.Add(stageName);
+			}
+		}
+		return forward;
 	}
 }

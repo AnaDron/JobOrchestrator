@@ -133,11 +133,7 @@ public static class ServiceCollectionExtensions {
 
 		// Bounded channel: backpressure через Wait. При заполнении внешние писатели (Manual triggers,
 		// RegisterKey) подождут места; event loop как consumer обычно их быстро разгружает.
-		services.AddSingleton(_ => Channel.CreateBounded<OrchestratorEvent>(new BoundedChannelOptions(ChannelCapacity) {
-			SingleReader = true,
-			SingleWriter = false,
-			FullMode = BoundedChannelFullMode.Wait,
-		}));
+		services.AddSingleton(_ => CreateEventChannel());
 
 		services.AddSingleton<OrchestratorLifecycle>();
 		services.AddSingleton<IJobOrchestrator, JobOrchestratorRuntime>();
@@ -175,12 +171,7 @@ public static class ServiceCollectionExtensions {
 		});
 
 		// Per-tenant bounded channel — фабрика обязательна (у Channel нет конструктора).
-		services.AddKeyedSingleton<Channel<OrchestratorEvent>>(tenantKey, (_, _) =>
-			Channel.CreateBounded<OrchestratorEvent>(new BoundedChannelOptions(ChannelCapacity) {
-				SingleReader = true,
-				SingleWriter = false,
-				FullMode = BoundedChannelFullMode.Wait,
-			}));
+		services.AddKeyedSingleton(tenantKey, (_, _) => CreateEventChannel());
 
 		// Простые keyed-singleton'ы без keyed-зависимостей — дефолтный ActivatorUtilities-резолв.
 		services.AddKeyedSingleton<InstanceManager>(tenantKey);
@@ -206,6 +197,13 @@ public static class ServiceCollectionExtensions {
 		// Shared infrastructure: TimeProvider может быть уже зарегистрирован хостом.
 		services.TryAddSingleton(TimeProvider.System);
 	}
+
+	private static Channel<OrchestratorEvent> CreateEventChannel() =>
+		Channel.CreateBounded<OrchestratorEvent>(new BoundedChannelOptions(ChannelCapacity) {
+			SingleReader = true,
+			SingleWriter = false,
+			FullMode = BoundedChannelFullMode.Wait,
+		});
 
 	/// <summary>
 	/// Регистрирует <typeparamref name="T"/> как keyed-singleton под <paramref name="key"/>,

@@ -28,7 +28,7 @@ internal sealed class JobOrchestratorHostedService(
 	public override async Task StartAsync(CancellationToken cancellationToken) {
 		// Fail-fast: ловим misconfiguration на старте, а не на первой итерации стадии.
 		ConfigurationValidator.ValidateServiceRegistrations(registry.AllStages, services);
-		logger.LogInformation("JobOrchestratorHostedService starting, instance={InstanceId}", _instanceId);
+		Log.Starting(logger, _instanceId, null);
 		await base.StartAsync(cancellationToken).ConfigureAwait(false);
 	}
 
@@ -38,7 +38,7 @@ internal sealed class JobOrchestratorHostedService(
 		// строка в логе stopped.
 		if (Interlocked.Exchange(ref _stopGate, 1) != 0) return;
 		await base.StopAsync(cancellationToken).ConfigureAwait(false);
-		logger.LogInformation("JobOrchestratorHostedService stopped, instance={InstanceId}", _instanceId);
+		Log.Stopped(logger, _instanceId, null);
 	}
 
 	protected override async Task ExecuteAsync(CancellationToken stoppingToken) {
@@ -61,5 +61,16 @@ internal sealed class JobOrchestratorHostedService(
 				logger.LogWarning(ex, "DueScanner завершился с ошибкой.");
 			}
 		}
+	}
+
+	/// <summary>Pre-allocated delegates для hot-path логов HostedService. EventId-ы 7xxx.</summary>
+	private static class Log {
+		public static readonly Action<ILogger, Guid, Exception?> Starting =
+			LoggerMessage.Define<Guid>(LogLevel.Information, new EventId(7001, nameof(Starting)),
+				"JobOrchestratorHostedService starting, instance={InstanceId}.");
+
+		public static readonly Action<ILogger, Guid, Exception?> Stopped =
+			LoggerMessage.Define<Guid>(LogLevel.Information, new EventId(7002, nameof(Stopped)),
+				"JobOrchestratorHostedService stopped, instance={InstanceId}.");
 	}
 }
