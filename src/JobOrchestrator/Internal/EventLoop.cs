@@ -564,11 +564,11 @@ internal sealed class EventLoop(
 				"Event loop: {CrashCount} подряд сбоев обработчиков событий — оркестратор переведён в fault");
 
 		public static readonly Action<ILogger, string, Exception?> UnhandledIterationFault =
-			LoggerMessage.Define<string>(LogLevel.Error, new EventId(3027, nameof(UnhandledIterationFault)),
+			LoggerMessage.Define<string>(LogLevel.Error, new EventId(3026, nameof(UnhandledIterationFault)),
 				"Необработанное исключение итерации {Instance} (runner завершился вне StageFailed)");
 
 		public static readonly Action<ILogger, string, string, string, Exception?> DrainDiscardedEvent =
-			LoggerMessage.Define<string, string, string>(LogLevel.Debug, new EventId(3028, nameof(DrainDiscardedEvent)),
+			LoggerMessage.Define<string, string, string>(LogLevel.Debug, new EventId(3027, nameof(DrainDiscardedEvent)),
 				"Shutdown drain: событие {EventType} для {Instance} (key={Key}) снято без обработки");
 	}
 }

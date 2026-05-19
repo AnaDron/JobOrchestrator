@@ -55,7 +55,7 @@ internal sealed class JobOrchestratorHostedService(
 			lifecycle.CloseChannel();
 			await ApplyShutdownIterationTimeoutAsync(stoppingToken).ConfigureAwait(false);
 		} catch (Exception ex) {
-			logger.LogCritical(ex, "JobOrchestrator event loop crashed; оркестрация отключена до рестарта приложения.");
+			Log.EventLoopCrashed(logger, ex);
 			lifecycle.MarkFaulted();
 			// НЕ throw — иначе BackgroundService.StopHost остановит весь хост.
 		} finally {
@@ -63,7 +63,7 @@ internal sealed class JobOrchestratorHostedService(
 			try {
 				await scannerTask.ConfigureAwait(false);
 			} catch (Exception ex) when (ex is not OperationCanceledException) {
-				logger.LogWarning(ex, "DueScanner завершился с ошибкой.");
+				Log.DueScannerFaulted(logger, ex);
 			}
 		}
 	}
@@ -92,5 +92,13 @@ internal sealed class JobOrchestratorHostedService(
 		public static readonly Action<ILogger, TimeSpan, Exception?> ShutdownWorkersCancelled =
 			LoggerMessage.Define<TimeSpan>(LogLevel.Information, new EventId(7003, nameof(ShutdownWorkersCancelled)),
 				"Shutdown: running-итерации отменены после ожидания {Timeout}.");
+
+		public static readonly Action<ILogger, Exception?> EventLoopCrashed =
+			LoggerMessage.Define(LogLevel.Critical, new EventId(7004, nameof(EventLoopCrashed)),
+				"JobOrchestrator event loop crashed; оркестрация отключена до рестарта приложения.");
+
+		public static readonly Action<ILogger, Exception?> DueScannerFaulted =
+			LoggerMessage.Define(LogLevel.Warning, new EventId(7005, nameof(DueScannerFaulted)),
+				"DueScanner завершился с ошибкой.");
 	}
 }
