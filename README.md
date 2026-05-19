@@ -100,7 +100,7 @@ SDK оперирует тремя сущностями: **Stage** (immutable д�
 - **Backpressure** — очередь bounded (10 000), единый `ChannelWriterExtensions` (fast `TryWrite` / slow `WriteAsync`). Внутри `IJobService` и `TriggerAsync` — `PublishAsync` (async). Sync-`Publish` — completion runner-а, DueScanner, `RegisterKey`/`UnregisterKey`; не с HTTP-request thread.
 - **Глобальный лимит** — `jobs.Defaults.GlobalConcurrencyLimit = N` ограничивает суммарный параллелизм итераций поверх `WithConcurrencyLimit` per-stage.
 - **`WaitForOutcomeAsync`** — мемоизирует последний исход (Success/Failure/Cancelled): если итерация уже завершилась, Task резолвится сразу с этим outcome. Чтобы дождаться конкретного запуска — сначала `WaitForOutcomeAsync()`, затем `TriggerAsync()` (см. XML на `IInstanceHandle`).
-- **Устойчивость** — сбой handler'а event loop: `ManualTrigger` TCS завершается исключением; после `HandlerCrashFaultThreshold` подряд (по умолчанию 3) — `MarkFaulted`. Опционально `ConfigureJobOrchestratorHost(o => o.ShutdownIterationTimeout = …)` форсирует cancel running-итераций после graceful shutdown.
+- **Устойчивость** — `ManualTrigger` TCS при сбое handler'а; мутирующие события (ключи/completion/tick) → fault сразу (`FaultOnStateMutatingHandlerCrash`, default on). Иначе fault после N подряд. `ConcurrencyDeferJitterMaxMilliseconds` (default 500) при лимитах. `ShutdownIterationTimeout` — принудительный cancel итераций после shutdown.
 
 ## Сборка и тесты
 

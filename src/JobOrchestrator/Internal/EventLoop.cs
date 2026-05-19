@@ -67,8 +67,14 @@ internal sealed class EventLoop(
 					if (evt is ManualTriggerRequestedEvent mt) {
 						mt.Tcs.TrySetException(ex);
 					}
-					if (_handlerCrashCount >= hostOptions.HandlerCrashFaultThreshold) {
-						Log.RepeatedHandlerCrashes(logger, _handlerCrashCount, null);
+					var stateMutatingCrash = hostOptions.FaultOnStateMutatingHandlerCrash && IsStateMutatingHandlerEvent(evt);
+					if (stateMutatingCrash) {
+						Log.StateMutatingHandlerCrashFault(logger, evt.GetType().Name, null);
+					}
+					if (stateMutatingCrash || _handlerCrashCount >= hostOptions.HandlerCrashFaultThreshold) {
+						if (!stateMutatingCrash) {
+							Log.RepeatedHandlerCrashes(logger, _handlerCrashCount, null);
+						}
 						lifecycle.MarkFaulted();
 						break;
 					}
@@ -97,9 +103,8 @@ internal sealed class EventLoop(
 	/// шанс отдать реальный исход подписчикам, которые иначе получат «оркестратор остановлен» вместо
 	/// фактического Success/Failure.
 	/// <para>
-	/// Для completion-событий копируем ИЗ event-loop-handler-а только waiter-сигналы — без
-	/// <c>SetMetrics</c> (метрики live-in-memory, не персистятся) и без cascade на first-success
-	/// (родил бы новые <c>CreateAndStart</c>-события в Channel, который мы уже не вычитаем).
+	/// Для completion-событий — метрики + waiters + <c>EndRunning</c> (как в handler, без first-success cascade).
+	/// Cascade в закрытый channel не ставим.
 	/// </para>
 	/// </summary>
 	private void DrainPendingRequests() {
@@ -116,13 +121,10 @@ internal sealed class EventLoop(
 				// _running-флаг + сигналим waiter-ам реальный исход (иначе FailAll ниже резолвит их
 				// «остановлен», маскируя фактический Success/Failure).
 				case StageCompletedEvent sc:
-					sc.Instance.EndRunning();
-					successWaiters.SignalSuccess(sc.Instance.Identity);
-					outcomeWaiters.Signal(sc.Instance.Identity, StageOutcome.Success);
+					DrainStageCompleted(sc);
 					break;
 				case StageFailedEvent sf:
-					sf.Instance.EndRunning();
-					outcomeWaiters.Signal(sf.Instance.Identity, StageOutcome.FromFailure(sf.Exception));
+					DrainStageFailed(sf);
 					break;
 				case TimerTickedEvent tt:
 					tt.Instance.ReleasePendingTick();
@@ -205,7 +207,9 @@ internal sealed class EventLoop(
 	/// Запускает итерацию инстанса. Возвращает фактический результат запуска:
 	/// <list type="bullet">
 	/// <item><see cref="TriggerResult.Started"/> — итерация запущена на ThreadPool.</item>
-	/// <item><see cref="TriggerResult.ConcurrencyDeferred"/> — глобальный или per-stage лимит; re-schedule через 1 сек.</item>
+	/// <item><see cref="TriggerResult.ConcurrencyDeferred"/> — глобальный или per-stage лимит. Для Auto-тика
+	/// re-schedule через ~1 сек + jitter, DueScanner подберёт при освобождении лимита; для Manual —
+	/// возврат caller'у без re-schedule (caller сам решает, когда повторить).</item>
 	/// </list>
 	/// Возвращаемое значение используется <see cref="HandleManualTrigger"/> для точного TCS-результата.
 	/// При Auto-тике (TimerTick) результат игнорируется — DueScanner повторит при следующем scan.
@@ -215,12 +219,12 @@ internal sealed class EventLoop(
 		// глобальный, чтобы не делать холостые global-acquire/release-циклы под нагрузкой
 		// «много стадий с ConcurrencyLimit=1 + длинные runner-ы».
 		if (!concurrency.TryAcquire(instance.Stage)) {
-			DeferIteration(instance);
+			DeferIteration(instance, trigger);
 			return TriggerResult.ConcurrencyDeferred;
 		}
 		if (!globalLimiter.TryAcquire()) {
 			concurrency.Release(instance.Stage);
-			DeferIteration(instance);
+			DeferIteration(instance, trigger);
 			return TriggerResult.ConcurrencyDeferred;
 		}
 		if (!instance.TryBeginRunning()) {
@@ -251,10 +255,92 @@ internal sealed class EventLoop(
 		}
 	}
 
-	private void DeferIteration(Instance instance) {
+	private void DeferIteration(Instance instance, TriggerSource trigger) {
 		Log.ConcurrencyDeferred(logger, instance.FullyQualifiedName, instance.Stage.Name, null);
-		instance.SetMetrics(instance.Metrics with { NextAutoUtc = time.GetUtcNow() + TimeSpan.FromSeconds(1) });
+		// Manual: caller сразу получает ConcurrencyDeferred и сам решает, когда повторить —
+		// не трогаем NextAutoUtc (existing auto-расписание остаётся), не будим scanner.
+		// Auto-tick: re-schedule через NextAutoUtc + jitter, DueScanner подберёт при освобождении лимита.
+		if (trigger != TriggerSource.Auto) return;
+		instance.SetMetrics(instance.Metrics with { NextAutoUtc = ComputeDeferredNextAutoUtc() });
 		scanner.Wake();
+	}
+
+	private DateTimeOffset ComputeDeferredNextAutoUtc() {
+		var delay = TimeSpan.FromSeconds(1);
+		var jitterMaxMs = hostOptions.ConcurrencyDeferJitterMaxMilliseconds;
+		if (jitterMaxMs > 0) {
+			delay += TimeSpan.FromMilliseconds(Random.Shared.Next(0, jitterMaxMs + 1));
+		}
+		return time.GetUtcNow() + delay;
+	}
+
+	/// <summary>
+	/// Событие, обработка которого мутирует граф/keyspace/метрики оркестратора. Сбой handler'а на таком
+	/// событии оставляет частичное состояние, поэтому при <see cref="JobOrchestratorHostOptions.FaultOnStateMutatingHandlerCrash"/>
+	/// сразу триггерим fault.
+	/// <para>
+	/// <see cref="ManualTriggerRequestedEvent"/> сознательно НЕ включён: это внешний user-request,
+	/// и его сбой не должен валить весь оркестратор — caller всё равно получает exception через
+	/// <c>mt.Tcs.TrySetException(ex)</c> в catch-блоке выше. <see cref="TimerTickedEvent"/> включён,
+	/// потому что внутренний tick → <c>BeginIteration</c> → семафоры/<c>RunCts</c>/<c>_running</c>
+	/// могут оставить частично-захваченные ресурсы при сбое.
+	/// </para>
+	/// </summary>
+	private static bool IsStateMutatingHandlerEvent(OrchestratorEvent evt) =>
+		evt is KeyAddedEvent or KeyRemovedEvent or StageCompletedEvent or StageFailedEvent or TimerTickedEvent;
+
+	private void DrainStageCompleted(StageCompletedEvent sc) {
+		var instance = sc.Instance;
+		if (instance.IsTerminating) {
+			instance.EndRunning();
+			return;
+		}
+		if (instances.Find(instance.Identity) != instance) return;
+		if (!instance.IsRunning) return;
+
+		ApplyStageCompletedMetrics(instance, sc.At);
+		successWaiters.SignalSuccess(instance.Identity);
+		outcomeWaiters.Signal(instance.Identity, StageOutcome.Success);
+		instance.EndRunning();
+	}
+
+	private void DrainStageFailed(StageFailedEvent sf) {
+		var instance = sf.Instance;
+		if (instance.IsTerminating) {
+			instance.EndRunning();
+			return;
+		}
+		if (instances.Find(instance.Identity) != instance) return;
+		if (!instance.IsRunning) return;
+
+		ApplyStageFailedMetrics(instance, sf.Exception, sf.At);
+		outcomeWaiters.Signal(instance.Identity, StageOutcome.FromFailure(sf.Exception));
+		instance.EndRunning();
+	}
+
+	private bool ApplyStageCompletedMetrics(Instance instance, DateTimeOffset at) {
+		var current = instance.Metrics;
+		bool wasFirstSuccess = !current.LastSuccess.HasValue;
+		instance.SetMetrics(new JobMetrics(
+			LastSuccess: at,
+			LastAttempt: at,
+			ConsecutiveFailures: 0,
+			LastError: null,
+			NextAutoUtc: at + instance.Stage.Interval));
+		return wasFirstSuccess;
+	}
+
+	private void ApplyStageFailedMetrics(Instance instance, Exception ex, DateTimeOffset at) {
+		var current = instance.Metrics;
+		var failures = current.ConsecutiveFailures + 1;
+		var retryDelay = instance.Stage.RetryPolicy.ComputeDelay(failures);
+		var nextDelay = retryDelay > TimeSpan.Zero ? retryDelay : instance.Stage.Interval;
+		instance.SetMetrics(current with {
+			LastAttempt = at,
+			ConsecutiveFailures = failures,
+			LastError = ex.Message,
+			NextAutoUtc = at + nextDelay,
+		});
 	}
 
 	private void HandleKeyAdded(Instance source, string key) {
@@ -375,16 +461,7 @@ internal sealed class EventLoop(
 		if (!instance.IsRunning) return;
 
 		try {
-			var current = instance.Metrics;
-			bool wasFirstSuccess = !current.LastSuccess.HasValue;
-			// NextAutoUtc вычисляется от `at` (фактическое завершение runner-а), не от now — корректное
-			// расписание даже под backlog'ом event-loop'а.
-			instance.SetMetrics(new JobMetrics(
-				LastSuccess: at,                   // монотонно: не сбрасывается на последующих неуспехах
-				LastAttempt: at,
-				ConsecutiveFailures: 0,
-				LastError: null,
-				NextAutoUtc: at + instance.Stage.Interval));
+			bool wasFirstSuccess = ApplyStageCompletedMetrics(instance, at);
 
 			// Сигналим waiters ПОСЛЕ обновления метрик — late-register увидит LastSuccess через fast-path.
 			successWaiters.SignalSuccess(instance.Identity);
@@ -420,17 +497,7 @@ internal sealed class EventLoop(
 		if (!instance.IsRunning) return;
 
 		try {
-			var current = instance.Metrics;
-			var failures = current.ConsecutiveFailures + 1;
-			var retryDelay = instance.Stage.RetryPolicy.ComputeDelay(failures);
-			var nextDelay = retryDelay > TimeSpan.Zero ? retryDelay : instance.Stage.Interval;
-			// LastSuccess НЕ меняется — монотонная метка. NextAutoUtc от `at`, не от now.
-			instance.SetMetrics(current with {
-				LastAttempt = at,
-				ConsecutiveFailures = failures,
-				LastError = ex.Message,
-				NextAutoUtc = at + nextDelay,
-			});
+			ApplyStageFailedMetrics(instance, ex, at);
 
 			// Outcome=Failure. SuccessWaiters не сигналим — этот цикл не success.
 			outcomeWaiters.Signal(instance.Identity, StageOutcome.FromFailure(ex));
@@ -570,5 +637,9 @@ internal sealed class EventLoop(
 		public static readonly Action<ILogger, string, string, string, Exception?> DrainDiscardedEvent =
 			LoggerMessage.Define<string, string, string>(LogLevel.Debug, new EventId(3027, nameof(DrainDiscardedEvent)),
 				"Shutdown drain: событие {EventType} для {Instance} (key={Key}) снято без обработки");
+
+		public static readonly Action<ILogger, string, Exception?> StateMutatingHandlerCrashFault =
+			LoggerMessage.Define<string>(LogLevel.Critical, new EventId(3029, nameof(StateMutatingHandlerCrashFault)),
+				"Сбой handler'а на мутирующем событии {EventType} — оркестратор переведён в fault (частичное состояние недопустимо)");
 	}
 }

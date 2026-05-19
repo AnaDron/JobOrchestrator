@@ -8,10 +8,24 @@ public sealed class JobOrchestratorHostOptions {
 	public const int DefaultHandlerCrashFaultThreshold = 3;
 
 	/// <summary>
-	/// Подряд сбоев <see cref="Internal.EventLoop"/>-handler'ов до перевода оркестратора в fault.
+	/// Подряд сбоев <see cref="Internal.EventLoop"/>-handler'ов до перевода оркестратора в fault
+	/// (для событий, не покрытых <see cref="FaultOnStateMutatingHandlerCrash"/>).
 	/// Manual-trigger TCS при любом сбое handler'а завершается исключением.
 	/// </summary>
 	public int HandlerCrashFaultThreshold { get; set; } = DefaultHandlerCrashFaultThreshold;
+
+	/// <summary>
+	/// При <c>true</c> (по умолчанию) первый сбой handler'а на событии, мутирующем граф/keyspace/метрики
+	/// (AddKey/RemoveKey, completion, auto-tick), сразу вызывает fault — иначе возможно частичное
+	/// состояние (ключ в keyspace без cascade и т.п.).
+	/// </summary>
+	public bool FaultOnStateMutatingHandlerCrash { get; set; } = true;
+
+	/// <summary>
+	/// Случайный разброс (0..N мс) к отложенному <c>NextAutoUtc</c> при <see cref="TriggerResult.ConcurrencyDeferred"/>,
+	/// чтобы DueScanner не будил все deferred-инстансы в одну миллисекунду. <c>0</c> — без jitter.
+	/// </summary>
+	public int ConcurrencyDeferJitterMaxMilliseconds { get; set; } = 500;
 
 	/// <summary>
 	/// После <see cref="Internal.OrchestratorLifecycle.CloseChannel"/> при graceful shutdown: максимальное

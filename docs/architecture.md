@@ -131,12 +131,14 @@ BeginIteration (после принятия политики):
 - `CloseChannel` — `channel.Writer.Complete()` без cancel workers. Вызывается при graceful shutdown.
 - `CancelRunningWorkers` — cancel `WorkersCancellationToken` **без** fault; после `CloseChannel` + `ShutdownIterationTimeout` (если задан в `JobOrchestratorHostOptions`).
 
-**Сбой отдельного handler'а** (исключение в `HandleEventAsync`): логируется, loop продолжается; `ManualTriggerRequestedEvent` → `Tcs.TrySetException(ex)`. После N подряд (`HandlerCrashFaultThreshold`, default 3) → `MarkFaulted` и выход из loop.
+**Сбой отдельного handler'а** (исключение в `HandleEventAsync`): `ManualTriggerRequestedEvent` → `Tcs.TrySetException(ex)`. Если `FaultOnStateMutatingHandlerCrash` (default **true**) и событие мутирует граф (AddKey/RemoveKey, completion, tick) — **сразу** `MarkFaulted`. Иначе loop продолжается до `HandlerCrashFaultThreshold` подряд (default 3).
 
 **Итерации на ThreadPool:** `RunIterationSafeAsync` ловит необработанные исключения runner'а (вне `StageFailed`) и логирует — unobserved task fault не теряется.
 
+**ConcurrencyDeferred:** `NextAutoUtc = now + 1s + jitter(0..ConcurrencyDeferJitterMaxMilliseconds)` (default 500 ms) — снижает thundering herd на глобальном/per-stage лимите.
+
 После выхода из `EventLoop.RunAsync` любой причиной (cancel/exception/channel-closed) `finally`-блок:
-1. `DrainPendingRequests` — `ManualTrigger` → `TrySetException` (shutdown); `StageCompleted`/`Failed` → `EndRunning` + waiters; `TimerTicked` → `ReleasePendingTick` (не залипает pendingTick); прочие события — debug-log и discard.
+1. `DrainPendingRequests` — `ManualTrigger` → `TrySetException` (shutdown); `StageCompleted`/`Failed` → **метрики** + waiters + `EndRunning` (без first-success cascade); `TimerTicked` → `ReleasePendingTick`; KeyAdded/Removed — debug-log и discard.
 2. `FinalizeAllTerminatingAsync` — для застрявших terminating-инстансов вызывается `RemoveScopeAsync` (best-effort, исключения логируются).
 
 После Faulted внешний API (`IJobOrchestrator`):
