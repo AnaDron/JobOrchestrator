@@ -19,11 +19,11 @@ public sealed class ScenarioShutdownTimeoutTests {
 		};
 
 		using var host = TestHostFactory.Build(
-			configure: jobs => jobs.Stage("a").HandledBy<FakeServiceA>().RunPeriodically(TimeSpan.FromMinutes(1)),
-			registerFakes: s => {
-				s.ConfigureJobOrchestratorHost(o => o.ShutdownIterationTimeout = TimeSpan.FromMilliseconds(300));
-				s.AddSingleton(fake);
-			});
+			configure: jobs => {
+				jobs.ConfigureJobOrchestratorHost(o => o.ShutdownIterationTimeout = TimeSpan.FromMilliseconds(300));
+				jobs.Stage("a").HandledBy<FakeServiceA>().RunPeriodically(TimeSpan.FromMinutes(1));
+			},
+			registerFakes: s => s.AddSingleton(fake));
 
 		await host.StartAsync().ConfigureAwait(false);
 		try {

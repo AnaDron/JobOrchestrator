@@ -70,23 +70,6 @@ public static class ServiceCollectionExtensions {
 	}
 
 	/// <summary>
-	/// Настраивает <see cref="JobOrchestratorHostOptions"/> (fault-threshold handler'ов, shutdown-timeout итераций).
-	/// Вызывать до первого resolve <see cref="Internal.EventLoop"/>; при повторных вызовах побеждает первая регистрация
-	/// (<see cref="ServiceCollectionExtensions.TryAddSingleton{T}(IServiceCollection)"/>).
-	/// </summary>
-	public static IServiceCollection ConfigureJobOrchestratorHost(
-		this IServiceCollection services,
-		Action<JobOrchestratorHostOptions> configure
-	) {
-		ArgumentNullException.ThrowIfNull(services);
-		ArgumentNullException.ThrowIfNull(configure);
-		var options = new JobOrchestratorHostOptions();
-		configure(options);
-		services.AddSingleton(options);
-		return services;
-	}
-
-	/// <summary>
 	/// Регистрирует Job Orchestrator для конкретного <paramref name="tenantKey"/> с keyed-services
 	/// изоляцией (Path A). Каждый tenant получает свой полный набор keyed-singleton'ов:
 	/// <see cref="Internal.StageRegistry"/>, <see cref="Internal.InstanceManager"/>, channel, event loop,
@@ -205,11 +188,16 @@ public static class ServiceCollectionExtensions {
 		services.AddKeyedSingleton<SuccessWaiters>(tenantKey);
 		services.AddKeyedSingleton<OutcomeWaiters>(tenantKey);
 
+		// Per-tenant дефолтный HostOptions: keyed-singleton под tenantKey. Пользовательский override
+		// через jobs.ConfigureJobOrchestratorHost(...) уже зарегистрирован на probe-pass ДО этой
+		// строки — TryAdd-семантика делает дефолт no-op в этом случае. Без tenant'а tenants делили бы
+		// один экземпляр HostOptions, нарушая инфраструктурную изоляцию.
+		services.TryAddKeyedSingleton<JobOrchestratorHostOptions>(tenantKey, (_, _) => new JobOrchestratorHostOptions());
+
 		// Keyed-сервисы с keyed-зависимостями — авто-пропагация ключа через wrapper.
 		services.AddKeyedSingletonWithPropagation<ConcurrencyLimits>(tenantKey);
 		services.AddKeyedSingletonWithPropagation<GlobalIterationLimiter>(tenantKey);
 		services.AddKeyedSingletonWithPropagation<OrchestratorLifecycle>(tenantKey);
-		services.TryAddSingleton<JobOrchestratorHostOptions>();
 		services.AddKeyedSingletonWithPropagation<InstanceCreator>(tenantKey);
 		services.AddKeyedSingletonWithPropagation<StageRunner>(tenantKey);
 		services.AddKeyedSingletonWithPropagation<DueScanner>(tenantKey);
