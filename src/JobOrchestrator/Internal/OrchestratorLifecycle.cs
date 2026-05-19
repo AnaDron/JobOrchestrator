@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Threading.Channels;
 using JobOrchestrator.Configuration;
 
@@ -14,6 +15,8 @@ namespace JobOrchestrator.Internal;
 /// через BackgroundService.stoppingToken).
 /// </para>
 /// </summary>
+[SuppressMessage("Usage", "CA1816:Dispose methods should call SuppressFinalize",
+	Justification = "Sealed class без финализатора — GC.SuppressFinalize был бы no-op и misleading.")]
 internal sealed class OrchestratorLifecycle(Channel<OrchestratorEvent> channel) : IDisposable {
 	private readonly CancellationTokenSource _workersCts = new();
 	private volatile bool _faulted;
@@ -50,6 +53,5 @@ internal sealed class OrchestratorLifecycle(Channel<OrchestratorEvent> channel) 
 		if (_disposed) return;
 		_disposed = true;
 		_workersCts.Dispose();
-		GC.SuppressFinalize(this);
 	}
 }

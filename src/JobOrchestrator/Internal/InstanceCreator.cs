@@ -45,6 +45,7 @@ internal sealed class InstanceCreator(
 				// Пустое измерение → невозможно разрешить хоть какую-то комбинацию.
 				return [];
 			}
+
 			dimensions.Add(dim);
 		}
 
@@ -99,12 +100,14 @@ internal sealed class InstanceCreator(
 	}
 
 	private List<IReadOnlyDictionary<string, string>> ComputeDimension(StageDependency dep) {
-		if (dep.Mode == DependencyMode.Instance) {
+		var result = new List<IReadOnlyDictionary<string, string>>();
+
+		switch (dep.Mode) {
+		case DependencyMode.Instance:
 			// Per-emitter buckets: для каждого инстанса-эмитера X.bucket даёт пары (emitterKeys, keys).
 			// Candidate = emitter's keys ∪ { Target.Name: k } per каждый k в bucket.Keys.
 			// Это корректно поддерживает multi-instance-эмитеров, поскольку каждый эмитер вносит ТОЛЬКО
 			// свои ключи (а не глобальный пул всех ключей стадии).
-			var result = new List<IReadOnlyDictionary<string, string>>();
 			foreach (var bucket in keyspace.SnapshotByStage(dep.Target)) {
 				foreach (var key in bucket.Keys) {
 					var emitterKeys = bucket.Emitter.DependencyKeys;
@@ -114,12 +117,18 @@ internal sealed class InstanceCreator(
 					result.Add(combined);
 				}
 			}
-			return result;
+
+			break;
+		case DependencyMode.Whole:
+			foreach (var inst in instances.InstancesOf(dep.Target)) {
+				if (inst.Metrics.LastSuccess.HasValue) result.Add(inst.DependencyKeys);
+			}
+
+			break;
+		default:
+			throw new ArgumentOutOfRangeException(nameof(dep), dep.Mode, $"Неизвестный режим зависимости: {dep.Mode}.");
 		}
-		var result = new List<IReadOnlyDictionary<string, string>>();
-		foreach (var inst in instances.InstancesOf(dep.Target)) {
-			if (inst.Metrics.LastSuccess.HasValue) result.Add(inst.DependencyKeys);
-		}
+
 		return result;
 	}
 

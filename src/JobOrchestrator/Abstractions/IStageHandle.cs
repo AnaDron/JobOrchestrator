@@ -38,5 +38,5 @@ public interface IStageHandle {
 	void UnregisterKey(string key);
 
 	/// <summary>Снимок всех текущих инстансов этой стадии. Lock-free.</summary>
-	IReadOnlyList<IInstanceHandle> AllInstances { get; }
+	IEnumerable<IInstanceHandle> AllInstances { get; }
 }

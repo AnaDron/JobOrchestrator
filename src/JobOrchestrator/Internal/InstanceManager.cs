@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Collections.ObjectModel;
 
 namespace JobOrchestrator.Internal;
 
@@ -11,7 +12,6 @@ namespace JobOrchestrator.Internal;
 internal sealed class InstanceManager {
 	private readonly ConcurrentDictionary<InstanceIdentity, Instance> _instances = new();
 	private readonly ConcurrentDictionary<StageDescriptor, ConcurrentDictionary<Instance, byte>> _byStage = new();
-	private static readonly ConcurrentDictionary<Instance, byte> EmptySet = new();
 
 	public bool Exists(InstanceIdentity identity) => _instances.ContainsKey(identity);
 
@@ -36,7 +36,7 @@ internal sealed class InstanceManager {
 
 	/// <summary>O(1)-доступ к инстансам стадии через secondary index. Thread-safe.</summary>
 	public IReadOnlyCollection<Instance> InstancesOf(StageDescriptor stage) =>
-		_byStage.TryGetValue(stage, out var set) ? set.Keys : EmptySet.Keys;
+		_byStage.TryGetValue(stage, out var set) ? (IReadOnlyCollection<Instance>)set.Keys : ReadOnlyCollection<Instance>.Empty;
 
 	/// <summary>Все инстансы. Snapshot enumeration — безопасно итерировать одновременно с мутациями.</summary>
 	public ICollection<Instance> All => _instances.Values;

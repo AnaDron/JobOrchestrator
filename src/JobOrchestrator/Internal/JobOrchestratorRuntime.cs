@@ -136,7 +136,7 @@ internal sealed class JobOrchestratorRuntime : IJobOrchestrator {
 
 	internal Instance? FindInstance(InstanceIdentity identity) => _instances.Find(identity);
 
-	internal IReadOnlyCollection<Instance> InstancesOf(StageDescriptor stage) => _instances.InstancesOf(stage);
+	internal IEnumerable<Instance> InstancesOf(StageDescriptor stage) => _instances.InstancesOf(stage);
 
 	/// <summary>
 	/// Внешний bootstrap keyspace для keyless-эмитера. Работает только для стадий без

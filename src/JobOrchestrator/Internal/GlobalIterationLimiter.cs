@@ -1,8 +1,12 @@
+using System.Diagnostics.CodeAnalysis;
+
 namespace JobOrchestrator.Internal;
 
 /// <summary>
 /// Глобальный лимит одновременных итераций по всем стадиям (поверх per-stage <see cref="ConcurrencyLimits"/>).
 /// </summary>
+[SuppressMessage("Usage", "CA1816:Dispose methods should call SuppressFinalize",
+	Justification = "Sealed class без финализатора — GC.SuppressFinalize был бы no-op и misleading.")]
 internal sealed class GlobalIterationLimiter : IDisposable {
 	private readonly SemaphoreSlim? _sem;
 
@@ -22,8 +26,5 @@ internal sealed class GlobalIterationLimiter : IDisposable {
 		if (_sem is not null) _sem.Release();
 	}
 
-	public void Dispose() {
-		_sem?.Dispose();
-		GC.SuppressFinalize(this);
-	}
+	public void Dispose() => _sem?.Dispose();
 }

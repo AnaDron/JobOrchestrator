@@ -6,3 +6,7 @@
 - Внешние backend-ы IJobStateStore (SQL, Redis, file)
 - Условные зависимости (предикат в DependsOn*)
 - Distributed execution (multi-instance с внешним lease)
+- Перенести методы DependencyResolver в InstanceManager
+- Проверить корректность работы FindPairedInstance
+- Инспекция JobOrchestratorRuntime.InstancesOf - используется только для тестов
+- Избавиться от OutcomeWaiters

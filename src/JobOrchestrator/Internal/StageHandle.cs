@@ -51,15 +51,10 @@ internal sealed record class StageHandle(JobOrchestratorRuntime Runtime, StageDe
 	public void RegisterKey(string key) => Runtime.RegisterKey(Stage, key);
 	public void UnregisterKey(string key) => Runtime.UnregisterKey(Stage, key);
 
-	public IReadOnlyList<IInstanceHandle> AllInstances {
+	public IEnumerable<IInstanceHandle> AllInstances {
 		get {
-			var instances = Runtime.InstancesOf(Stage);
-			var list = new List<IInstanceHandle>(instances.Count);
-			foreach (var instance in instances) {
-				// Reuse instance.Identity — без реконструкции (pre-sort/EncodedKey/FQN уже вычислены).
-				list.Add(new InstanceHandle(Runtime, instance.Identity));
-			}
-			return list;
+			return Runtime.InstancesOf(Stage)
+				.Select(x => new InstanceHandle(Runtime, x.Identity));
 		}
 	}
 
