@@ -124,7 +124,7 @@ internal sealed class DueScanner(
 		foreach (var instance in instances.All) {
 			// Running/Terminating-инстансы не тикают.
 			if (instance.State != InstanceLifecycleState.Idle) continue;
-			var next = instance.Metrics.NextAutoUtc;
+			var next = instance.Metrics.Schedule.NextAutoUtc;
 			if (next is null) continue;
 			if (next.Value <= now) {
 				// CAS-acquire: ровно одна публикация на due-окно. Без этого race-window между

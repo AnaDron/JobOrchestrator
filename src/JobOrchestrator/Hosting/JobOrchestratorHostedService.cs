@@ -26,9 +26,14 @@ internal sealed class JobOrchestratorHostedService(
 	ILogger<JobOrchestratorHostedService> logger
 ) : BackgroundService {
 	private readonly Guid _instanceId = Guid.NewGuid();
+	private int _startGate;   // 0 = не стартован; 1 = StartAsync уже выполнен.
 	private int _stopGate;    // 0 = не остановлен; 1 = StopAsync уже выполняется/выполнен.
 
 	public override async Task StartAsync(CancellationToken cancellationToken) {
+		if (Interlocked.Exchange(ref _startGate, 1) != 0) return;
+		// Stop до Start (или повторный lifecycle): не поднимаем event loop / scanner.
+		if (Volatile.Read(ref _stopGate) != 0) return;
+
 		// Fail-fast: ловим misconfiguration на старте, а не на первой итерации стадии.
 		ConfigurationValidator.ValidateServiceRegistrations(registry.AllStages, services);
 		Log.Starting(logger, _instanceId, null);

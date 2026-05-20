@@ -121,7 +121,7 @@ internal sealed class InstanceCreator(
 			break;
 		case DependencyMode.Whole:
 			foreach (var inst in instances.InstancesOf(dep.Target)) {
-				if (inst.Metrics.LastSuccess.HasValue) result.Add(inst.DependencyKeys);
+				if (inst.Metrics.Stats.LastSuccess.HasValue) result.Add(inst.DependencyKeys);
 			}
 
 			break;
@@ -138,7 +138,7 @@ internal sealed class InstanceCreator(
 		// всеми итерациями StageRunner-а — экономим аллокацию per-iteration.
 		instance.Sink = new ChannelJobContextSink(channel.Writer, instance);
 		// NextAutoUtc = now → DueScanner подберёт инстанс при ближайшем проходе.
-		instance.SetMetrics(JobMetrics.Empty with { NextAutoUtc = time.GetUtcNow() });
+		instance.SetMetrics(JobMetrics.Empty.WithNextAutoUtc(time.GetUtcNow()));
 		instances.Add(instance);
 		return instance;
 	}

@@ -118,21 +118,31 @@ internal sealed class JobOrchestratorRuntime : IJobOrchestrator {
 	}
 
 	internal Task WaitForStageSuccessAsync(InstanceIdentity identity, CancellationToken ct = default) {
-		var task = _successWaiters.Register(identity, ct);
-
-		// Fast-path: если инстанс УЖЕ существует И УЖЕ имел success — сразу резолвим.
 		var existing = _instances.Find(identity);
-		if (existing is not null
-			&& existing.State != InstanceLifecycleState.Terminating
-			&& existing.Metrics.LastSuccess is not null) {
-			_successWaiters.SignalSuccess(identity);
+		var resolved = existing?.Identity ?? identity;
+		var task = _successWaiters.Register(resolved, ct);
+
+		if (existing is null) return task;
+
+		if (existing.State == InstanceLifecycleState.Terminating) {
+			_successWaiters.SignalCancellation(
+				resolved,
+				new InvalidOperationException($"Инстанс {existing.FullyQualifiedName} удалён каскадом."));
+			return task;
+		}
+
+		if (existing.Metrics.Stats.LastSuccess is not null) {
+			_successWaiters.SignalSuccess(resolved);
 		}
 
 		return task;
 	}
 
-	internal Task<StageOutcome> WaitForStageOutcomeAsync(InstanceIdentity identity, CancellationToken ct = default) =>
-		_outcomeWaiters.Register(identity, ct);
+	internal Task<StageOutcome> WaitForStageOutcomeAsync(InstanceIdentity identity, CancellationToken ct = default) {
+		var existing = _instances.Find(identity);
+		var resolved = existing?.Identity ?? identity;
+		return _outcomeWaiters.Register(resolved, ct);
+	}
 
 	internal Instance? FindInstance(InstanceIdentity identity) => _instances.Find(identity);
 

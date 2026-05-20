@@ -25,7 +25,7 @@ public sealed class DueScannerPendingTickTests {
 		var stage = MakeStage();
 		var empty = new Dictionary<string, string>(StringComparer.Ordinal);
 		var inst = new Instance { Identity = new InstanceIdentity(stage, empty) };
-		inst.SetMetrics(inst.Metrics with { NextAutoUtc = DateTimeOffset.UtcNow.AddMilliseconds(-1) });   // due
+		inst.SetMetrics(inst.Metrics.WithNextAutoUtc(DateTimeOffset.UtcNow.AddMilliseconds(-1)));   // due
 		manager.Add(inst);
 
 		var scanner = new DueScanner(manager, channel, TimeProvider.System, NullLogger<DueScanner>.Instance);
@@ -52,7 +52,7 @@ public sealed class DueScannerPendingTickTests {
 		var stage = MakeStage();
 		var empty = new Dictionary<string, string>(StringComparer.Ordinal);
 		var inst = new Instance { Identity = new InstanceIdentity(stage, empty) };
-		inst.SetMetrics(inst.Metrics with { NextAutoUtc = DateTimeOffset.UtcNow.AddMilliseconds(-1) });
+		inst.SetMetrics(inst.Metrics.WithNextAutoUtc(DateTimeOffset.UtcNow.AddMilliseconds(-1)));
 		manager.Add(inst);
 
 		var scanner = new DueScanner(manager, channel, TimeProvider.System, NullLogger<DueScanner>.Instance);
@@ -64,10 +64,10 @@ public sealed class DueScannerPendingTickTests {
 		// 3) StageCompleted: State=Idle, новый NextAutoUtc.
 		inst.ReleasePendingTick();
 		inst.TryBeginRunning();
-		inst.SetMetrics(inst.Metrics with { NextAutoUtc = null });
+		inst.SetMetrics(inst.Metrics.WithNextAutoUtc(null));
 		while (channel.Reader.TryRead(out _)) { }
 		inst.EndRunning();
-		inst.SetMetrics(inst.Metrics with { NextAutoUtc = DateTimeOffset.UtcNow.AddMilliseconds(-1) });
+		inst.SetMetrics(inst.Metrics.WithNextAutoUtc(DateTimeOffset.UtcNow.AddMilliseconds(-1)));
 
 		scanner.Tick(DateTimeOffset.UtcNow);
 

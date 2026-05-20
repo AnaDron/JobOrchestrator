@@ -55,7 +55,7 @@ internal sealed class StageRunner(
 				CorrelationId = correlationId,
 				Trigger = trigger,
 				State = jobState,
-				LastSuccessAt = instance.Metrics.LastSuccess,
+				LastSuccessAt = instance.Metrics.Stats.LastSuccess,
 				StageName = instance.Stage.Name,
 				DependencyKeys = instance.DependencyKeys,
 				FullyQualifiedName = instance.FullyQualifiedName,

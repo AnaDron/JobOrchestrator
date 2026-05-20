@@ -22,19 +22,19 @@ internal static class TriggerAcceptance {
 		if (state == InstanceLifecycleState.Terminating) return TriggerAcceptanceDecision.Reject(TriggerResult.Terminating);
 		if (state == InstanceLifecycleState.Running) return TriggerAcceptanceDecision.Reject(TriggerResult.AlreadyRunning);
 
-		var m = instance.Metrics;
+		var stats = instance.Metrics.Stats;
 
 		if (source == TriggerSource.Auto) {
-			if (m.ConsecutiveFailures > 0 && m.LastAttempt.HasValue) {
-				var retryDelay = instance.Stage.RetryPolicy.ComputeDelay(m.ConsecutiveFailures);
-				if (now - m.LastAttempt.Value < retryDelay) {
+			if (stats.ConsecutiveFailures > 0 && stats.LastAttempt.HasValue) {
+				var retryDelay = instance.Stage.RetryPolicy.ComputeDelay(stats.ConsecutiveFailures);
+				if (now - stats.LastAttempt.Value < retryDelay) {
 					return TriggerAcceptanceDecision.Reject(TriggerResult.WaitingRetry);
 				}
 			}
 			return TriggerAcceptanceDecision.Accept;
 		}
 
-		if (m.LastAttempt.HasValue && (now - m.LastAttempt.Value) < instance.Stage.Debounce) {
+		if (stats.LastAttempt.HasValue && (now - stats.LastAttempt.Value) < instance.Stage.Debounce) {
 			return TriggerAcceptanceDecision.Reject(TriggerResult.Debounced);
 		}
 		return TriggerAcceptanceDecision.Accept;

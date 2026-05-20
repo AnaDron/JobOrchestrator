@@ -158,6 +158,17 @@ var documents = jobs.Stage("documents").HandledBy<DocumentsService>()
 
 Каждый `Instance` имеет один Timer (`InstanceTimer`). При его тике публикуется `TimerTickedEvent(Instance)`. EventLoop принимает решение, запускать ли итерацию (=Job).
 
+## JobMetrics — Stats + Schedule
+
+Runtime-снимок инстанса — один atomic `JobMetrics`, внутри два вложенных record:
+
+| Часть | Тип | Содержимое |
+|--------|-----|------------|
+| `Stats` | `InstanceExecutionStats` | `LastSuccess`, `LastAttempt`, `ConsecutiveFailures`, `LastError` |
+| `Schedule` | `InstanceSchedule` | `NextAutoUtc` (когда DueScanner должен тикнуть) |
+
+Read-side всегда использует explicit path (`instance.Metrics.Stats.LastSuccess`, `instance.Metrics.Schedule.NextAutoUtc`) — facade-свойств на `JobMetrics` намеренно нет, чтобы читатель сразу видел, к какой части снимка обращается код. Writers — event-loop при success/failure — обновляют обе части одним `SetMetrics(new JobMetrics(...))` (atomic). `JobMetrics.WithNextAutoUtc` — единственный production-helper для горячего пути (`BeginIteration`, `DeferIteration`, `InstanceCreator.MaterializeInstance`); точечные Stats-helper'ы (`WithLastSuccess`, …) — extension'ы в test-проекте (`JobMetricsTestExtensions`), для production-writers не предлагаются (там нужны atomic-обновления нескольких полей).
+
 ## Чек-лист для понимания при чтении кода SDK
 
 - Видишь `StageDescriptor` — это **декларация** (статика).

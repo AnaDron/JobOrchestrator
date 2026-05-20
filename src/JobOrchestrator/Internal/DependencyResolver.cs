@@ -54,7 +54,7 @@ internal static class DependencyResolver {
 			if (paired is null) return false;
 			if (dep.Mode == DependencyMode.Whole) {
 				// DependsOn: child наследует ключи только успешного родителя.
-				if (paired.Metrics.LastSuccess is null) return false;
+				if (paired.Metrics.Stats.LastSuccess is null) return false;
 			} else {
 				// DependsOnInstance: reactive — LastSuccess эмитера НЕ требуется.
 				// Per-emitter keyspace-check защищает от race «KeyAdded → KeyRemoved».

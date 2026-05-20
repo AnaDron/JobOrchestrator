@@ -35,56 +35,51 @@ public sealed class TriggerAcceptanceTests {
 	[Fact]
 	public void Auto_InRetryDelay_ReturnsWaitingRetry() {
 		var inst = MakeInstance(MakeStage(TimeSpan.Zero, RetryPolicy.FixedDelay(TimeSpan.FromMinutes(5))));
-		inst.SetMetrics(inst.Metrics with { ConsecutiveFailures = 1 });
-		inst.SetMetrics(inst.Metrics with { LastAttempt = Now.AddMinutes(-2) });
+		inst.SetMetrics(inst.Metrics.WithConsecutiveFailures(1).WithLastAttempt(Now.AddMinutes(-2)));
 		TriggerAcceptance.TryAccept(inst, TriggerSource.Auto, Now).Rejection.Should().Be(TriggerResult.WaitingRetry);
 	}
 
 	[Fact]
 	public void Auto_RetryDelayElapsed_Accepted() {
 		var inst = MakeInstance(MakeStage(TimeSpan.Zero, RetryPolicy.FixedDelay(TimeSpan.FromMinutes(5))));
-		inst.SetMetrics(inst.Metrics with { ConsecutiveFailures = 1 });
-		inst.SetMetrics(inst.Metrics with { LastAttempt = Now.AddMinutes(-10) });
+		inst.SetMetrics(inst.Metrics.WithConsecutiveFailures(1).WithLastAttempt(Now.AddMinutes(-10)));
 		TriggerAcceptance.TryAccept(inst, TriggerSource.Auto, Now).IsAccepted.Should().BeTrue();
 	}
 
 	[Fact]
 	public void Manual_IgnoresRetryDelay() {
 		var inst = MakeInstance(MakeStage(TimeSpan.Zero, RetryPolicy.FixedDelay(TimeSpan.FromMinutes(5))));
-		inst.SetMetrics(inst.Metrics with { ConsecutiveFailures = 5 });
-		inst.SetMetrics(inst.Metrics with { LastAttempt = Now.AddSeconds(-1) });
+		inst.SetMetrics(inst.Metrics.WithConsecutiveFailures(5).WithLastAttempt(Now.AddSeconds(-1)));
 		TriggerAcceptance.TryAccept(inst, TriggerSource.Manual, Now).IsAccepted.Should().BeTrue();
 	}
 
 	[Fact]
 	public void Manual_InDebounceWindow_AfterSuccess_Rejected() {
 		var inst = MakeInstance(MakeStage(TimeSpan.FromSeconds(10), RetryPolicy.NoRetry));
-		inst.SetMetrics(inst.Metrics with { LastAttempt = Now.AddSeconds(-5) });
-		inst.SetMetrics(inst.Metrics with { LastSuccess = inst.Metrics.LastAttempt });
+		var attempt = Now.AddSeconds(-5);
+		inst.SetMetrics(inst.Metrics.WithLastAttempt(attempt).WithLastSuccess(attempt));
 		TriggerAcceptance.TryAccept(inst, TriggerSource.Manual, Now).Rejection.Should().Be(TriggerResult.Debounced);
 	}
 
 	[Fact]
 	public void Manual_InDebounceWindow_AfterFailure_AlsoRejected() {
 		var inst = MakeInstance(MakeStage(TimeSpan.FromSeconds(10), RetryPolicy.NoRetry));
-		inst.SetMetrics(inst.Metrics with { LastAttempt = Now.AddSeconds(-5) });
-		inst.SetMetrics(inst.Metrics with { ConsecutiveFailures = 1 });
-		inst.SetMetrics(inst.Metrics with { LastError = "boom" });
+		inst.SetMetrics(inst.Metrics.WithLastAttempt(Now.AddSeconds(-5)).WithConsecutiveFailures(1).WithLastError("boom"));
 		TriggerAcceptance.TryAccept(inst, TriggerSource.Manual, Now).Rejection.Should().Be(TriggerResult.Debounced);
 	}
 
 	[Fact]
 	public void Manual_DebounceElapsed_Accepted() {
 		var inst = MakeInstance(MakeStage(TimeSpan.FromSeconds(10), RetryPolicy.NoRetry));
-		inst.SetMetrics(inst.Metrics with { LastAttempt = Now.AddSeconds(-30) });
+		inst.SetMetrics(inst.Metrics.WithLastAttempt(Now.AddSeconds(-30)));
 		TriggerAcceptance.TryAccept(inst, TriggerSource.Manual, Now).IsAccepted.Should().BeTrue();
 	}
 
 	[Fact]
 	public void Auto_DebounceNotChecked() {
 		var inst = MakeInstance(MakeStage(TimeSpan.FromMinutes(1), RetryPolicy.NoRetry));
-		inst.SetMetrics(inst.Metrics with { LastAttempt = Now.AddSeconds(-1) });
-		inst.SetMetrics(inst.Metrics with { LastSuccess = inst.Metrics.LastAttempt });
+		var attempt = Now.AddSeconds(-1);
+		inst.SetMetrics(inst.Metrics.WithLastAttempt(attempt).WithLastSuccess(attempt));
 		TriggerAcceptance.TryAccept(inst, TriggerSource.Auto, Now).IsAccepted.Should().BeTrue();
 	}
 }

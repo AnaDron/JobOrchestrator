@@ -214,7 +214,7 @@ Owner всех `Instance`-объектов. Writes — через event-loop con
 
 ## Instance: snapshot-consistent метрики
 
-Мутирующие метрики (`LastSuccess`, `LastAttempt`, `NextAutoUtc`, `ConsecutiveFailures`, `LastError`) хранятся как immutable-record `JobMetrics`, заменяемый атомарно через `Interlocked.Exchange`. Read-side получает консистентный snapshot всей пятёрки полей из одной «эпохи» writer'а (через `instance.Metrics` → один `Volatile.Read`).
+Мутирующее состояние инстанса хранится как immutable-record `JobMetrics` (`InstanceExecutionStats` + `InstanceSchedule`), заменяемый атомарно через `Interlocked.Exchange`. Read-side получает согласованную пару Stats/Schedule из одной «эпохи» writer'а (через `instance.Metrics` → один `Volatile.Read`).
 
 **Без facade-полей:** `instance.LastSuccess` и аналоги намеренно отсутствуют — call-sites обязаны делать `instance.Metrics` явно. Это сразу показывает места, где Metrics читается несколько раз → optimization-hotspots (один snapshot + локальная переменная).
 

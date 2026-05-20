@@ -10,7 +10,7 @@ public sealed class InstanceCreatorTests {
 	private static Instance MakeInstanceWithSuccess(StageDescriptor stage, Dictionary<string, string>? keys = null) {
 		keys ??= new Dictionary<string, string>(StringComparer.Ordinal);
 		var inst = new Instance { Identity = new InstanceIdentity(stage, keys) };
-		inst.SetMetrics(inst.Metrics with { LastSuccess = DateTimeOffset.UtcNow });
+		inst.SetMetrics(inst.Metrics.WithLastSuccess(DateTimeOffset.UtcNow));
 		return inst;
 	}
 

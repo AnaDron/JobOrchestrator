@@ -234,7 +234,7 @@ internal sealed class EventLoop(
 				$"Invariant violation: инстанс {instance.FullyQualifiedName} уже Running до BeginIteration. " +
 				"Event-loop single-threaded contract нарушен.");
 		}
-		instance.SetMetrics(instance.Metrics with { NextAutoUtc = null });
+		instance.SetMetrics(instance.Metrics.WithNextAutoUtc(null));
 		try {
 			Log.BeginIteration(logger, instance.FullyQualifiedName, trigger, null);
 			_ = Task.Run(() => RunIterationSafeAsync(instance, trigger, ct), ct);
@@ -261,7 +261,7 @@ internal sealed class EventLoop(
 		// не трогаем NextAutoUtc (existing auto-расписание остаётся), не будим scanner.
 		// Auto-tick: re-schedule через NextAutoUtc + jitter, DueScanner подберёт при освобождении лимита.
 		if (trigger != TriggerSource.Auto) return;
-		instance.SetMetrics(instance.Metrics with { NextAutoUtc = ComputeDeferredNextAutoUtc() });
+		instance.SetMetrics(instance.Metrics.WithNextAutoUtc(ComputeDeferredNextAutoUtc()));
 		scanner.Wake();
 	}
 
@@ -320,26 +320,29 @@ internal sealed class EventLoop(
 
 	private bool ApplyStageCompletedMetrics(Instance instance, DateTimeOffset at) {
 		var current = instance.Metrics;
-		bool wasFirstSuccess = !current.LastSuccess.HasValue;
+		bool wasFirstSuccess = !current.Stats.LastSuccess.HasValue;
 		instance.SetMetrics(new JobMetrics(
-			LastSuccess: at,
-			LastAttempt: at,
-			ConsecutiveFailures: 0,
-			LastError: null,
-			NextAutoUtc: at + instance.Stage.Interval));
+			Stats: new InstanceExecutionStats(
+				LastSuccess: at,
+				LastAttempt: at,
+				ConsecutiveFailures: 0,
+				LastError: null),
+			Schedule: new InstanceSchedule(NextAutoUtc: at + instance.Stage.Interval)));
 		return wasFirstSuccess;
 	}
 
 	private void ApplyStageFailedMetrics(Instance instance, Exception ex, DateTimeOffset at) {
 		var current = instance.Metrics;
-		var failures = current.ConsecutiveFailures + 1;
+		var failures = current.Stats.ConsecutiveFailures + 1;
 		var retryDelay = instance.Stage.RetryPolicy.ComputeDelay(failures);
 		var nextDelay = retryDelay > TimeSpan.Zero ? retryDelay : instance.Stage.Interval;
 		instance.SetMetrics(current with {
-			LastAttempt = at,
-			ConsecutiveFailures = failures,
-			LastError = ex.Message,
-			NextAutoUtc = at + nextDelay,
+			Stats = current.Stats with {
+				LastAttempt = at,
+				ConsecutiveFailures = failures,
+				LastError = ex.Message,
+			},
+			Schedule = current.Schedule with { NextAutoUtc = at + nextDelay },
 		});
 	}
 

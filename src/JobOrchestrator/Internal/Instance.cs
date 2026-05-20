@@ -19,7 +19,8 @@ namespace JobOrchestrator.Internal;
 /// <see cref="State"/> сводит их в публичный enum по приоритету Terminating &gt; Running &gt; Idle.
 /// </para>
 /// <para>
-/// Метрики (<see cref="Metrics"/>) — иммутабельный <see cref="JobMetrics"/> snapshot, заменяемый
+/// Метрики (<see cref="Metrics"/>) — иммутабельный <see cref="JobMetrics"/> snapshot
+/// (<see cref="InstanceExecutionStats"/> + <see cref="InstanceSchedule"/>), заменяемый
 /// через <see cref="Interlocked.Exchange"/>. Facade-доступ к отдельным полям отсутствует — call-sites
 /// явно делают <c>instance.Metrics</c>, что видно как optimization-hotspot.
 /// </para>
@@ -127,16 +128,16 @@ internal sealed class Instance {
 
 	/// <summary>Проецирует текущее состояние инстанса в публичный snapshot. Вызывается из <see cref="InstanceManager"/> и InstanceHandle.</summary>
 	public InstanceInfo ToInstanceInfo() {
-		var m = Metrics;
+		var stats = Metrics.Stats;
 		return new InstanceInfo {
 			StageName = Identity.Stage.Name,
 			DependencyKeys = Identity.DependencyKeys,
 			FullyQualifiedName = Identity.FullyQualifiedName,
 			State = State,
-			LastSuccess = m.LastSuccess,
-			LastAttempt = m.LastAttempt,
-			ConsecutiveFailures = m.ConsecutiveFailures,
-			LastError = m.LastError,
+			LastSuccess = stats.LastSuccess,
+			LastAttempt = stats.LastAttempt,
+			ConsecutiveFailures = stats.ConsecutiveFailures,
+			LastError = stats.LastError,
 		};
 	}
 }

@@ -175,6 +175,30 @@ public sealed class ScenarioWaitForStageTests {
 	}
 
 	[Fact]
+	public async Task WaitForStageOutcome_AfterPriorSuccess_WaitsForNextCycle() {
+		var fake = new FakeServiceA();
+		using var host = TestHostFactory.Build(
+			configure: jobs => jobs.Stage("a").HandledBy<FakeServiceA>().RunPeriodically(TimeSpan.FromMilliseconds(200)),
+			registerFakes: s => s.AddSingleton(fake));
+
+		var orchestrator = host.Services.GetRequiredService<IJobOrchestrator>();
+		await host.StartAsync().ConfigureAwait(false);
+		try {
+			var first = await orchestrator["a"][InstanceKey.None].WaitForOutcomeAsync().WaitAsync(Timeout).ConfigureAwait(false);
+			first.Kind.Should().Be(StageOutcomeKind.Success);
+
+			var secondWait = orchestrator["a"][InstanceKey.None].WaitForOutcomeAsync();
+			secondWait.IsCompleted.Should().BeFalse("прошлый success не должен резолвить новый WaitForOutcome");
+
+			var second = await secondWait.WaitAsync(Timeout).ConfigureAwait(false);
+			second.Kind.Should().Be(StageOutcomeKind.Success);
+			fake.CallCount.Should().BeGreaterThan(1);
+		} finally {
+			await host.StopAsync().ConfigureAwait(false);
+		}
+	}
+
+	[Fact]
 	public async Task WaitForStageSuccess_CancellationToken_CancelsWaiterWithoutLeakingPending() {
 		var fake = new FakeServiceA();
 		// Stage блокируется надолго (чтобы success НЕ случился до cancel).

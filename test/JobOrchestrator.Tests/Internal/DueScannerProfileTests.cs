@@ -39,9 +39,8 @@ public sealed class DueScannerProfileTests(ITestOutputHelper output) {
 			var keys = new Dictionary<string, string>(StringComparer.Ordinal) { ["i"] = i.ToString() };
 			var instance = new Instance { Identity = new InstanceIdentity(stage, keys) };
 			// All-due → NextAutoUtc в прошлом; no-work → далеко в будущем.
-			instance.SetMetrics(instance.Metrics with {
-				NextAutoUtc = allDue ? DateTimeOffset.UtcNow.AddSeconds(-1) : DateTimeOffset.UtcNow.AddDays(30),
-			});
+			instance.SetMetrics(instance.Metrics.WithNextAutoUtc(
+				allDue ? DateTimeOffset.UtcNow.AddSeconds(-1) : DateTimeOffset.UtcNow.AddDays(30)));
 			manager.Add(instance);
 		}
 

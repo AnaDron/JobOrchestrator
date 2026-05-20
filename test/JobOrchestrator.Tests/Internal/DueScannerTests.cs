@@ -9,7 +9,7 @@ public sealed class DueScannerTests {
 	private static Instance MakeInstance(StageDescriptor stage, DateTimeOffset? nextAuto, InstanceLifecycleState state = InstanceLifecycleState.Idle) {
 		var empty = new Dictionary<string, string>(StringComparer.Ordinal);
 		var inst = new Instance { Identity = new InstanceIdentity(stage, empty) };
-		inst.SetMetrics(inst.Metrics with { NextAutoUtc = nextAuto });
+		inst.SetMetrics(inst.Metrics.WithNextAutoUtc(nextAuto));
 		if (state == InstanceLifecycleState.Running) inst.TryBeginRunning();
 		else if (state == InstanceLifecycleState.Terminating) inst.MarkTerminating();
 		return inst;
@@ -26,7 +26,7 @@ public sealed class DueScannerTests {
 		Instance MakeMarked(string marker, DateTimeOffset nextAuto, InstanceLifecycleState state = InstanceLifecycleState.Idle) {
 			var keys = new Dictionary<string, string>(StringComparer.Ordinal) { ["marker"] = marker };
 			var inst = new Instance { Identity = new InstanceIdentity(stage, keys) };
-			inst.SetMetrics(inst.Metrics with { NextAutoUtc = nextAuto });
+			inst.SetMetrics(inst.Metrics.WithNextAutoUtc(nextAuto));
 			if (state == InstanceLifecycleState.Running) inst.TryBeginRunning();
 			else if (state == InstanceLifecycleState.Terminating) inst.MarkTerminating();
 			return inst;
@@ -59,6 +59,31 @@ public sealed class DueScannerTests {
 	}
 
 	[Fact]
+	public void Tick_ReturnsNearestFutureNextAutoUtc() {
+		var channel = Channel.CreateUnbounded<OrchestratorEvent>();
+		var manager = new InstanceManager();
+		var stage = MakeStage("x");
+		var now = DateTimeOffset.UtcNow;
+
+		Instance Marked(string marker, DateTimeOffset nextAuto) {
+			var keys = new Dictionary<string, string>(StringComparer.Ordinal) { ["marker"] = marker };
+			var inst = new Instance { Identity = new InstanceIdentity(stage, keys) };
+			inst.SetMetrics(inst.Metrics.WithNextAutoUtc(nextAuto));
+			return inst;
+		}
+
+		manager.Add(Marked("due", now.AddMilliseconds(-5)));
+		manager.Add(Marked("nearest", now.AddSeconds(2)));
+		manager.Add(Marked("farther", now.AddMinutes(5)));
+
+		var scanner = new DueScanner(manager, channel, TimeProvider.System, NullLogger<DueScanner>.Instance);
+		var next = scanner.Tick(now);
+
+		next.Should().Be(now.AddSeconds(2));
+		while (channel.Reader.TryRead(out _)) { }
+	}
+
+	[Fact]
 	public async Task Wake_InterruptsLongSleep() {
 		var channel = Channel.CreateUnbounded<OrchestratorEvent>();
 		var manager = new InstanceManager();
@@ -66,7 +91,7 @@ public sealed class DueScannerTests {
 
 		// Всё в далёком будущем — без Wake() scanner спал бы дольше теста.
 		var farFuture = new Instance { Identity = new InstanceIdentity(stage) };
-		farFuture.SetMetrics(farFuture.Metrics with { NextAutoUtc = DateTimeOffset.UtcNow.AddMinutes(10) });
+		farFuture.SetMetrics(farFuture.Metrics.WithNextAutoUtc(DateTimeOffset.UtcNow.AddMinutes(10)));
 		manager.Add(farFuture);
 
 		var scanner = new DueScanner(manager, channel, TimeProvider.System, NullLogger<DueScanner>.Instance);
@@ -75,7 +100,7 @@ public sealed class DueScannerTests {
 
 		await Task.Delay(100, cts.Token).ConfigureAwait(false);
 		// Меняем NextAutoUtc и будим — сканер должен сразу пересчитать и опубликовать tick.
-		farFuture.SetMetrics(farFuture.Metrics with { NextAutoUtc = DateTimeOffset.UtcNow.AddMilliseconds(-1) });
+		farFuture.SetMetrics(farFuture.Metrics.WithNextAutoUtc(DateTimeOffset.UtcNow.AddMilliseconds(-1)));
 		scanner.Wake();
 
 		// Подождём публикацию.
