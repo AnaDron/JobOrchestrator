@@ -66,7 +66,7 @@ internal sealed class InstanceCreator(
 			// Все измерения совмещены — проверяем существование и зависимости.
 			var identity = new InstanceIdentity(stage, current);
 			if (instances.Exists(identity)) return;
-			if (!DependencyResolver.AllDependenciesResolved(stage, current, instances, keyspace)) return;
+			if (!AllDependenciesResolved(stage, current)) return;
 			output.Add(MaterializeInstance(identity));
 			return;
 		}
@@ -97,6 +97,57 @@ internal sealed class InstanceCreator(
 				foreach (var k in rollback) current.Remove(k);
 			}
 		}
+	}
+
+	/// <summary>
+	/// Predicate финального шага Recurse: все зависимости стадии разрешены для child-кандидата с
+	/// compound-ключами <paramref name="childKeys"/>.
+	/// <para>
+	/// <b>Инвариант, обеспечиваемый Recurse:</b> <paramref name="childKeys"/> — это компонованные ключи
+	/// потенциального child-инстанса, накопленные через все измерения. Каждый родитель имеет проекцию
+	/// своих <see cref="Instance.DependencyKeys"/> на это множество (child ⊇ parent по дизайну
+	/// backtracking-merge). Поэтому subset-check ниже — fast-path для уникального paired-родителя.
+	/// </para>
+	/// <list type="bullet">
+	/// <item>
+	/// <b><see cref="DependencyMode.Whole"/> (<c>DependsOn</c>):</b> child наследует ключи только из
+	/// родителя, у которого был хотя бы один успешный цикл — <c>LastSuccess != null</c>.
+	/// </item>
+	/// <item>
+	/// <b><see cref="DependencyMode.Instance"/> (<c>DependsOnInstance</c>):</b> reactive — родитель
+	/// существует, и эмитнутый ключ есть в его keyspace-bucket-е. <c>LastSuccess</c> не требуется
+	/// (long-running emitter: child материализуется немедленно при <c>AddKey</c>).
+	/// </item>
+	/// </list>
+	/// </summary>
+	private bool AllDependenciesResolved(StageDescriptor stage, IReadOnlyDictionary<string, string> childKeys) {
+		foreach (var dep in stage.Dependencies) {
+			// Парный parent — тот, чьи DependencyKeys ⊆ childKeys. Инвариант backtracking-merge
+			// гарантирует уникальность; первый match — он же единственный.
+			Instance? parent = null;
+			foreach (var candidate in instances.InstancesOf(dep.Target)) {
+				bool projectionMatches = true;
+				foreach (var kv in candidate.DependencyKeys) {
+					if (!childKeys.TryGetValue(kv.Key, out var v) || !string.Equals(v, kv.Value, StringComparison.Ordinal)) {
+						projectionMatches = false;
+						break;
+					}
+				}
+				if (projectionMatches) {
+					parent = candidate;
+					break;
+				}
+			}
+			if (parent is null) return false;
+
+			if (dep.Mode == DependencyMode.Whole) {
+				if (parent.Metrics.Stats.LastSuccess is null) return false;
+			} else {
+				// Per-emitter keyspace-check защищает от race «KeyAdded → KeyRemoved».
+				if (!childKeys.TryGetValue(dep.Target.Name, out var key) || !keyspace.Contains(parent.Identity, key)) return false;
+			}
+		}
+		return true;
 	}
 
 	private List<IReadOnlyDictionary<string, string>> ComputeDimension(StageDependency dep) {
