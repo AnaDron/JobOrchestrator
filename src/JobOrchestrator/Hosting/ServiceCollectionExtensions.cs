@@ -131,7 +131,6 @@ public static class ServiceCollectionExtensions {
 		services.AddSingleton<ConcurrencyLimits>();
 		services.AddSingleton<GlobalIterationLimiter>();
 		services.AddSingleton<SuccessWaiters>();
-		services.AddSingleton<OutcomeWaiters>();
 		services.AddSingleton<InstanceCreator>();
 		services.AddSingleton<StageRunner>();
 		services.AddSingleton<DueScanner>();
@@ -186,7 +185,6 @@ public static class ServiceCollectionExtensions {
 		services.AddKeyedSingleton<InstanceManager>(tenantKey);
 		services.AddKeyedSingleton<KeyspaceRegistry>(tenantKey);
 		services.AddKeyedSingleton<SuccessWaiters>(tenantKey);
-		services.AddKeyedSingleton<OutcomeWaiters>(tenantKey);
 
 		// Per-tenant дефолтный HostOptions: keyed-singleton под tenantKey. Пользовательский override
 		// через jobs.ConfigureJobOrchestratorHost(...) уже зарегистрирован на probe-pass ДО этой

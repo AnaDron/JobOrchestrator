@@ -74,9 +74,18 @@ foreach (var info in overview.Instances.OrderBy(i => i.FullyQualifiedName, Strin
 Console.WriteLine();
 
 // Manual trigger конкретного инстанса — handle-API через индексатор.
+// RunAsync возвращает IIterationHandle; await iteration.Completion бросает IterationFailedException
+// при любом не-успешном исходе.
 Console.WriteLine("=== Manual trigger reporter[producer=shop-100] ===");
-var result = await orchestrator["reporter"][("producer", "shop-100")].TriggerAsync();
-Console.WriteLine($"  result = {result}");
+try {
+	var iteration = await orchestrator["reporter"][("producer", "shop-100")].RunAsync();
+	await iteration.Completion;
+	Console.WriteLine("  итерация завершилась успешно");
+} catch (IterationRejectedException ex) {
+	Console.WriteLine($"  запуск отвергнут: {ex.Reason}");
+} catch (IterationFailedException ex) {
+	Console.WriteLine($"  итерация прервана: {ex.Reason}{(ex.InnerException is null ? "" : $" ({ex.InnerException.Message})")}");
+}
 
 await Task.Delay(TimeSpan.FromSeconds(3));
 await host.StopAsync();

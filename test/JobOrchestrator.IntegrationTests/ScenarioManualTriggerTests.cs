@@ -7,9 +7,8 @@ public sealed class ScenarioManualTriggerTests {
 
 	[Fact]
 	public async Task Indexer_UnknownStage_ThrowsArgumentException() {
-		// Handle-API даёт более точную семантику чем старый flat TriggerAsync("nonexistent"):
-		// stage-name резолвится в индексаторе → unknown-stage = ArgumentException на construction,
-		// а не TriggerResult.NotFound на execution.
+		// Handle-API: unknown-stage = ArgumentException на construction индексатора,
+		// не runtime-reject в RunAsync.
 		using var host = TestHostFactory.Build(
 			configure: jobs => jobs.Stage("a").HandledBy<FakeServiceA>().RunPeriodically(TimeSpan.FromHours(1)),
 			registerFakes: s => s.AddSingleton<FakeServiceA>());
@@ -24,9 +23,9 @@ public sealed class ScenarioManualTriggerTests {
 	}
 
 	[Fact]
-	public async Task TriggerAsync_AfterFailureInRetryDelay_ManualIgnoresIt() {
-		// Конфиг: длинный retry-delay; вызываем итерацию, она падает; сразу же делаем Manual trigger.
-		// Auto был бы WaitingRetry, Manual должен принять.
+	public async Task RunAsync_AfterFailureInRetryDelay_ManualIgnoresIt() {
+		// Конфиг: длинный retry-delay; первая итерация падает; сразу же Manual RunAsync.
+		// Auto был бы WaitingRetry, Manual принимает.
 		var fake = new FakeServiceA();
 		int calls = 0;
 		fake.ExecuteHandler = (ctx, _) => {
@@ -45,12 +44,12 @@ public sealed class ScenarioManualTriggerTests {
 		await host.StartAsync().ConfigureAwait(false);
 		try {
 			(await fake.WaitForCallCountAsync(1, Timeout).ConfigureAwait(false)).Should().BeTrue();
-			// Дать event loop'у обработать StageFailed.
 			await Task.Delay(200).ConfigureAwait(false);
 
 			var orchestrator = host.Services.GetRequiredService<IJobOrchestrator>();
-			var result = await orchestrator["a"][InstanceKey.None].TriggerAsync().ConfigureAwait(false);
-			result.Should().Be(TriggerResult.Started, "Manual игнорирует retry-delay");
+			var iteration = await orchestrator["a"][InstanceKey.None].RunAsync().WaitAsync(Timeout).ConfigureAwait(false);
+			// Manual игнорирует retry-delay; second call успешен → тихий await без exception.
+			await iteration.Completion.WaitAsync(Timeout).ConfigureAwait(false);
 
 			(await fake.WaitForCallCountAsync(2, Timeout).ConfigureAwait(false)).Should().BeTrue();
 		} finally {
@@ -59,10 +58,10 @@ public sealed class ScenarioManualTriggerTests {
 	}
 
 	[Fact]
-	public async Task TriggerAsync_InheritedKeyThroughDependsOn_IsAcceptedNotInvalidKeys() {
-		// Regression-тест на bug в плоском InstanceKeyNames:
-		// products нет прямого DependsOnInstance(shops), но через DependsOn(productGroups) измерение
-		// `shops` унаследовано. TriggerAsync("products", { shops: "u1" }) должен принять keys.
+	public async Task RunAsync_InheritedKeyThroughDependsOn_IsAcceptedNotRejected() {
+		// products: нет прямого DependsOnInstance(shops), но через DependsOn(productGroups) измерение
+		// `shops` унаследовано. RunAsync("products", { shops: "u1" }) должен принять keys без
+		// ArgumentException на construction индексатора.
 		var shopsFake = new FakeServiceA();
 		shopsFake.ExecuteHandler = async (ctx, ct) => { await ctx.AddKeyAsync("u1", ct); };
 
@@ -85,11 +84,14 @@ public sealed class ScenarioManualTriggerTests {
 				.Should().BeTrue("products[shops=u1] должен пробуститься после каскада");
 
 			var orchestrator = host.Services.GetRequiredService<IJobOrchestrator>();
-			// Manual triggered c унаследованным ключом — handle-API валидирует key-names против
-			// ExpectedKeyNames стадии (которая включает транзитивные через DependsOn → у products
-			// есть `shops`-измерение из productGroups).
-			var result = await orchestrator["products"][("shops", "u1")].TriggerAsync().ConfigureAwait(false);
-			result.Should().BeOneOf(TriggerResult.Started, TriggerResult.Debounced, TriggerResult.AlreadyRunning);
+			// handle-API валидирует key-names против ExpectedKeyNames — должно пройти construction
+			// без ArgumentException. Runtime может отвергнуть AlreadyRunning/Debounced — это OK,
+			// ключевой инвариант: keys приняты handle-API.
+			try {
+				_ = await orchestrator["products"][("shops", "u1")].RunAsync().ConfigureAwait(false);
+			} catch (IterationRejectedException ex) {
+				ex.Reason.Should().BeOneOf(IterationRejectReason.AlreadyRunning, IterationRejectReason.Debounced);
+			}
 		} finally {
 			await host.StopAsync().ConfigureAwait(false);
 		}
@@ -97,8 +99,8 @@ public sealed class ScenarioManualTriggerTests {
 
 	[Fact]
 	public async Task Indexer_KeylessWithUnexpectedKey_ThrowsArgumentException() {
-		// Keyless-стадия + попытка передать key → fail-fast в handle-construction (handle-API
-		// заменил runtime InvalidKeys-семантику на compile-time-like ArgumentException).
+		// Keyless-стадия + попытка передать key → fail-fast в handle-construction:
+		// ArgumentException на construction, без runtime-проверок.
 		using var host = TestHostFactory.Build(
 			configure: jobs => jobs.Stage("keyless").HandledBy<FakeServiceA>().RunPeriodically(TimeSpan.FromHours(1)),
 			registerFakes: s => s.AddSingleton<FakeServiceA>());
@@ -114,7 +116,7 @@ public sealed class ScenarioManualTriggerTests {
 	}
 
 	[Fact]
-	public async Task TriggerAsync_WhenConcurrencyLimitExhausted_ReturnsConcurrencyDeferredNotStarted() {
+	public async Task RunAsync_WhenConcurrencyLimitExhausted_ThrowsConcurrencyDeferred() {
 		var shopsFake = new FakeServiceA();
 		shopsFake.ExecuteHandler = async (ctx, ct) => {
 			for (int i = 0; i < 3; i++) await ctx.AddKeyAsync($"shop-{i}", ct);
@@ -153,16 +155,17 @@ public sealed class ScenarioManualTriggerTests {
 			var idleShop = runningShopKey == "shop-0" ? "shop-1" : "shop-0";
 
 			var orchestrator = host.Services.GetRequiredService<IJobOrchestrator>();
-			var result = await orchestrator["productGroups"][("shops", idleShop)].TriggerAsync().ConfigureAwait(false);
-			result.Should().Be(TriggerResult.ConcurrencyDeferred,
-				"Manual trigger при занятом ConcurrencyLimit не должен возвращать Started до TryBeginRunning");
+			Func<Task> act = () => orchestrator["productGroups"][("shops", idleShop)].RunAsync();
+			var ex = (await act.Should().ThrowAsync<IterationRejectedException>().ConfigureAwait(false)).Which;
+			ex.Reason.Should().Be(IterationRejectReason.ConcurrencyDeferred,
+				"Manual RunAsync при занятом ConcurrencyLimit отвергается до TryBeginRunning");
 		} finally {
 			await host.StopAsync().ConfigureAwait(false);
 		}
 	}
 
 	[Fact]
-	public async Task TriggerAsync_InDebounceWindow_ReturnsDebounced() {
+	public async Task RunAsync_InDebounceWindow_ThrowsDebounced() {
 		var fake = new FakeServiceA();
 		using var host = TestHostFactory.Build(
 			configure: jobs => jobs.Stage("a")
@@ -174,12 +177,12 @@ public sealed class ScenarioManualTriggerTests {
 		await host.StartAsync().ConfigureAwait(false);
 		try {
 			(await fake.WaitForCallCountAsync(1, Timeout).ConfigureAwait(false)).Should().BeTrue();
-			// Дать event loop'у обработать StageCompleted — выставить LastAttempt.
 			await Task.Delay(200).ConfigureAwait(false);
 
 			var orchestrator = host.Services.GetRequiredService<IJobOrchestrator>();
-			var result = await orchestrator["a"][InstanceKey.None].TriggerAsync().ConfigureAwait(false);
-			result.Should().Be(TriggerResult.Debounced);
+			Func<Task> act = () => orchestrator["a"][InstanceKey.None].RunAsync();
+			var ex = (await act.Should().ThrowAsync<IterationRejectedException>().ConfigureAwait(false)).Which;
+			ex.Reason.Should().Be(IterationRejectReason.Debounced);
 		} finally {
 			await host.StopAsync().ConfigureAwait(false);
 		}

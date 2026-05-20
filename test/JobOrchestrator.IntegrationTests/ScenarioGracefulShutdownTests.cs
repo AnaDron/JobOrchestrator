@@ -6,8 +6,9 @@ public sealed class ScenarioGracefulShutdownTests {
 	private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(5);
 
 	[Fact]
-	public async Task TriggerAsync_AfterStop_ReturnsFaultedOrNotFound() {
-		// После остановки SDK external-вызовы должны быстро возвращать Faulted, не подвисать на await.
+	public async Task RunAsync_AfterStop_ThrowsFaulted() {
+		// После остановки SDK external-вызовы должны быстро бросать IterationRejectedException(Faulted),
+		// не подвисать на await.
 		using var host = TestHostFactory.Build(
 			configure: jobs => jobs.Stage("a").HandledBy<FakeServiceA>().RunPeriodically(TimeSpan.FromHours(1)),
 			registerFakes: s => s.AddSingleton<FakeServiceA>());
@@ -18,11 +19,10 @@ public sealed class ScenarioGracefulShutdownTests {
 		(await fake.WaitForCallCountAsync(1, Timeout).ConfigureAwait(false)).Should().BeTrue();
 		await host.StopAsync().ConfigureAwait(false);
 
-		// После shutdown TriggerAsync должен либо вернуться Faulted (Channel closed), либо завершиться быстро (<1сек).
-		// Используем CancellationToken с таймаутом для защиты от подвисания.
 		using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
-		var result = await orchestrator["a"][InstanceKey.None].TriggerAsync(cts.Token).ConfigureAwait(false);
-		result.Should().Be(TriggerResult.Faulted);
+		Func<Task> act = () => orchestrator["a"][InstanceKey.None].RunAsync(cts.Token);
+		var ex = (await act.Should().ThrowAsync<IterationRejectedException>().ConfigureAwait(false)).Which;
+		ex.Reason.Should().Be(IterationRejectReason.Faulted);
 	}
 
 	[Fact]

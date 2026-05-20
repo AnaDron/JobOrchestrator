@@ -71,7 +71,7 @@ internal sealed record class StageHandle(JobOrchestratorRuntime Runtime, StageDe
 	/// Валидирует, что переданные key-names ровно соответствуют <see cref="StageDescriptor.ExpectedKeyNames"/>
 	/// (без duplicates, без неизвестных, без missing). Бросает <see cref="ArgumentException"/> при mismatch —
 	/// fail-fast на handle-construction, чтобы юзер увидел проблему сразу, а не получил silent-NotFound
-	/// в TriggerAsync.
+	/// в RunAsync.
 	/// </summary>
 	private ImmutableDictionary<string, string> ValidateAndBuild(ReadOnlySpan<(string Name, string Value)> keys) {
 		var expected = Stage.ExpectedKeyNames;

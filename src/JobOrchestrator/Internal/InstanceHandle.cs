@@ -19,12 +19,9 @@ internal sealed record class InstanceHandle(JobOrchestratorRuntime Runtime, Inst
 
 	public InstanceInfo? Snapshot => Runtime.FindInstance(Identity)?.ToInstanceInfo();
 
-	public Task<TriggerResult> TriggerAsync(CancellationToken ct = default) =>
-		Runtime.TriggerAsync(Identity, ct);
+	public Task<IIterationHandle> RunAsync(CancellationToken ct = default) =>
+		Runtime.RunAsync(Identity, ct);
 
 	public Task WaitForSuccessAsync(CancellationToken ct = default) =>
 		Runtime.WaitForStageSuccessAsync(Identity, ct);
-
-	public Task<StageOutcome> WaitForOutcomeAsync(CancellationToken ct = default) =>
-		Runtime.WaitForStageOutcomeAsync(Identity, ct);
 }

@@ -33,7 +33,8 @@ internal sealed class InstanceIdentity : IEquatable<InstanceIdentity> {
 
 	/// <summary>
 	/// Канонический encoding ключа (порядок задаётся <see cref="StageDescriptor.ExpectedKeyNames"/>, escaped) —
-	/// используется как hash-key в <see cref="InstanceManager"/>, <see cref="KeyspaceRegistry"/> и waiters.
+	/// используется как hash-key в <see cref="InstanceManager"/>, <see cref="KeyspaceRegistry"/> и
+	/// <see cref="SuccessWaiters"/>.
 	/// </summary>
 	public string EncodedKey { get; }
 

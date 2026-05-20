@@ -57,8 +57,8 @@ public sealed class ScenarioHandleApiTests {
 	}
 
 	[Fact]
-	public async Task InstanceKey_None_KeylessTrigger_Works() {
-		// orchestrator["a"][InstanceKey.None].TriggerAsync() — keyless через handle-API.
+	public async Task InstanceKey_None_KeylessRunAsync_Works() {
+		// orchestrator["a"][InstanceKey.None].RunAsync() — keyless через handle-API.
 		using var host = TestHostFactory.Build(
 			configure: jobs => jobs.Stage("a").HandledBy<FakeServiceA>().RunPeriodically(TimeSpan.FromHours(1)),
 			registerFakes: s => s.AddSingleton<FakeServiceA>());
@@ -67,9 +67,10 @@ public sealed class ScenarioHandleApiTests {
 		try {
 			var orchestrator = host.Services.GetRequiredService<IJobOrchestrator>();
 			(await fake.WaitForCallCountAsync(1, Timeout).ConfigureAwait(false)).Should().BeTrue("auto-tick");
+			await Task.Delay(100).ConfigureAwait(false);
 
-			var result = await orchestrator["a"][InstanceKey.None].TriggerAsync().ConfigureAwait(false);
-			result.Should().Be(TriggerResult.Started);
+			var iteration = await orchestrator["a"][InstanceKey.None].RunAsync().ConfigureAwait(false);
+			iteration.Should().NotBeNull();
 			(await fake.WaitForCallCountAsync(2, Timeout).ConfigureAwait(false)).Should().BeTrue();
 		} finally {
 			await host.StopAsync().ConfigureAwait(false);
@@ -78,7 +79,7 @@ public sealed class ScenarioHandleApiTests {
 
 	[Fact]
 	public async Task SingleKey_Indexer_Works() {
-		// orchestrator["pg"][("shops","u1")].TriggerAsync() — 1-key через tuple-indexer.
+		// orchestrator["pg"][("shops","u1")].RunAsync() — 1-key через tuple-indexer.
 		using var host = TestHostFactory.Build(
 			configure: jobs => {
 				var shops = jobs.Stage("shops").HandledBy<FakeServiceA>().RunPeriodically(TimeSpan.FromHours(1));
@@ -97,9 +98,10 @@ public sealed class ScenarioHandleApiTests {
 		try {
 			var orchestrator = host.Services.GetRequiredService<IJobOrchestrator>();
 			(await pgFake.WaitForCallCountAsync(1, Timeout).ConfigureAwait(false)).Should().BeTrue();
+			await Task.Delay(100).ConfigureAwait(false);
 
-			var result = await orchestrator["pg"][("shops", "u1")].TriggerAsync().ConfigureAwait(false);
-			result.Should().Be(TriggerResult.Started);
+			var iteration = await orchestrator["pg"][("shops", "u1")].RunAsync().ConfigureAwait(false);
+			iteration.Should().NotBeNull();
 			(await pgFake.WaitForCallCountAsync(2, Timeout).ConfigureAwait(false)).Should().BeTrue();
 		} finally {
 			await host.StopAsync().ConfigureAwait(false);
@@ -194,7 +196,7 @@ public sealed class ScenarioHandleApiTests {
 	[Fact]
 	public async Task Indexer_InvalidKeyName_ThrowsArgumentException() {
 		// orchestrator["pg"][("wrong-key", "v")] → fail-fast в момент handle-construction,
-		// а не silent-NotFound в TriggerAsync.
+		// а не silent-NotFound в RunAsync.
 		using var host = TestHostFactory.Build(
 			configure: jobs => {
 				var shops = jobs.Stage("shops").HandledBy<FakeServiceA>().RunPeriodically(TimeSpan.FromHours(1));

@@ -9,4 +9,3 @@
 - Перенести методы DependencyResolver в InstanceManager
 - Проверить корректность работы FindPairedInstance
 - Инспекция JobOrchestratorRuntime.InstancesOf - используется только для тестов
-- Избавиться от OutcomeWaiters

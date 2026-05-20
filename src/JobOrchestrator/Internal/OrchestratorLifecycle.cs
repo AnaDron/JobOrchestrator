@@ -7,7 +7,7 @@ namespace JobOrchestrator.Internal;
 /// <summary>
 /// Singleton, координирующий fault-состояние оркестратора между
 /// <see cref="JobOrchestratorHostedService"/> (выставляет флаг при крахе event loop)
-/// и <see cref="JobOrchestratorRuntime"/> (читает флаг для fail-fast в TriggerAsync/RegisterKey/...).
+/// и <see cref="JobOrchestratorRuntime"/> (читает флаг для fail-fast в RunAsync/RegisterKey/...).
 /// <para>
 /// Также владеет <see cref="WorkersCancellationToken"/> — токеном, который cancel-ится в момент
 /// <see cref="MarkFaulted"/>. Используется <see cref="StageRunner"/> при создании linked CTS,

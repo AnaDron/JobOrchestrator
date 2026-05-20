@@ -7,7 +7,7 @@ public sealed class ScenarioCrashIsolationTests {
 	private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(10);
 
 	[Fact]
-	public async Task AfterMarkFaulted_TriggerAsync_ReturnsFaulted() {
+	public async Task AfterMarkFaulted_RunAsync_ThrowsFaulted() {
 		using var host = TestHostFactory.Build(
 			configure: jobs => jobs.Stage("a").HandledBy<FakeServiceA>().RunPeriodically(TimeSpan.FromMinutes(1)),
 			registerFakes: s => s.AddSingleton<FakeServiceA>());
@@ -24,8 +24,9 @@ public sealed class ScenarioCrashIsolationTests {
 			lifecycle.MarkFaulted();
 			orchestrator.IsFaulted.Should().BeTrue();
 
-			var result = await orchestrator["a"][InstanceKey.None].TriggerAsync().ConfigureAwait(false);
-			result.Should().Be(TriggerResult.Faulted);
+			Func<Task> act = () => orchestrator["a"][InstanceKey.None].RunAsync();
+			var ex = (await act.Should().ThrowAsync<IterationRejectedException>().ConfigureAwait(false)).Which;
+			ex.Reason.Should().Be(IterationRejectReason.Faulted);
 		} finally {
 			await host.StopAsync().ConfigureAwait(false);
 		}
@@ -56,7 +57,7 @@ public sealed class ScenarioCrashIsolationTests {
 	public async Task AfterMarkFaulted_GetOverview_IsStillAccessible() {
 		// Новый контракт (см. ultrathink-анализ, P3.5.2): GetOverview доступен даже в Faulted-состоянии,
 		// чтобы можно было увидеть post-mortem snapshot — что было в InstanceManager на момент краша.
-		// Мутирующие операции (TriggerAsync/RegisterKey) — fail-fast как раньше.
+		// Мутирующие операции (RunAsync/RegisterKey) — fail-fast как раньше.
 		using var host = TestHostFactory.Build(
 			configure: jobs => jobs.Stage("a").HandledBy<FakeServiceA>().RunPeriodically(TimeSpan.FromMinutes(1)),
 			registerFakes: s => s.AddSingleton<FakeServiceA>());

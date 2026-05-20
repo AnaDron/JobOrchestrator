@@ -50,17 +50,32 @@ services.AddInMemoryJobStateStore();
 orchestrator["producer"].RegisterKey("k1");
 orchestrator["producer"].UnregisterKey("k1");
 
-// Ручной trigger:
-await orchestrator["producer"][InstanceKey.None].TriggerAsync();
-await orchestrator["consumer"][("producer", "k1")].TriggerAsync();
+// Ручной запуск инстанса — возвращает IIterationHandle конкретной итерации:
+var iteration = await orchestrator["consumer"][("producer", "k1")].RunAsync(ct);
+// На любой отказ запуска (Debounced / ConcurrencyDeferred / NotFound / Terminating / AlreadyRunning /
+// Faulted) бросается IterationRejectedException с конкретным Reason.
+
+// Дождаться завершения — стандартный Task API; success = тихий await, failure = exception:
+try {
+    await iteration.Completion;
+    // успех
+} catch (IterationFailedException ex) {
+    switch (ex.Reason) {
+        case IterationFailureReason.StageException: /* stage handler бросил; ex.InnerException = причина */ break;
+        case IterationFailureReason.Cancelled:      /* инстанс удалён каскадом */ break;
+        case IterationFailureReason.Faulted:        /* оркестратор остановлен / event-loop crash */ break;
+    }
+}
+
+// Composability — Task.WhenAll/Any, ContinueWith, WaitAsync(ct) — всё стандартно:
+await iteration.Completion.WaitAsync(TimeSpan.FromSeconds(10));
 
 // Состояние / диагностика конкретного инстанса:
 var state = orchestrator["consumer"][("producer", "k1")].State;
 var snapshot = orchestrator["consumer"][("producer", "k1")].Snapshot;
 
-// Ожидание исхода:
+// Ожидание первого успеха (memoized по identity):
 await orchestrator["consumer"][("producer", "k1")].WaitForSuccessAsync(ct);
-var outcome = await orchestrator["consumer"][("producer", "k1")].WaitForOutcomeAsync(ct);
 
 // Итерация всех инстансов одной стадии:
 foreach (var h in orchestrator["consumer"].AllInstances) {
@@ -73,7 +88,7 @@ foreach (var stage in orchestrator) { /* ... */ }
 
 **Composite keys** (2+ компонента) — через tuple-индексатор или span-params:
 ```csharp
-orchestrator["docs"][("shops", "u1"), ("currencies", "USD")].TriggerAsync();
+await orchestrator["docs"][("shops", "u1"), ("currencies", "USD")].RunAsync();
 ```
 
 **Кэширование handles в hot-path**: indexer-вызовы создают per-call аллокации. Для polling-сценариев кэшируйте handle локально:
@@ -97,9 +112,9 @@ SDK оперирует тремя сущностями: **Stage** (immutable д�
 
 - **Один оркестратор на процесс** — граф, keyspace и waiters in-memory; горизонтальное масштабирование нескольких writer'ов без внешнего lease не поддерживается (см. `TODO.md`).
 - **Рестарт процесса** — граф стадий, keyspace и метрики инстансов в RAM; после рестарта нужен bootstrap (`RegisterKey`, первые sync-итерации). Персистентность — через `IJobState` / `IJobStateStore`.
-- **Backpressure** — очередь bounded (10 000), единый `ChannelWriterExtensions` (fast `TryWrite` / slow `WriteAsync`). Внутри `IJobService` и `TriggerAsync` — `PublishAsync` (async). Sync-`Publish` — completion runner-а, DueScanner, `RegisterKey`/`UnregisterKey`; не с HTTP-request thread.
+- **Backpressure** — очередь bounded (10 000), единый `ChannelWriterExtensions` (fast `TryWrite` / slow `WriteAsync`). Внутри `IJobService` и `RunAsync` — `PublishAsync` (async). Sync-`Publish` — completion runner-а, DueScanner, `RegisterKey`/`UnregisterKey`; не с HTTP-request thread.
 - **Глобальный лимит** — `jobs.Defaults.GlobalConcurrencyLimit = N` ограничивает суммарный параллелизм итераций поверх `WithConcurrencyLimit` per-stage.
-- **`WaitForOutcomeAsync`** — мемоизирует последний исход (Success/Failure/Cancelled): если итерация уже завершилась, Task резолвится сразу с этим outcome. Чтобы дождаться конкретного запуска — сначала `WaitForOutcomeAsync()`, затем `TriggerAsync()` (см. XML на `IInstanceHandle`).
+- **`RunAsync`** — manual-запуск с возвратом `IIterationHandle` конкретной итерации. Handle привязан к ЗАПУЩЕННОМУ циклу (не identity), поэтому race с Auto-тиками невозможен. Acceptance-reject (Debounced/ConcurrencyDeferred/NotFound/Terminating/AlreadyRunning/Faulted) — `IterationRejectedException(Reason)`. Завершение через `iteration.Completion` (`Task`): тихий `await` = успех; `IterationFailedException(Reason)` = не-успешный исход (`StageException` — бизнес-ошибка handler'а, оригинал в `InnerException`; `Cancelled` — каскадная отмена; `Faulted` — shutdown / event-loop crash).
 - **Устойчивость** — `ManualTrigger` TCS при сбое handler'а; мутирующие события (ключи/completion/tick) → fault сразу (`FaultOnStateMutatingHandlerCrash`, default on). Иначе fault после N подряд. `ConcurrencyDeferJitterMaxMilliseconds` (default 500) при лимитах. `ShutdownIterationTimeout` — принудительный cancel итераций после shutdown.
 
 ## Сборка и тесты

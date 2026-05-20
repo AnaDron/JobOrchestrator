@@ -49,6 +49,7 @@ internal sealed class Instance {
 	int _terminating;   // 0 = не Terminating, 1 = Terminating
 	int _pendingTick;
 	volatile CancellationTokenSource? _runCts;
+	TaskCompletionSource? _iterationOutcomeTcs;
 
 	/// <summary>Атомарный snapshot мутирующихся метрик. Безопасно вызывать из любого потока.</summary>
 	public JobMetrics Metrics => Volatile.Read(ref _metrics);
@@ -125,6 +126,34 @@ internal sealed class Instance {
 	/// </summary>
 	public void ClearRunCtsIfEquals(CancellationTokenSource expected) =>
 		Interlocked.CompareExchange(ref _runCts, null, expected);
+
+	/// <summary>
+	/// Привязывает iteration-scoped TCS, который event-loop резолвит при завершении текущей итерации
+	/// (<c>TrySetResult()</c> при success, <c>TrySetException(IterationFailedException)</c> при любом
+	/// не-успешном исходе). Используется <see cref="IInstanceHandle.RunAsync"/> для возврата caller'у
+	/// результата именно этого запуска (без race с Auto-тиками).
+	/// <para>
+	/// Single-writer: пишется ТОЛЬКО из event-loop-consumer-потока (<c>HandleManualTrigger</c>) сразу
+	/// после <c>TryBeginRunning</c> — конкурентного writer'а не существует, потому что параллельная
+	/// итерация на том же инстансе невозможна.
+	/// </para>
+	/// <para>
+	/// <b>Race-free инвариант:</b> Runner запускается на ThreadPool в <c>BeginIteration</c>; даже если
+	/// он завершится моментально и опубликует <c>StageCompletedEvent</c> в channel, event-loop не
+	/// обработает это событие до возврата из <c>HandleManualTrigger</c> (single-threaded consumer).
+	/// Поэтому к моменту, когда <c>HandleStageCompletedAsync</c> вызывает <see cref="TakeIterationOutcomeTcs"/>,
+	/// TCS гарантированно уже привязан.
+	/// </para>
+	/// </summary>
+	public void SetIterationOutcomeTcs(TaskCompletionSource tcs) =>
+		_iterationOutcomeTcs = tcs;
+
+	/// <summary>
+	/// Атомарно снимает iteration-outcome TCS (set to null) и возвращает прежнее значение, либо
+	/// <c>null</c>, если TCS не был привязан (Auto-тик — никто не ждёт исход конкретного цикла).
+	/// </summary>
+	public TaskCompletionSource? TakeIterationOutcomeTcs() =>
+		Interlocked.Exchange(ref _iterationOutcomeTcs, null);
 
 	/// <summary>Проецирует текущее состояние инстанса в публичный snapshot. Вызывается из <see cref="InstanceManager"/> и InstanceHandle.</summary>
 	public InstanceInfo ToInstanceInfo() {

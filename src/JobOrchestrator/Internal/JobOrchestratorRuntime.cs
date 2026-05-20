@@ -18,7 +18,6 @@ internal sealed class JobOrchestratorRuntime : IJobOrchestrator {
 	private readonly InstanceManager _instances;
 	private readonly OrchestratorLifecycle _lifecycle;
 	private readonly SuccessWaiters _successWaiters;
-	private readonly OutcomeWaiters _outcomeWaiters;
 	private readonly ILogger<JobOrchestratorRuntime> _logger;
 	private readonly Dictionary<string, StageHandle> _stageHandles;
 	private readonly HashSet<string> _knownDomains;
@@ -30,14 +29,12 @@ internal sealed class JobOrchestratorRuntime : IJobOrchestrator {
 		InstanceManager instances,
 		OrchestratorLifecycle lifecycle,
 		SuccessWaiters successWaiters,
-		OutcomeWaiters outcomeWaiters,
 		ILogger<JobOrchestratorRuntime> logger
 	) {
 		_channel = channel;
 		_instances = instances;
 		_lifecycle = lifecycle;
 		_successWaiters = successWaiters;
-		_outcomeWaiters = outcomeWaiters;
 		_logger = logger;
 
 		_stageHandles = registry.AllStages.ToDictionary(x => x.Name, x => new StageHandle(this, x), StringComparer.Ordinal);
@@ -97,24 +94,41 @@ internal sealed class JobOrchestratorRuntime : IJobOrchestrator {
 	#region Internal API — вызывается StageHandle / InstanceHandle
 
 	/// <summary>
-	/// Identity-based trigger: identity уже валидирован в StageHandle-indexer (проверка key-names
+	/// Identity-based RunAsync: identity уже валидирован в StageHandle-indexer (проверка key-names
 	/// против ExpectedKeyNames), поэтому валидация ключей здесь не повторяется.
+	/// <para>
+	/// На любой reject (Debounced/NotFound/AlreadyRunning/Terminating/ConcurrencyDeferred/Faulted)
+	/// бросает <see cref="IterationRejectedException"/> с конкретным <see cref="IterationRejectReason"/>.
+	/// На Started возвращает <see cref="IIterationHandle"/> — caller через него опрашивает статус
+	/// и ждёт завершения. Передача handle не блокирует caller'а на самой итерации.
+	/// </para>
 	/// </summary>
-	internal async Task<TriggerResult> TriggerAsync(InstanceIdentity identity, CancellationToken ct = default) {
+	internal async Task<IIterationHandle> RunAsync(InstanceIdentity identity, CancellationToken ct = default) {
 		if (_lifecycle.IsFaulted) {
 			Log.TriggerFaulted(_logger, identity.Stage.Name, null);
-			return TriggerResult.Faulted;
+			throw new IterationRejectedException(IterationRejectReason.Faulted, identity.FullyQualifiedName,
+				$"Запуск инстанса {identity.FullyQualifiedName} невозможен: оркестратор в Faulted-состоянии.");
 		}
-		var tcs = new TaskCompletionSource<TriggerResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+		var tcs = new TaskCompletionSource<IIterationHandle>(TaskCreationOptions.RunContinuationsAsynchronously);
 		var evt = new ManualTriggerRequestedEvent(identity, tcs);
 		try {
 			await _channel.Writer.WriteAsync(evt, ct).ConfigureAwait(false);
 		} catch (ChannelClosedException) {
-			return TriggerResult.Faulted;
+			throw new IterationRejectedException(IterationRejectReason.Faulted, identity.FullyQualifiedName,
+				$"Запуск инстанса {identity.FullyQualifiedName} невозможен: channel оркестратора закрыт.");
 		}
-		var result = await tcs.Task.WaitAsync(ct).ConfigureAwait(false);
-		Log.TriggerCompleted(_logger, identity.Stage.Name, result, null);
-		return result;
+		// Propagation caller's cancellation: ct.UnsafeRegister отменяет evt.Tcs синхронно при cancel
+		// (если ct уже cancelled — callback вызовется сразу при Register). Event-loop в HandleManualTrigger
+		// проверяет evt.Tcs.Task.IsCompleted и пропускает запуск итерации — закрывает «lost iteration»
+		// race-окно. Остаточный gap (cancel ровно в момент TryBeginRunning) принципиально не closeable
+		// без отмены итерации post-factum, что выходит за рамки контракта.
+		await using var ctReg = ct.UnsafeRegister(static state => {
+			var t = (TaskCompletionSource<IIterationHandle>)state!;
+			t.TrySetCanceled();
+		}, tcs).ConfigureAwait(false);
+		var handle = await tcs.Task.ConfigureAwait(false);
+		Log.IterationStarted(_logger, identity.Stage.Name, null);
+		return handle;
 	}
 
 	internal Task WaitForStageSuccessAsync(InstanceIdentity identity, CancellationToken ct = default) {
@@ -136,12 +150,6 @@ internal sealed class JobOrchestratorRuntime : IJobOrchestrator {
 		}
 
 		return task;
-	}
-
-	internal Task<StageOutcome> WaitForStageOutcomeAsync(InstanceIdentity identity, CancellationToken ct = default) {
-		var existing = _instances.Find(identity);
-		var resolved = existing?.Identity ?? identity;
-		return _outcomeWaiters.Register(resolved, ct);
 	}
 
 	internal Instance? FindInstance(InstanceIdentity identity) => _instances.Find(identity);
@@ -199,13 +207,13 @@ internal sealed class JobOrchestratorRuntime : IJobOrchestrator {
 	/// Operational visibility: видно кто и когда дёргал manual-triggers.
 	/// </summary>
 	private static class Log {
-		public static readonly Action<ILogger, string, TriggerResult, Exception?> TriggerCompleted =
-			LoggerMessage.Define<string, TriggerResult>(LogLevel.Debug, new EventId(6001, nameof(TriggerCompleted)),
-				"TriggerAsync({StageName}) → {Result}");
+		public static readonly Action<ILogger, string, Exception?> IterationStarted =
+			LoggerMessage.Define<string>(LogLevel.Debug, new EventId(6001, nameof(IterationStarted)),
+				"RunAsync({StageName}) → итерация запущена");
 
 		public static readonly Action<ILogger, string, Exception?> TriggerFaulted =
 			LoggerMessage.Define<string>(LogLevel.Debug, new EventId(6002, nameof(TriggerFaulted)),
-				"TriggerAsync({StageName}) → Faulted (оркестратор крашнулся)");
+				"RunAsync({StageName}) → Faulted (оркестратор крашнулся)");
 
 		public static readonly Action<ILogger, string, string, Exception?> RegisterKeyExternal =
 			LoggerMessage.Define<string, string>(LogLevel.Information, new EventId(6005, nameof(RegisterKeyExternal)),

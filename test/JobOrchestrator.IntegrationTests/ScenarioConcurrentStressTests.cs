@@ -39,7 +39,7 @@ public sealed class ScenarioConcurrentStressTests {
 						try {
 							switch (j % 4) {
 								case 0: orchestrator["producer"].RegisterKey(key); break;
-								case 1: await orchestrator["producer"][InstanceKey.None].TriggerAsync(stopCts.Token).ConfigureAwait(false); break;
+								case 1: await orchestrator["producer"][InstanceKey.None].RunAsync(stopCts.Token).ConfigureAwait(false); break;
 								case 2: orchestrator["producer"].UnregisterKey(key); break;
 								case 3: orchestrator.GetOverview(); break;
 							}
@@ -48,6 +48,9 @@ public sealed class ScenarioConcurrentStressTests {
 						} catch (InvalidOperationException) {
 							// Может прилететь если IsFaulted был выставлен между check и call — для теста OK.
 							break;
+						} catch (IterationRejectedException) {
+							// Stress-loop: Debounced/AlreadyRunning/ConcurrencyDeferred — ожидаемые отказы.
+							continue;
 						}
 					}
 				}, stopCts.Token));

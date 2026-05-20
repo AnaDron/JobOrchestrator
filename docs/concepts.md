@@ -95,7 +95,7 @@ var products = jobs.Stage("products")
 
 **Триггеры запуска:**
 - `Auto` — internal timer тикает по `Instance.NextTickAtMs`.
-- `Manual` — `orchestrator["stageName"][(keyName, keyValue), ...].TriggerAsync()`.
+- `Manual` — `orchestrator["stageName"][(keyName, keyValue), ...].RunAsync()`.
 
 **Что происходит вокруг одной итерации:**
 1. EventLoop принимает решение `TryAccept(instance, source)` — проверяет `Running`/`AlreadyRunning`, retry-delay (для Auto), debounce (для Manual).

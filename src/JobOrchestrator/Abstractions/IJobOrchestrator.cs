@@ -45,7 +45,7 @@ public interface IJobOrchestrator : IEnumerable<IStageHandle> {
 	InstancesOverview GetOverview();
 
 	/// <summary>
-	/// Domain-проекция: <c>orchestrator.WithDomain("evotor")["shops"][keys].TriggerAsync()</c>.
+	/// Domain-проекция: <c>orchestrator.WithDomain("evotor")["shops"][keys].RunAsync()</c>.
 	/// Возвращаемый <see cref="IDomainScopedJobOrchestrator"/> кэшируется per-domain — multiple вызовы
 	/// с тем же <paramref name="domain"/> дают тот же объект (без per-call аллокаций).
 	/// </summary>

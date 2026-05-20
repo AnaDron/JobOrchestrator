@@ -41,7 +41,6 @@ internal sealed class EventLoop(
 	ConcurrencyLimits concurrency,
 	GlobalIterationLimiter globalLimiter,
 	SuccessWaiters successWaiters,
-	OutcomeWaiters outcomeWaiters,
 	Channel<OrchestratorEvent> channel,
 	IJobStateStore stateStore,
 	OrchestratorLifecycle lifecycle,
@@ -65,7 +64,15 @@ internal sealed class EventLoop(
 					_handlerCrashCount++;
 					Log.HandlerCrashed(logger, evt.GetType().Name, ex);
 					if (evt is ManualTriggerRequestedEvent mt) {
-						mt.Tcs.TrySetException(ex);
+						// Заворачиваем причину в IterationRejectedException — caller'у обещано, что reject
+						// приходит ИМЕННО этим типом. Inner = оригинальный exception handler'а, stack-trace
+						// сохраняется для диагностики.
+						var rejected = new IterationRejectedException(
+							IterationRejectReason.Faulted,
+							mt.Identity.FullyQualifiedName,
+							$"Сбой обработчика события {evt.GetType().Name}; запуск {mt.Identity.FullyQualifiedName} отвергнут.",
+							ex);
+						mt.Tcs.TrySetException(rejected);
 					}
 					var stateMutatingCrash = hostOptions.FaultOnStateMutatingHandlerCrash && IsStateMutatingHandlerEvent(evt);
 					if (stateMutatingCrash) {
@@ -92,7 +99,12 @@ internal sealed class EventLoop(
 			// чёткий сигнал «оркестратор остановлен», а не зависшие Task'и.
 			var stopReason = new InvalidOperationException("Оркестратор остановлен; WaitFor-ожидания не могут быть резолвлены.");
 			successWaiters.FailAll(stopReason);
-			outcomeWaiters.FailAll(stopReason);
+			// Любые ещё не освобождённые iteration-outcome TCS на инстансах (на момент финального
+			// drain runner мог не успеть опубликовать completion-event) — резолвим Faulted-исключением.
+			foreach (var inst in instances.All) {
+				inst.TakeIterationOutcomeTcs()?.TrySetException(
+					IterationFailures.OrchestratorShutdown(inst, stopReason));
+			}
 		}
 		Log.Stopped(logger, null);
 	}
@@ -108,13 +120,16 @@ internal sealed class EventLoop(
 	/// </para>
 	/// </summary>
 	private void DrainPendingRequests() {
-		var stopReason = new InvalidOperationException("Оркестратор остановлен; ManualTrigger не может быть обслужен.");
+		var stopReason = new InvalidOperationException("Оркестратор остановлен; WaitFor-ожидания не могут быть резолвлены.");
 		while (channel.Reader.TryRead(out var evt)) {
 			switch (evt) {
 				case ManualTriggerRequestedEvent mt:
-					// Точная семантика: InvalidOperationException (graceful shutdown), а не TriggerResult.Faulted
-					// (что подразумевает crash). Caller увидит чёткий exception вместо безмолвного «Faulted».
-					mt.Tcs.TrySetException(stopReason);
+					// Контракт RunAsync: reject — всегда IterationRejectedException. Drain в shutdown
+					// относится к pending request'у, который ещё не получил handle — это reject.
+					mt.Tcs.TrySetException(new IterationRejectedException(
+						IterationRejectReason.Faulted,
+						mt.Identity.FullyQualifiedName,
+						$"Оркестратор остановлен; запуск {mt.Identity.FullyQualifiedName} не может быть обслужен."));
 					break;
 				// StageCompleted/Failed могут оказаться в Channel если runner опубликовал событие
 				// уже после того, как ReadAllAsync завершился (stoppingToken). EndRunning снимает
@@ -187,21 +202,60 @@ internal sealed class EventLoop(
 	}
 
 	private void HandleManualTrigger(ManualTriggerRequestedEvent evt, CancellationToken ct) {
+		// Fast-path: caller отменил свой CancellationToken до того, как мы дошли до обработки.
+		// Runtime через ct.UnsafeRegister отменяет evt.Tcs синхронно при cancellation → IsCompleted=true.
+		// Не запускаем итерацию — caller уже ушёл, side-effects бесполезны.
+		if (evt.Tcs.Task.IsCompleted) {
+			Log.ManualTriggerCallerCancelled(logger, evt.Identity.FullyQualifiedName, null);
+			return;
+		}
 		// O(1) lookup через pre-computed Identity — без повторного Encode на каждый trigger.
 		var instance = instances.Find(evt.Identity);
 		if (instance is null) {
-			evt.Tcs.TrySetResult(TriggerResult.NotFound);
+			Reject(evt, IterationRejectReason.NotFound, evt.Identity.FullyQualifiedName);
 			return;
 		}
 		var now = time.GetUtcNow();
 		var decision = TriggerAcceptance.TryAccept(instance, TriggerSource.Manual, now);
-		// BeginIteration вызывается ДО TrySetResult: ConcurrencyDeferred / WaitingRetry / Started.
-		if (decision.IsAccepted) {
-			evt.Tcs.TrySetResult(BeginIteration(instance, TriggerSource.Manual, ct));
-		} else {
-			evt.Tcs.TrySetResult(decision.Rejection!.Value);
+		if (!decision.IsAccepted) {
+			Reject(evt, MapTriggerResultToReason(decision.Rejection!.Value), instance.FullyQualifiedName);
+			return;
 		}
+		var result = BeginIteration(instance, TriggerSource.Manual, ct);
+		if (result != TriggerResult.Started) {
+			Reject(evt, MapTriggerResultToReason(result), instance.FullyQualifiedName);
+			return;
+		}
+		// Started → создаём iteration-scoped outcome TCS, привязываем к Instance. Completion-handler
+		// резолвит его: TrySetResult() на success, TrySetException(IterationFailedException) на любой
+		// failure-исход. Caller получает IterationHandle с задачей TCS.Task.
+		var outcomeTcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+		instance.SetIterationOutcomeTcs(outcomeTcs);
+		evt.Tcs.TrySetResult(new IterationHandle(instance.Identity, outcomeTcs.Task));
 	}
+
+	private void Reject(ManualTriggerRequestedEvent evt, IterationRejectReason reason, string fqn) {
+		Log.IterationRejected(logger, fqn, reason, null);
+		evt.Tcs.TrySetException(new IterationRejectedException(
+			reason, fqn, $"Запуск инстанса {fqn} отвергнут: {reason}."));
+	}
+
+	private static IterationRejectReason MapTriggerResultToReason(TriggerResult result) => result switch {
+		TriggerResult.NotFound => IterationRejectReason.NotFound,
+		TriggerResult.Terminating => IterationRejectReason.Terminating,
+		TriggerResult.AlreadyRunning => IterationRejectReason.AlreadyRunning,
+		TriggerResult.Debounced => IterationRejectReason.Debounced,
+		TriggerResult.ConcurrencyDeferred => IterationRejectReason.ConcurrencyDeferred,
+		TriggerResult.Faulted => IterationRejectReason.Faulted,
+		// Manual не должен получать Started здесь (caller обрабатывает Started отдельно) и WaitingRetry
+		// (TriggerAcceptance.TryAccept не возвращает WaitingRetry для Manual). Любое попадание сюда —
+		// нарушение инварианта event-loop'а, fail-fast.
+		TriggerResult.Started => throw new InvalidOperationException(
+			"Invariant violation: TriggerResult.Started не должен маппиться через MapTriggerResultToReason."),
+		TriggerResult.WaitingRetry => throw new InvalidOperationException(
+			"Invariant violation: Manual не должен получать TriggerResult.WaitingRetry от TriggerAcceptance."),
+		_ => throw new InvalidOperationException($"Unknown TriggerResult: {result}"),
+	};
 
 	/// <summary>
 	/// Запускает итерацию инстанса. Возвращает фактический результат запуска:
@@ -292,6 +346,8 @@ internal sealed class EventLoop(
 	private void DrainStageCompleted(StageCompletedEvent sc) {
 		var instance = sc.Instance;
 		if (instance.IsTerminating) {
+			instance.TakeIterationOutcomeTcs()?.TrySetException(
+				IterationFailures.CancelledByCascade(instance));
 			instance.EndRunning();
 			return;
 		}
@@ -300,13 +356,15 @@ internal sealed class EventLoop(
 
 		ApplyStageCompletedMetrics(instance, sc.At);
 		successWaiters.SignalSuccess(instance.Identity);
-		outcomeWaiters.Signal(instance.Identity, StageOutcome.Success);
+		instance.TakeIterationOutcomeTcs()?.TrySetResult();
 		instance.EndRunning();
 	}
 
 	private void DrainStageFailed(StageFailedEvent sf) {
 		var instance = sf.Instance;
 		if (instance.IsTerminating) {
+			instance.TakeIterationOutcomeTcs()?.TrySetException(
+				IterationFailures.CancelledByCascade(instance));
 			instance.EndRunning();
 			return;
 		}
@@ -314,11 +372,12 @@ internal sealed class EventLoop(
 		if (!instance.IsRunning) return;
 
 		ApplyStageFailedMetrics(instance, sf.Exception, sf.At);
-		outcomeWaiters.Signal(instance.Identity, StageOutcome.FromFailure(sf.Exception));
+		instance.TakeIterationOutcomeTcs()?.TrySetException(
+			IterationFailures.StageHandlerFailed(instance, sf.Exception));
 		instance.EndRunning();
 	}
 
-	private bool ApplyStageCompletedMetrics(Instance instance, DateTimeOffset at) {
+	private static bool ApplyStageCompletedMetrics(Instance instance, DateTimeOffset at) {
 		var current = instance.Metrics;
 		bool wasFirstSuccess = !current.Stats.LastSuccess.HasValue;
 		instance.SetMetrics(new JobMetrics(
@@ -331,7 +390,7 @@ internal sealed class EventLoop(
 		return wasFirstSuccess;
 	}
 
-	private void ApplyStageFailedMetrics(Instance instance, Exception ex, DateTimeOffset at) {
+	private static void ApplyStageFailedMetrics(Instance instance, Exception ex, DateTimeOffset at) {
 		var current = instance.Metrics;
 		var failures = current.Stats.ConsecutiveFailures + 1;
 		var retryDelay = instance.Stage.RetryPolicy.ComputeDelay(failures);
@@ -468,7 +527,8 @@ internal sealed class EventLoop(
 
 			// Сигналим waiters ПОСЛЕ обновления метрик — late-register увидит LastSuccess через fast-path.
 			successWaiters.SignalSuccess(instance.Identity);
-			outcomeWaiters.Signal(instance.Identity, StageOutcome.Success);
+			// Iteration-scoped TCS (если RunAsync привязал его на BeginIteration) — резолвим success.
+			instance.TakeIterationOutcomeTcs()?.TrySetResult();
 
 			if (wasFirstSuccess) {
 				Log.FirstSuccessCascade(logger, instance.FullyQualifiedName, null);
@@ -502,8 +562,11 @@ internal sealed class EventLoop(
 		try {
 			ApplyStageFailedMetrics(instance, ex, at);
 
-			// Outcome=Failure. SuccessWaiters не сигналим — этот цикл не success.
-			outcomeWaiters.Signal(instance.Identity, StageOutcome.FromFailure(ex));
+			// Iteration-scoped TCS (RunAsync) — отстреливаем IterationFailedException со stage-исключением
+			// в InnerException. SuccessWaiters не сигналим: этот цикл не success, late-register
+			// WaitForSuccessAsync продолжит ждать.
+			instance.TakeIterationOutcomeTcs()?.TrySetException(
+				IterationFailures.StageHandlerFailed(instance, ex));
 		} finally {
 			instance.EndRunning();
 			scanner.Wake();
@@ -519,12 +582,11 @@ internal sealed class EventLoop(
 		if (!instances.Remove(instance)) return;
 
 		// Уведомляем waiters об отмене: success-ожидание получает InvalidOperationException,
-		// outcome-ожидание получает StageOutcomeKind.Cancelled. После этого Reset bucket-ы —
-		// новый инстанс с теми же ключами начнёт с чистого состояния.
+		// iteration-scoped TCS (RunAsync) — IterationFailedException(Cancelled).
 		var cancelReason = new InvalidOperationException($"Инстанс {instance.FullyQualifiedName} удалён каскадом.");
 		successWaiters.SignalCancellation(instance.Identity, cancelReason);
-		outcomeWaiters.Signal(instance.Identity, StageOutcome.FromCancellation(cancelReason));
-		outcomeWaiters.Reset(instance.Identity);
+		instance.TakeIterationOutcomeTcs()?.TrySetException(
+			IterationFailures.CancelledByCascade(instance));
 
 		try {
 			await stateStore.RemoveScopeAsync(instance.StateScope, ct).ConfigureAwait(false);
@@ -644,5 +706,13 @@ internal sealed class EventLoop(
 		public static readonly Action<ILogger, string, Exception?> StateMutatingHandlerCrashFault =
 			LoggerMessage.Define<string>(LogLevel.Critical, new EventId(3029, nameof(StateMutatingHandlerCrashFault)),
 				"Сбой handler'а на мутирующем событии {EventType} — оркестратор переведён в fault (частичное состояние недопустимо)");
+
+		public static readonly Action<ILogger, string, IterationRejectReason, Exception?> IterationRejected =
+			LoggerMessage.Define<string, IterationRejectReason>(LogLevel.Debug, new EventId(3030, nameof(IterationRejected)),
+				"Manual-запуск {Instance} отвергнут: {Reason}");
+
+		public static readonly Action<ILogger, string, Exception?> ManualTriggerCallerCancelled =
+			LoggerMessage.Define<string>(LogLevel.Debug, new EventId(3031, nameof(ManualTriggerCallerCancelled)),
+				"Manual-запуск {Instance} пропущен — caller отменил cancellation token до обработки события");
 	}
 }

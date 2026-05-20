@@ -15,7 +15,7 @@ Job Orchestrator — SDK периодических задач с зависим
 ```
               Producers (any thread)                Consumer (single thread)
               ─────────────────────                 ───────────────────────
-   orchestrator["s"][keys].TriggerAsync ──┐
+   orchestrator["s"][keys].RunAsync ──────┐
    orchestrator["s"].RegisterKey ─────────┤
                                           ├──► Channel<OrchestratorEvent> ──► EventLoop.RunAsync
    ctx.AddKeyAsync  (из IJobService) ─────┤        (bounded 10_000)            ├─ HandleTimerTick
@@ -30,7 +30,7 @@ Job Orchestrator — SDK периодических задач с зависим
 
 Все публикации идут через `ChannelWriterExtensions` (`PublishAsync` / sync-`Publish`):
 
-- **Backpressure:** bounded-channel (10 000). Общий fast-path `TryWrite`; slow-path — `WriteAsync`. `PublishAsync` — `ctx.AddKeyAsync`/`RemoveKeyAsync`, `TriggerAsync` (async ожидание слота). Sync-`Publish` — completion runner-а, `TimerTicked`, `RegisterKey`/`UnregisterKey` (блокирует caller); не с UI/HTTP request thread.
+- **Backpressure:** bounded-channel (10 000). Общий fast-path `TryWrite`; slow-path — `WriteAsync`. `PublishAsync` — `ctx.AddKeyAsync`/`RemoveKeyAsync`, `RunAsync` (async ожидание слота). Sync-`Publish` — completion runner-а, `TimerTicked`, `RegisterKey`/`UnregisterKey` (блокирует caller); не с UI/HTTP request thread.
 - **Shutdown:** `ChannelClosedException` при `Publish` поглощается; `StageRunner` снимает `Running`, если completion не опубликован; события, уже лежащие в channel, дочищаются в `EventLoop.DrainPendingRequests` (`EndRunning` + сигнал waiters).
 
 ## DueScanner
@@ -117,7 +117,7 @@ BeginIteration (после принятия политики):
     TryBeginRunning → Started (runner на ThreadPool)
 ```
 
-- `Started` — только после успешного `TryBeginRunning` (в TCS `TriggerAsync` попадает результат `BeginIteration`).
+- `Started` — только после успешного `TryBeginRunning` (event-loop конструирует `IIterationHandle` и резолвит им `TCS` ответа `RunAsync`).
 - `ConcurrencyDeferred` — лимит параллелизма (глобальный или per-stage), не путать с `WaitingRetry` (retry-delay после неуспеха).
 - `Retry-delay` — защита downstream от Auto-spam после неуспеха. Manual игнорирует — пользователь явно просит.
 - `Debounce` — анти-spam-click для Manual. От `LastAttempt`, не от `LastSuccess`, поэтому работает и после успеха, и после неуспеха.
@@ -142,7 +142,7 @@ BeginIteration (после принятия политики):
 2. `FinalizeAllTerminatingAsync` — для застрявших terminating-инстансов вызывается `RemoveScopeAsync` (best-effort, исключения логируются).
 
 После Faulted внешний API (`IJobOrchestrator`):
-- `orchestrator["stage"][keys].TriggerAsync()` возвращает `TriggerResult.Faulted`.
+- `orchestrator["stage"][keys].RunAsync()` бросает `IterationRejectedException(Reason=Faulted)`.
 - `orchestrator["stage"].RegisterKey` / `UnregisterKey` бросают `InvalidOperationException`.
 - `GetOverview` доступен (для post-mortem snapshot'а — что было в InstanceManager на момент краша).
 
@@ -235,7 +235,7 @@ Equality по `(StageName, EncodedKey)`. Используется как primary
 - `StageDescriptor.DependentsWhole` / `StageDescriptor.DependentsInstance` — обратные индексы зависимостей, O(1) lookup.
 - `StageDescriptor.AffectedByKeyRemoval` — BFS-замыкание per стадия, кэшируется в словарь.
 - `CancellationRank(name)` — глубина «вниз по графу» (лист = 0, корень = max), используется для сортировки cascade-removal без повторного topo-sort-а каждый раз.
-- `ExpectedKeyNames(name)` — транзитивно унаследованные имена ключей через цепочку `DependsOn`/`DependsOnInstance`, используется в `ValidateKeys` (TriggerAsync).
+- `ExpectedKeyNames(name)` — транзитивно унаследованные имена ключей через цепочку `DependsOn`/`DependsOnInstance`, используется в `ValidateKeys` (handle-indexer).
 
 ## ConcurrencyLimits и GlobalIterationLimiter
 
