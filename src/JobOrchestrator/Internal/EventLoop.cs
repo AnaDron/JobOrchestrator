@@ -40,7 +40,6 @@ internal sealed class EventLoop(
 	DueScanner scanner,
 	ConcurrencyLimits concurrency,
 	GlobalIterationLimiter globalLimiter,
-	SuccessWaiters successWaiters,
 	Channel<OrchestratorEvent> channel,
 	IJobStateStore stateStore,
 	OrchestratorLifecycle lifecycle,
@@ -96,12 +95,11 @@ internal sealed class EventLoop(
 			DrainPendingRequests();
 			// Финализируем все Terminating-инстансы (их finalize-events не прилетят при закрытом Channel).
 			await FinalizeAllTerminatingAsync().ConfigureAwait(false);
-			// Завершаем все pending WaitFor-таски с InvalidOperationException — caller-ы получат
-			// чёткий сигнал «оркестратор остановлен», а не зависшие Task'и.
-			var stopReason = new InvalidOperationException("Оркестратор остановлен; WaitFor-ожидания не могут быть резолвлены.");
-			successWaiters.FailAll(stopReason);
-			// Любые ещё не освобождённые iteration-outcome TCS на инстансах (на момент финального
-			// drain runner мог не успеть опубликовать completion-event) — резолвим Faulted-исключением.
+			// WaitForSuccessAsync теперь реализован через broadcaster'ы: завершение subscriber-каналов
+			// (Changes + iteration stream) выполняется в JobOrchestratorRuntime.OnShutdown, что делает
+			// runtime'ом HostedService после нашего exit. Поэтому здесь — только iteration-outcome TCS:
+			// runner мог не успеть опубликовать completion-event перед закрытием channel.
+			var stopReason = new InvalidOperationException("Оркестратор остановлен; ожидания не могут быть резолвлены.");
 			foreach (var inst in instances.All) {
 				inst.TakeIterationOutcomeTcs()?.TrySetException(
 					IterationFailures.OrchestratorShutdown(inst, stopReason));
@@ -361,7 +359,6 @@ internal sealed class EventLoop(
 		if (!instance.IsRunning) return;
 
 		ApplyStageCompletedMetrics(instance, sc.At);
-		successWaiters.SignalSuccess(instance.Identity);
 		instance.TakeIterationOutcomeTcs()?.TrySetResult();
 		instance.EndRunning();
 	}
@@ -529,10 +526,10 @@ internal sealed class EventLoop(
 		if (!instance.IsRunning) return;
 
 		try {
+			// ApplyStageCompletedMetrics обновляет Snapshot.LastSuccess; этого достаточно для
+			// WaitForSuccessAsync-extension'а — он читает LastSuccess в fast-path и в re-check'ах между
+			// фазами своей реализации.
 			bool wasFirstSuccess = ApplyStageCompletedMetrics(instance, at);
-
-			// Сигналим waiters ПОСЛЕ обновления метрик — late-register увидит LastSuccess через fast-path.
-			successWaiters.SignalSuccess(instance.Identity);
 			// Iteration-scoped TCS (если RunAsync привязал его на BeginIteration) — резолвим success.
 			instance.TakeIterationOutcomeTcs()?.TrySetResult();
 
@@ -569,8 +566,9 @@ internal sealed class EventLoop(
 			ApplyStageFailedMetrics(instance, ex, at);
 
 			// Iteration-scoped TCS (RunAsync) — отстреливаем IterationFailedException со stage-исключением
-			// в InnerException. SuccessWaiters не сигналим: этот цикл не success, late-register
-			// WaitForSuccessAsync продолжит ждать.
+			// в InnerException. WaitForSuccessAsync через iteration-broadcaster получит этот fail в
+			// своём stream-loop'е (await iter.Completion бросит IterationFailedException) и продолжит
+			// ждать следующую итерацию.
 			instance.TakeIterationOutcomeTcs()?.TrySetException(
 				IterationFailures.StageHandlerFailed(instance, ex));
 		} finally {
@@ -587,10 +585,10 @@ internal sealed class EventLoop(
 		// сигнализации waiters и повторного RemoveScopeAsync.
 		if (!instances.Remove(instance)) return;
 
-		// Уведомляем waiters об отмене: success-ожидание получает InvalidOperationException,
-		// iteration-scoped TCS (RunAsync) — IterationFailedException(Cancelled).
-		var cancelReason = new InvalidOperationException($"Инстанс {instance.FullyQualifiedName} удалён каскадом.");
-		successWaiters.SignalCancellation(instance.Identity, cancelReason);
+		// Iteration-scoped TCS (RunAsync) — отстреливаем IterationFailedException(Cancelled).
+		// WaitForSuccessAsync-extension'у достаточно того, что iteration-broadcaster инстанса
+		// completes через InstanceManager.Remove → Runtime.OnInstanceRemoved → instance.CompleteIterationSubscribers,
+		// и его stream loop завершится с throw InvalidOperationException.
 		instance.TakeIterationOutcomeTcs()?.TrySetException(
 			IterationFailures.CancelledByCascade(instance));
 

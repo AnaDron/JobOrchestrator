@@ -25,9 +25,6 @@ internal sealed record class InstanceHandle(JobOrchestratorRuntime Runtime, Inst
 	public Task<IIterationHandle> RunAsync(CancellationToken ct = default) =>
 		Runtime.RunAsync(Identity, ct);
 
-	public Task WaitForSuccessAsync(CancellationToken ct = default) =>
-		Runtime.WaitForStageSuccessAsync(Identity, ct);
-
 	/// <summary>
 	/// Stream итераций инстанса. Подписка возможна только когда инстанс материализован — иначе stream
 	/// сразу завершается (yield break). Stream также завершается при cascade-removal этого инстанса.

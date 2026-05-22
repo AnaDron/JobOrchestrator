@@ -8,7 +8,7 @@ namespace JobOrchestrator.Internal;
 /// <para>
 /// API принимает <see cref="InstanceIdentity"/>, и внутреннее хранилище тоже ключуется по Identity
 /// (через Equals/GetHashCode по <c>(Stage.Name, EncodedKey)</c>). Это даёт консистентность с другими
-/// реестрами SDK (<see cref="InstanceManager"/>, <see cref="SuccessWaiters"/>) — единый паттерн
+/// реестрами SDK (<see cref="InstanceManager"/>) — единый паттерн
 /// «реестр инстансов ключуется по Identity».
 /// </para>
 /// <para>

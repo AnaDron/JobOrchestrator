@@ -27,7 +27,6 @@ internal sealed class JobOrchestratorRuntime : IJobOrchestrator {
 	private readonly Channel<OrchestratorEvent> _channel;
 	private readonly InstanceManager _instances;
 	private readonly OrchestratorLifecycle _lifecycle;
-	private readonly SuccessWaiters _successWaiters;
 	private readonly ILogger<JobOrchestratorRuntime> _logger;
 	private readonly Dictionary<string, StageHandle> _stageHandles;
 	private readonly Dictionary<string, DomainHandle> _domainsByName;
@@ -39,13 +38,11 @@ internal sealed class JobOrchestratorRuntime : IJobOrchestrator {
 		StageRegistry registry,
 		InstanceManager instances,
 		OrchestratorLifecycle lifecycle,
-		SuccessWaiters successWaiters,
 		ILogger<JobOrchestratorRuntime> logger
 	) {
 		_channel = channel;
 		_instances = instances;
 		_lifecycle = lifecycle;
-		_successWaiters = successWaiters;
 		_logger = logger;
 
 		var entriesByDomain = registry.AllStages
@@ -163,27 +160,6 @@ internal sealed class JobOrchestratorRuntime : IJobOrchestrator {
 		var handle = await tcs.Task.ConfigureAwait(false);
 		Log.IterationStarted(_logger, identity.Stage.Name, null);
 		return handle;
-	}
-
-	internal Task WaitForStageSuccessAsync(InstanceIdentity identity, CancellationToken ct = default) {
-		var existing = _instances.Find(identity);
-		var resolved = existing?.Identity ?? identity;
-		var task = _successWaiters.Register(resolved, ct);
-
-		if (existing is null) return task;
-
-		if (existing.State == InstanceLifecycleState.Terminating) {
-			_successWaiters.SignalCancellation(
-				resolved,
-				new InvalidOperationException($"Инстанс {existing.FullyQualifiedName} удалён каскадом."));
-			return task;
-		}
-
-		if (existing.Metrics.Stats.LastSuccess is not null) {
-			_successWaiters.SignalSuccess(resolved);
-		}
-
-		return task;
 	}
 
 	/// <summary>

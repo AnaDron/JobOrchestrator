@@ -5,7 +5,7 @@ namespace JobOrchestrator.Abstractions;
 /// Получается через <see cref="IStageHandle.this[InstanceKeys]"/>.
 /// <para>
 /// Identity-based, а не Instance-based: handle остаётся валидным **до** материализации
-/// runtime-инстанса (например, для late-register <see cref="WaitForSuccessAsync"/>) и **после**
+/// runtime-инстанса (например, для late-register <c>WaitForSuccessAsync</c>) и **после**
 /// каскадного удаления. <see cref="State"/>/<see cref="Snapshot"/> возвращают <c>null</c>, если
 /// инстанс не существует на момент чтения.
 /// </para>
@@ -58,11 +58,4 @@ public interface IInstanceHandle : IAsyncEnumerable<IIterationHandle> {
 	/// </para>
 	/// </summary>
 	Task<IIterationHandle> RunAsync(CancellationToken ct = default);
-
-	/// <summary>
-	/// Завершается, когда инстанс успешно отработает хотя бы один раз. Memoized: если на момент
-	/// вызова <c>LastSuccess != null</c> — Task сразу завершён. Если инстанс удалён каскадом до
-	/// первого успеха — <see cref="InvalidOperationException"/>.
-	/// </summary>
-	Task WaitForSuccessAsync(CancellationToken ct = default);
 }
