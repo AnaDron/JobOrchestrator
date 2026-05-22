@@ -27,7 +27,7 @@ public sealed class InstanceCreatorTests {
 		var created = creator.EvaluateAndCreate(stage);
 		created.Should().ContainSingle();
 		created[0].Stage.Should().Be(stage);
-		created[0].DependencyKeys.Should().BeEmpty();
+		created[0].Keys.Should().BeEmpty();
 		created[0].FullyQualifiedName.Should().Be("shops[]");
 		instances.Exists(new InstanceIdentity(stage)).Should().BeTrue();
 	}
@@ -70,7 +70,7 @@ public sealed class InstanceCreatorTests {
 
 		var created = creator.EvaluateAndCreate(pg);
 		created.Should().HaveCount(3);
-		created.Select(j => j.DependencyKeys["shops"]).Should().BeEquivalentTo("u1", "u2", "u3");
+		created.Select(j => j.Keys["shops"]).Should().BeEquivalentTo("u1", "u2", "u3");
 		created.Select(j => j.FullyQualifiedName).Should().BeEquivalentTo(
 			"productGroups[shops=u1]",
 			"productGroups[shops=u2]",
@@ -90,7 +90,7 @@ public sealed class InstanceCreatorTests {
 
 		var created = creator.EvaluateAndCreate(products);
 		created.Should().ContainSingle();
-		created[0].DependencyKeys.Should().ContainKey("shops").WhoseValue.Should().Be("u1");
+		created[0].Keys.Should().ContainKey("shops").WhoseValue.Should().Be("u1");
 		created[0].FullyQualifiedName.Should().Be("products[shops=u1]");
 	}
 
@@ -108,7 +108,7 @@ public sealed class InstanceCreatorTests {
 		var creator = NewCreator(instances, keyspace);
 
 		var created = creator.EvaluateAndCreate(products);
-		created.Select(j => j.DependencyKeys["shops"]).Should().BeEquivalentTo("u1", "u2", "u3");
+		created.Select(j => j.Keys["shops"]).Should().BeEquivalentTo("u1", "u2", "u3");
 	}
 
 	[Fact]
@@ -146,7 +146,7 @@ public sealed class InstanceCreatorTests {
 		var created = creator.EvaluateAndCreate(c);
 		// 2 × 2 = 4 комбинации
 		created.Should().HaveCount(4);
-		var pairs = created.Select(j => (j.DependencyKeys["a"], j.DependencyKeys["b"])).OrderBy(p => p).ToList();
+		var pairs = created.Select(j => (j.Keys["a"], j.Keys["b"])).OrderBy(p => p).ToList();
 		pairs.Should().BeEquivalentTo([("1", "x"), ("1", "y"), ("2", "x"), ("2", "y")]);
 	}
 
@@ -184,6 +184,6 @@ public sealed class InstanceCreatorTests {
 
 		var created = creator.EvaluateAndCreate(x);
 		created.Should().ContainSingle();
-		created[0].DependencyKeys.Should().ContainKey("k").WhoseValue.Should().Be("1");
+		created[0].Keys.Should().ContainKey("k").WhoseValue.Should().Be("1");
 	}
 }

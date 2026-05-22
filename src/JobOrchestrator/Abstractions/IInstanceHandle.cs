@@ -2,21 +2,25 @@ namespace JobOrchestrator.Abstractions;
 
 /// <summary>
 /// Public-fasade для одного логического инстанса стадии — идентификатор + операции над ним.
-/// Получается через <see cref="IStageHandle"/>-индексаторы (<c>stage[InstanceKey.None]</c> или
-/// <c>stage[(name, value), ...]</c>).
+/// Получается через <see cref="IStageHandle.this[InstanceKeys]"/>.
 /// <para>
 /// Identity-based, а не Instance-based: handle остаётся валидным **до** материализации
 /// runtime-инстанса (например, для late-register <see cref="WaitForSuccessAsync"/>) и **после**
 /// каскадного удаления. <see cref="State"/>/<see cref="Snapshot"/> возвращают <c>null</c>, если
 /// инстанс не существует на момент чтения.
 /// </para>
+/// <para>
+/// <b>Поток итераций:</b> <see cref="IAsyncEnumerable{IIterationHandle}"/> — <c>await foreach (var iter in handle)</c>
+/// получает каждую запущенную итерацию (manual или auto-tick). Stream завершается при cascade-removal
+/// этого инстанса либо при shutdown оркестратора.
+/// </para>
 /// </summary>
-public interface IInstanceHandle {
-	/// <summary>Имя стадии.</summary>
-	string StageName { get; }
+public interface IInstanceHandle : IAsyncEnumerable<IIterationHandle> {
+	/// <summary>Reverse-link на стадию, к которой относится инстанс.</summary>
+	IStageHandle Stage { get; }
 
-	/// <summary>Композитный ключ инстанса (имя зависимой стадии → значение). Пустой для безключевых.</summary>
-	IReadOnlyDictionary<string, string> DependencyKeys { get; }
+	/// <summary>Композитный ключ инстанса. Пустой (<see cref="InstanceKeys.Empty"/>) — для безключевых.</summary>
+	InstanceKeys Keys { get; }
 
 	/// <summary>Канонический human-readable идентификатор для логирования: <c>"stage[k1=v1,k2=v2]"</c>.</summary>
 	string FullyQualifiedName { get; }
@@ -32,6 +36,12 @@ public interface IInstanceHandle {
 	/// Lock-free: атомарный snapshot полей через immutable <c>JobMetrics</c>.
 	/// </summary>
 	InstanceInfo? Snapshot { get; }
+
+	/// <summary>
+	/// Активная итерация — выполняется прямо сейчас (<see cref="InstanceLifecycleState.Running"/>), либо
+	/// <c>null</c> когда инстанс idle, terminating или не материализован. Соответствует <c>Instance.IsRunning</c>.
+	/// </summary>
+	IIterationHandle? RunningIteration { get; }
 
 	/// <summary>
 	/// Запустить итерацию инстанса. Manual игнорирует retry-delay, но уважает debounce-окно.

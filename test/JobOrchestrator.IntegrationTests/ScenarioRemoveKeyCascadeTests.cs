@@ -39,12 +39,12 @@ public sealed class ScenarioRemoveKeyCascadeTests {
 			(await documentsFake.WaitForCallCountAsync(2, Timeout).ConfigureAwait(false)).Should().BeTrue("оба uuid каскадируются вниз");
 
 			var orchestrator = host.Services.GetRequiredService<IJobOrchestrator>();
-			orchestrator["shops"].UnregisterKey("u1");
+			orchestrator.Root["shops"].UnregisterKey("u1");
 
 			// Signal-based wait: каскадное удаление завершилось, когда u1-инстансы исчезли из overview.
 			(await TestSync.WaitForAsync(async () => {
 				var snap = orchestrator.GetOverview();
-				return !snap.Instances.Any(i => i.DependencyKeys.GetValueOrDefault("shops") == "u1");
+				return !snap.Instances.Any(i => i.Keys.GetValueOrDefault("shops") == "u1");
 			}, Timeout).ConfigureAwait(false)).Should().BeTrue("каскадное удаление должно завершиться в Timeout");
 
 			var overview = orchestrator.GetOverview();

@@ -142,7 +142,11 @@ public static class ServiceCollectionExtensions {
 
 		services.AddSingleton<OrchestratorLifecycle>();
 		services.TryAddSingleton<JobOrchestratorHostOptions>();
-		services.AddSingleton<IJobOrchestrator, JobOrchestratorRuntime>();
+		// JobOrchestratorRuntime регистрируется concrete'но, потому что EventLoop принимает его типом
+		// (для конструирования IterationHandle с reverse-link на Instance). Interface IJobOrchestrator —
+		// alias на тот же singleton.
+		services.AddSingleton<JobOrchestratorRuntime>();
+		services.AddSingleton<IJobOrchestrator>(sp => sp.GetRequiredService<JobOrchestratorRuntime>());
 		services.AddHostedService<JobOrchestratorHostedService>();
 
 		// TimeProvider может быть уже зарегистрирован хостом; иначе используем системное время.
@@ -200,7 +204,9 @@ public static class ServiceCollectionExtensions {
 		services.AddKeyedSingletonWithPropagation<StageRunner>(tenantKey);
 		services.AddKeyedSingletonWithPropagation<DueScanner>(tenantKey);
 		services.AddKeyedSingletonWithPropagation<EventLoop>(tenantKey);
-		services.AddKeyedSingletonWithPropagation<IJobOrchestrator, JobOrchestratorRuntime>(tenantKey);
+		services.AddKeyedSingletonWithPropagation<JobOrchestratorRuntime>(tenantKey);
+		services.AddKeyedSingleton<IJobOrchestrator>(tenantKey,
+			(sp, key) => sp.GetRequiredKeyedService<JobOrchestratorRuntime>(key!));
 
 		// HostedService регистрируется как IHostedService (host стартует все зарегистрированные) —
 		// поэтому это non-keyed registration, но внутри использует тот же wrapper для авто-пропагации.
@@ -258,15 +264,4 @@ public static class ServiceCollectionExtensions {
 		services.AddKeyedSingleton<T>(key, (sp, k) =>
 			ActivatorUtilities.CreateInstance<T>(new KeyedAwareServiceProvider(sp, k!)));
 
-	/// <summary>
-	/// Регистрирует <typeparamref name="TImpl"/> как реализацию <typeparamref name="TService"/>
-	/// в keyed-singleton под <paramref name="key"/>; ключ авто-пробрасывается на конструкторные
-	/// зависимости через <see cref="KeyedAwareServiceProvider"/>.
-	/// </summary>
-	private static IServiceCollection AddKeyedSingletonWithPropagation<TService, TImpl>(
-		this IServiceCollection services, object key)
-		where TService : class
-		where TImpl : class, TService =>
-		services.AddKeyedSingleton<TService>(key, (sp, k) =>
-			ActivatorUtilities.CreateInstance<TImpl>(new KeyedAwareServiceProvider(sp, k!)));
 }

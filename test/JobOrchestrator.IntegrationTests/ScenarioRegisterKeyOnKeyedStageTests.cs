@@ -29,15 +29,15 @@ public sealed class ScenarioRegisterKeyOnKeyedStageTests {
 		try {
 			// productGroups имеет DependsOnInstance(shops) → у неё ExpectedKeyNames=[shops].
 			// Внешний RegisterKey не может определить, какой инстанс productGroups использовать как Source.
-			Action register = () => orchestrator["productGroups"].RegisterKey("anything");
+			Action register = () => orchestrator.Root["productGroups"].RegisterKey("anything");
 			register.Should().Throw<InvalidOperationException>()
 				.WithMessage("*ключевые зависимости*");
 
-			Action unregister = () => orchestrator["productGroups"].UnregisterKey("anything");
+			Action unregister = () => orchestrator.Root["productGroups"].UnregisterKey("anything");
 			unregister.Should().Throw<InvalidOperationException>();
 
 			// А для keyless стадии — работает.
-			Action keylessRegister = () => orchestrator["shops"].RegisterKey("shop-1");
+			Action keylessRegister = () => orchestrator.Root["shops"].RegisterKey("shop-1");
 			keylessRegister.Should().NotThrow();
 		} finally {
 			await host.StopAsync().ConfigureAwait(false);

@@ -6,6 +6,9 @@ namespace JobOrchestrator.Abstractions;
 /// отражает именно её завершение — не подвержен race с Auto-тиками или параллельными manual-вызовами.
 /// </summary>
 public interface IIterationHandle {
+	/// <summary>Reverse-link на инстанс, для которого запущена итерация.</summary>
+	IInstanceHandle Instance { get; }
+
 	/// <summary>Human-readable идентификатор инстанса, для которого запущена итерация (для логов/диагностики).</summary>
 	string FullyQualifiedName { get; }
 

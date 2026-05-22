@@ -14,7 +14,7 @@ internal sealed class ProducerService(ILogger<ProducerService> logger) : IJobSer
 
 internal sealed class ConsumerService(ILogger<ConsumerService> logger) : IJobService {
 	public Task ExecuteAsync(JobContext ctx, CancellationToken ct) {
-		var key = ctx.DependencyKeys["producer"];
+		var key = ctx.Keys["producer"];
 		logger.LogInformation("Consumer iteration ({Instance}, key={Key})", ctx.FullyQualifiedName, key);
 		return Task.CompletedTask;
 	}

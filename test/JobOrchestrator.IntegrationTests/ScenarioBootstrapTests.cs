@@ -21,7 +21,7 @@ public sealed class ScenarioBootstrapTests {
 		try {
 			(await fake.WaitForNextCallAsync(Timeout).ConfigureAwait(false)).Should().BeTrue();
 			fake.Calls[0].FullyQualifiedName.Should().Be("a[]");
-			fake.Calls[0].DependencyKeys.Should().BeEmpty();
+			fake.Calls[0].Keys.Should().BeEmpty();
 		} finally {
 			await host.StopAsync().ConfigureAwait(false);
 		}

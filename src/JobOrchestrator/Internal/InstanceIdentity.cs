@@ -46,6 +46,13 @@ internal sealed class InstanceIdentity : IEquatable<InstanceIdentity> {
 	/// </summary>
 	public string FullyQualifiedName { get; }
 
+	/// <summary>
+	/// Публичная проекция ключей инстанса в виде <see cref="InstanceKeys"/> с value-equality и ordinal-encoding'ом.
+	/// Eager-computed в конструкторе — переиспользует тот же <see cref="ImmutableDictionary{TKey, TValue}"/>,
+	/// что и <see cref="DependencyKeys"/>; накладные расходы — один encoded-string из ordinal-сортировки.
+	/// </summary>
+	public InstanceKeys Keys { get; }
+
 	// Lazy-cached hash. 0 = не вычислен (значение 0 заменяется на 1, чтобы не путаться с sentinel).
 	// Безопасно гонкам: разные потоки могут перевычислять детерминированное значение, последняя запись
 	// атомарна для int.
@@ -71,6 +78,8 @@ internal sealed class InstanceIdentity : IEquatable<InstanceIdentity> {
 		var ordered = OrderEntries(DependencyKeys, stage.ExpectedKeyNames);
 		EncodedKey = EncodeOrdered(ordered);
 		FullyQualifiedName = FormatFqnOrdered(stage.Name, ordered);
+		// Публичная проекция: переиспользуем тот же ImmutableDictionary, ordinal-encoded-string один раз.
+		Keys = new InstanceKeys(DependencyKeys);
 	}
 
 	private static readonly ImmutableDictionary<string, string> EmptyKeys =

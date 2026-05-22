@@ -75,7 +75,7 @@ public sealed class ScenarioStateStoreTests {
 			).ConfigureAwait(false)).Should().BeTrue("pg должен был записать в State до UnregisterKey");
 
 			var orchestrator = host.Services.GetRequiredService<IJobOrchestrator>();
-			orchestrator["shops"].UnregisterKey("u1");
+			orchestrator.Root["shops"].UnregisterKey("u1");
 
 			// Дожидаемся завершения каскада: scope полностью удалён через RemoveScopeAsync.
 			(await TestSync.WaitForAsync(async () =>

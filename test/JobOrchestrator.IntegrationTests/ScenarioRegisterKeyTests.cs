@@ -35,9 +35,9 @@ public sealed class ScenarioRegisterKeyTests {
 			await Task.Delay(100).ConfigureAwait(false);
 
 			// Внешний RegisterKey должен спавнить pg-инстанс.
-			orchestrator["shops"].RegisterKey("external-uuid-1");
+			orchestrator.Root["shops"].RegisterKey("external-uuid-1");
 			(await pgFake.WaitForCallCountAsync(1, Timeout).ConfigureAwait(false)).Should().BeTrue();
-			pgFake.Calls[0].DependencyKeys.Should().ContainKey("shops").WhoseValue.Should().Be("external-uuid-1");
+			pgFake.Calls[0].Keys.Should().ContainKey("shops").WhoseValue.Should().Be("external-uuid-1");
 		} finally {
 			await host.StopAsync().ConfigureAwait(false);
 		}
@@ -55,7 +55,7 @@ public sealed class ScenarioRegisterKeyTests {
 		await host.StartAsync().ConfigureAwait(false);
 		try {
 			var orchestrator = host.Services.GetRequiredService<IJobOrchestrator>();
-			Action act = () => _ = orchestrator["nonexistent-stage"];
+			Action act = () => _ = orchestrator.Root["nonexistent-stage"];
 			act.Should().Throw<ArgumentException>().WithMessage("*nonexistent-stage*");
 		} finally {
 			await host.StopAsync().ConfigureAwait(false);

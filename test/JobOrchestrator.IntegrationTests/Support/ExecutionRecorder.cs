@@ -24,13 +24,13 @@ internal sealed class ExecutionRecorder {
 		_runs.Count(r => r.StageName == stageName);
 
 	public int Count(string stageName, IReadOnlyDictionary<string, string> keys) =>
-		_runs.Count(r => r.StageName == stageName && KeysEqual(r.DependencyKeys, keys));
+		_runs.Count(r => r.StageName == stageName && KeysEqual(r.Keys, keys));
 
 	public void Record(JobContext ctx) {
 		_runs.Enqueue(new Execution(
 			ctx.StageName,
 			ctx.FullyQualifiedName,
-			ctx.DependencyKeys.ToImmutableDictionary(StringComparer.Ordinal),
+			ctx.Keys.ToImmutableDictionary(StringComparer.Ordinal),
 			DateTimeOffset.UtcNow));
 	}
 
@@ -46,6 +46,6 @@ internal sealed class ExecutionRecorder {
 internal sealed record Execution(
 	string StageName,
 	string FullyQualifiedName,
-	IReadOnlyDictionary<string, string> DependencyKeys,
+	IReadOnlyDictionary<string, string> Keys,
 	DateTimeOffset At
 );

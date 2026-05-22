@@ -1,5 +1,5 @@
 using System.Collections;
-using System.Collections.Concurrent;
+using System.Collections.Immutable;
 using System.Threading.Channels;
 using Microsoft.Extensions.Logging;
 
@@ -8,9 +8,19 @@ namespace JobOrchestrator.Internal;
 /// <summary>
 /// Реализация <see cref="IJobOrchestrator"/>: фасад поверх event loop'а.
 /// <para>
-/// Surface — handle-API: <see cref="this[string]"/> возвращает cached <see cref="StageHandle"/>,
-/// далее indexer-композиция → <see cref="InstanceHandle"/>. Все mutation-операции (Trigger/Register*/WaitFor*)
-/// делегируют в internal-методы этого класса.
+/// Surface — handle-API: <see cref="this[string]"/> возвращает cached <see cref="DomainHandle"/>,
+/// далее <see cref="IDomainHandle.this[string]"/> → <see cref="StageHandle"/> → <see cref="InstanceHandle"/>.
+/// Все mutation-операции (Trigger/Register*/WaitFor*) делегируют в internal-методы этого класса.
+/// </para>
+/// <para>
+/// На construction: разбираем <see cref="StageRegistry"/> по доменам (split по
+/// <see cref="JobOrchestratorBuilder.DomainSeparator"/>); root-домен — под ключом <see cref="DomainName.Root"/>;
+/// топология frozen на старте, runtime-добавление доменов не поддерживается.
+/// </para>
+/// <para>
+/// Подписываемся на <see cref="InstanceManager.InstanceAdded"/>/<see cref="InstanceManager.InstanceRemoved"/>
+/// для dispatch'а в <see cref="StageHandle.NotifyAdded"/>/<see cref="StageHandle.NotifyRemoved"/>
+/// — источник <see cref="IStageHandle.Changes"/>.
 /// </para>
 /// </summary>
 internal sealed class JobOrchestratorRuntime : IJobOrchestrator {
@@ -20,8 +30,9 @@ internal sealed class JobOrchestratorRuntime : IJobOrchestrator {
 	private readonly SuccessWaiters _successWaiters;
 	private readonly ILogger<JobOrchestratorRuntime> _logger;
 	private readonly Dictionary<string, StageHandle> _stageHandles;
-	private readonly HashSet<string> _knownDomains;
-	private readonly ConcurrentDictionary<string, DomainScopedJobOrchestrator> _domainHandles = new(StringComparer.Ordinal);
+	private readonly Dictionary<string, DomainHandle> _domainsByName;
+	private readonly ImmutableArray<DomainHandle> _domainsOrdered;
+	private readonly DomainHandle _rootDomain;
 
 	public JobOrchestratorRuntime(
 		Channel<OrchestratorEvent> channel,
@@ -37,71 +48,99 @@ internal sealed class JobOrchestratorRuntime : IJobOrchestrator {
 		_successWaiters = successWaiters;
 		_logger = logger;
 
-		_stageHandles = registry.AllStages.ToDictionary(x => x.Name, x => new StageHandle(this, x), StringComparer.Ordinal);
+		var entriesByDomain = registry.AllStages
+			.Select(s => {
+				var n = s.Name.IndexOf(JobOrchestratorBuilder.DomainSeparator);
+				return (
+					Domain: n > 0 ? s.Name[..n] : DomainName.Root,
+					Local: n > 0 ? s.Name[(n + 1)..] : s.Name,
+					Descriptor: s
+				);
+			}).GroupBy(x => x.Domain, x => (x.Local, x.Descriptor), StringComparer.Ordinal)
+			.ToDictionary(g => g.Key, g => g.ToList(), StringComparer.Ordinal);
+		entriesByDomain.TryAdd(DomainName.Root, []);
 
-		// Pre-compute набор известных доменов — извлекаем префикс до DomainSeparator из имени каждой
-		// стадии. Стадия без префикса (например, "global") — в _knownDomains не попадает, что корректно:
-		// у неё нет домена, через WithDomain она недоступна.
-		_knownDomains = new HashSet<string>(StringComparer.Ordinal);
-		foreach (var stage in registry.AllStages) {
-			var sep = stage.Name.IndexOf(JobOrchestratorBuilder.DomainSeparator);
-			if (sep > 0) _knownDomains.Add(stage.Name[..sep]);
-		}
+		_domainsOrdered = [
+			..entriesByDomain.Keys
+				.Where(d => d != DomainName.Root)
+				.Distinct(StringComparer.Ordinal)
+				.Prepend(DomainName.Root)
+				.Select(d => new DomainHandle(d, this, entriesByDomain[d]))
+		];
+		_domainsByName = _domainsOrdered.ToDictionary(d => d.Name, StringComparer.Ordinal);
+		_rootDomain = _domainsByName[DomainName.Root];
+		// Aggregate full-name → handle для O(1) GetStageHandle. DomainHandle сам owns StageHandle'ы
+		// и перечисляет их через IEnumerable<IStageHandle>; cast вниз безопасен в этом scope.
+		_stageHandles = _domainsOrdered
+			.SelectMany(d => d.Cast<StageHandle>())
+			.ToDictionary(s => s.Name, StringComparer.Ordinal);
+
+		// Подписка на life-cycle InstanceManager → dispatch в соответствующий StageHandle.
+		instances.InstanceAdded = OnInstanceAdded;
+		instances.InstanceRemoved = OnInstanceRemoved;
 	}
 
 	public bool IsFaulted => _lifecycle.IsFaulted;
 
-	/// <summary>
-	/// Root indexer для handle-API: <c>orchestrator["stageName"]</c> → <see cref="IStageHandle"/>.
-	/// O(1) hash-lookup, cached handle — нулевая allocation.
-	/// </summary>
-	public IStageHandle this[string stageName] {
+	public IDomainHandle Root => _rootDomain;
+
+	public IDomainHandle this[string domainName] {
 		get {
-			ArgumentException.ThrowIfNullOrEmpty(stageName);
-			if (!_stageHandles.TryGetValue(stageName, out var handle)) {
-				throw new ArgumentException($"Стадия '{stageName}' не зарегистрирована в графе.", nameof(stageName));
+			ArgumentNullException.ThrowIfNull(domainName);
+			if (!_domainsByName.TryGetValue(domainName, out var handle)) {
+				var label = domainName.Length == 0 ? "<root>" : $"'{domainName}'";
+				throw new ArgumentException($"Домен {label} не зарегистрирован.", nameof(domainName));
 			}
 			return handle;
 		}
 	}
 
-	/// <summary>
-	/// Итерация всех зарегистрированных стадий через cached <see cref="StageHandle"/>-ы. Аллокация —
-	/// один <see cref="Dictionary{TKey,TValue}.ValueCollection"/>-enumerator (boxed через интерфейс),
-	/// сами handle-объекты переиспользуются.
-	/// </summary>
-	public IEnumerator<IStageHandle> GetEnumerator() => _stageHandles.Values.GetEnumerator();
+	public int Count => _domainsOrdered.Length;
+
+	public IEnumerator<IDomainHandle> GetEnumerator() => ((IEnumerable<DomainHandle>)_domainsOrdered).GetEnumerator();
+
 	IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
 
 	public InstancesOverview GetOverview() => _instances.Snapshot();
 
-	/// <summary>
-	/// Domain-проекция: <c>orchestrator.WithDomain("evotor")["shops"]</c> эквивалентно
-	/// <c>orchestrator["evotor:shops"]</c>. Возвращаемый объект кэшируется per-domain через
-	/// <see cref="ConcurrentDictionary{TKey,TValue}.GetOrAdd(TKey, Func{TKey,TValue})"/>:
-	/// повторные вызовы с тем же <paramref name="domain"/> дают тот же объект.
-	/// </summary>
-	public IDomainScopedJobOrchestrator WithDomain(string domain) {
-		ArgumentException.ThrowIfNullOrEmpty(domain);
-		if (!_knownDomains.Contains(domain)) {
-			throw new ArgumentException(
-				$"Домен '{domain}' не зарегистрирован — нет ни одной стадии с префиксом '{domain}{JobOrchestratorBuilder.DomainSeparator}'.",
-				nameof(domain));
+	#region Internal API — вызывается StageHandle / InstanceHandle / EventLoop
+
+	/// <summary>O(1)-доступ к stage-handle для reverse-link <see cref="IInstanceHandle.Stage"/>.</summary>
+	internal StageHandle GetStageHandle(StageDescriptor stage) => _stageHandles[stage.Name];
+
+	internal IReadOnlyCollection<Instance> InstancesOf(StageDescriptor stage) => _instances.InstancesOf(stage);
+
+	internal Instance? FindInstance(InstanceIdentity identity) => _instances.Find(identity);
+
+	private void OnInstanceAdded(Instance instance) {
+		if (_stageHandles.TryGetValue(instance.Stage.Name, out var handle)) {
+			handle.NotifyAdded(instance);
 		}
-		return _domainHandles.GetOrAdd(domain, d => new DomainScopedJobOrchestrator(this, d));
 	}
 
-	#region Internal API — вызывается StageHandle / InstanceHandle
+	private void OnInstanceRemoved(Instance instance) {
+		if (_stageHandles.TryGetValue(instance.Stage.Name, out var handle)) {
+			handle.NotifyRemoved(instance);
+		}
+		// При cascade-removal завершаем iteration-broadcaster — consumer'ы инстанса получат естественный exit.
+		instance.CompleteIterationSubscribers();
+	}
+
+	/// <summary>
+	/// Hosted-service-side hook на финальный shutdown. Завершает все висящие broadcaster-каналы
+	/// (<see cref="IStageHandle.Changes"/> и <see cref="IInstanceHandle"/>-as-AsyncEnumerable), чтобы
+	/// consumer'ы без явно переданного <see cref="CancellationToken"/> вышли из <c>await foreach</c>
+	/// естественно. Для инстансов, удалённых каскадом, iteration-subscribers уже completed в
+	/// <see cref="OnInstanceRemoved"/>; здесь — для idle-инстансов, переживших shutdown.
+	/// </summary>
+	internal void OnShutdown() {
+		foreach (var stage in _stageHandles.Values) stage.CompleteAllSubscribers();
+		foreach (var instance in _instances.All) instance.CompleteIterationSubscribers();
+	}
 
 	/// <summary>
 	/// Identity-based RunAsync: identity уже валидирован в StageHandle-indexer (проверка key-names
 	/// против ExpectedKeyNames), поэтому валидация ключей здесь не повторяется.
-	/// <para>
-	/// На любой reject (Debounced/NotFound/AlreadyRunning/Terminating/ConcurrencyDeferred/Faulted)
-	/// бросает <see cref="IterationRejectedException"/> с конкретным <see cref="IterationRejectReason"/>.
-	/// На Started возвращает <see cref="IIterationHandle"/> — caller через него опрашивает статус
-	/// и ждёт завершения. Передача handle не блокирует caller'а на самой итерации.
-	/// </para>
 	/// </summary>
 	internal async Task<IIterationHandle> RunAsync(InstanceIdentity identity, CancellationToken ct = default) {
 		if (_lifecycle.IsFaulted) {
@@ -117,11 +156,6 @@ internal sealed class JobOrchestratorRuntime : IJobOrchestrator {
 			throw new IterationRejectedException(IterationRejectReason.Faulted, identity.FullyQualifiedName,
 				$"Запуск инстанса {identity.FullyQualifiedName} невозможен: channel оркестратора закрыт.");
 		}
-		// Propagation caller's cancellation: ct.UnsafeRegister отменяет evt.Tcs синхронно при cancel
-		// (если ct уже cancelled — callback вызовется сразу при Register). Event-loop в HandleManualTrigger
-		// проверяет evt.Tcs.Task.IsCompleted и пропускает запуск итерации — закрывает «lost iteration»
-		// race-окно. Остаточный gap (cancel ровно в момент TryBeginRunning) принципиально не closeable
-		// без отмены итерации post-factum, что выходит за рамки контракта.
 		await using var ctReg = ct.UnsafeRegister(static state => {
 			var t = (TaskCompletionSource<IIterationHandle>)state!;
 			t.TrySetCanceled();
@@ -152,13 +186,9 @@ internal sealed class JobOrchestratorRuntime : IJobOrchestrator {
 		return task;
 	}
 
-	internal Instance? FindInstance(InstanceIdentity identity) => _instances.Find(identity);
-
-	internal IEnumerable<Instance> InstancesOf(StageDescriptor stage) => _instances.InstancesOf(stage);
-
 	/// <summary>
-	/// Внешний bootstrap keyspace для keyless-эмитера. Работает только для стадий без
-	/// <c>DependsOnInstance</c>-зависимостей. Вызывается из <see cref="StageHandle.RegisterKey"/>.
+	/// Внешний bootstrap keyspace для keyless-эмиттера. Работает только для стадий без
+	/// <c>DependsOnInstance</c>-зависимостей.
 	/// </summary>
 	internal void RegisterKey(StageDescriptor stage, string key) {
 		ArgumentException.ThrowIfNullOrEmpty(key);
@@ -178,15 +208,10 @@ internal sealed class JobOrchestratorRuntime : IJobOrchestrator {
 
 	#endregion
 
-	/// <summary>
-	/// Резолвит keyless-инстанс стадии для внешнего RegisterKey/UnregisterKey. Бросает
-	/// <see cref="InvalidOperationException"/> для стадий с <c>DependsOnInstance</c>-зависимостями
-	/// (там нет ambiguity-free Source) и для стадий, чей keyless-инстанс ещё не создан bootstrap-ом.
-	/// </summary>
 	private Instance ResolveKeylessSource(StageDescriptor stage) {
 		if (stage.ExpectedKeyNames.Count != 0) {
 			throw new InvalidOperationException(
-				$"Стадия '{stage.Name}' имеет ключевые зависимости. Внешний RegisterKey/UnregisterKey работает только для keyless-эмитеров; используйте JobContext.AddKeyAsync/RemoveKeyAsync из ExecuteAsync.");
+				$"Стадия '{stage.Name}' имеет ключевые зависимости. Внешний RegisterKey/UnregisterKey работает только для keyless-эмиттеров; используйте JobContext.AddKeyAsync/RemoveKeyAsync из ExecuteAsync.");
 		}
 		var source = _instances.Find(new InstanceIdentity(stage));
 		if (source is null) {
@@ -204,7 +229,6 @@ internal sealed class JobOrchestratorRuntime : IJobOrchestrator {
 
 	/// <summary>
 	/// Pre-allocated LoggerMessage-делегаты для внешнего API. EventId-ы 6xxx — диапазон Runtime.
-	/// Operational visibility: видно кто и когда дёргал manual-triggers.
 	/// </summary>
 	private static class Log {
 		public static readonly Action<ILogger, string, Exception?> IterationStarted =

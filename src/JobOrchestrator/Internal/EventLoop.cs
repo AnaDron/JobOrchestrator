@@ -45,6 +45,7 @@ internal sealed class EventLoop(
 	IJobStateStore stateStore,
 	OrchestratorLifecycle lifecycle,
 	JobOrchestratorHostOptions hostOptions,
+	JobOrchestratorRuntime runtime,
 	ILogger<EventLoop> logger,
 	TimeProvider time
 ) {
@@ -221,17 +222,14 @@ internal sealed class EventLoop(
 			Reject(evt, MapTriggerResultToReason(decision.Rejection!.Value), instance.FullyQualifiedName);
 			return;
 		}
-		var result = BeginIteration(instance, TriggerSource.Manual, ct);
+		var (result, handle) = BeginIteration(instance, TriggerSource.Manual, ct);
 		if (result != TriggerResult.Started) {
 			Reject(evt, MapTriggerResultToReason(result), instance.FullyQualifiedName);
 			return;
 		}
-		// Started → создаём iteration-scoped outcome TCS, привязываем к Instance. Completion-handler
-		// резолвит его: TrySetResult() на success, TrySetException(IterationFailedException) на любой
-		// failure-исход. Caller получает IterationHandle с задачей TCS.Task.
-		var outcomeTcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-		instance.SetIterationOutcomeTcs(outcomeTcs);
-		evt.Tcs.TrySetResult(new IterationHandle(instance.Identity, outcomeTcs.Task));
+		// Started → BeginIteration уже привязал iteration-scoped TCS + handle к Instance через
+		// Instance.OnIterationStarted. Caller получает тот же handle, что и подписчики broadcaster'а.
+		evt.Tcs.TrySetResult(handle!);
 	}
 
 	private void Reject(ManualTriggerRequestedEvent evt, IterationRejectReason reason, string fqn) {
@@ -258,28 +256,28 @@ internal sealed class EventLoop(
 	};
 
 	/// <summary>
-	/// Запускает итерацию инстанса. Возвращает фактический результат запуска:
+	/// Запускает итерацию инстанса. Возвращает фактический результат и (при Started) handle итерации.
 	/// <list type="bullet">
-	/// <item><see cref="TriggerResult.Started"/> — итерация запущена на ThreadPool.</item>
-	/// <item><see cref="TriggerResult.ConcurrencyDeferred"/> — глобальный или per-stage лимит. Для Auto-тика
-	/// re-schedule через ~1 сек + jitter, DueScanner подберёт при освобождении лимита; для Manual —
-	/// возврат caller'у без re-schedule (caller сам решает, когда повторить).</item>
+	/// <item><see cref="TriggerResult.Started"/> — итерация запущена на ThreadPool; handle привязан к
+	/// <see cref="Instance"/> через outcome-TCS и iteration-broadcaster.</item>
+	/// <item><see cref="TriggerResult.ConcurrencyDeferred"/> — лимит, handle null. Для Auto-тика
+	/// re-schedule через ~1 сек + jitter; для Manual — возврат caller'у без re-schedule.</item>
 	/// </list>
-	/// Возвращаемое значение используется <see cref="HandleManualTrigger"/> для точного TCS-результата.
-	/// При Auto-тике (TimerTick) результат игнорируется — DueScanner повторит при следующем scan.
+	/// <see cref="HandleManualTrigger"/> возвращает caller'у тот же handle, который попадает в
+	/// per-instance iteration-broadcaster.
 	/// </summary>
-	private TriggerResult BeginIteration(Instance instance, TriggerSource trigger, CancellationToken ct) {
+	private (TriggerResult Result, IIterationHandle? Handle) BeginIteration(Instance instance, TriggerSource trigger, CancellationToken ct) {
 		// Сначала per-stage — он чаще узкий (типично 1-2). Только после успеха per-stage захватываем
 		// глобальный, чтобы не делать холостые global-acquire/release-циклы под нагрузкой
 		// «много стадий с ConcurrencyLimit=1 + длинные runner-ы».
 		if (!concurrency.TryAcquire(instance.Stage)) {
 			DeferIteration(instance, trigger);
-			return TriggerResult.ConcurrencyDeferred;
+			return (TriggerResult.ConcurrencyDeferred, null);
 		}
 		if (!globalLimiter.TryAcquire()) {
 			concurrency.Release(instance.Stage);
 			DeferIteration(instance, trigger);
-			return TriggerResult.ConcurrencyDeferred;
+			return (TriggerResult.ConcurrencyDeferred, null);
 		}
 		if (!instance.TryBeginRunning()) {
 			globalLimiter.Release();
@@ -290,10 +288,18 @@ internal sealed class EventLoop(
 		}
 		instance.SetMetrics(instance.Metrics.WithNextAutoUtc(null));
 		try {
+			// Iteration-scoped TCS + handle создаются ВСЕГДА (Manual и Auto). Manual: caller получает handle
+			// возвратом BeginIteration. Auto: handle публикуется только в broadcaster и в Instance.RunningIteration.
+			var outcomeTcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+			var handle = new IterationHandle(runtime, instance.Identity, outcomeTcs.Task);
+			instance.OnIterationStarted(handle, outcomeTcs);
 			Log.BeginIteration(logger, instance.FullyQualifiedName, trigger, null);
 			_ = Task.Run(() => RunIterationSafeAsync(instance, trigger, ct), ct);
-			return TriggerResult.Started;
+			return (TriggerResult.Started, handle);
 		} catch {
+			// EndRunning() clear-ит _runningIteration + _running + _pendingTick одним вызовом.
+			// TakeIterationOutcomeTcs() освобождает iteration-scoped TCS (caller-у его всё равно не доставили).
+			instance.TakeIterationOutcomeTcs();
 			instance.EndRunning();
 			globalLimiter.Release();
 			concurrency.Release(instance.Stage);

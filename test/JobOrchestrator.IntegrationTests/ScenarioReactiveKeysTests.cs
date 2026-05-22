@@ -49,7 +49,7 @@ public sealed class ScenarioReactiveKeysTests {
 				"эмитер всё ещё внутри ExecuteAsync — AddKey виден оркестратору без after-success-flush");
 
 			var orchestrator = host.Services.GetRequiredService<IJobOrchestrator>();
-			orchestrator["groups"][("shops", "s-1")].State
+			orchestrator.Root["groups"][("shops", "s-1")].State
 				.Should().NotBeNull("groups-инстанс материализован реактивно");
 		} finally {
 			emitter.Release();

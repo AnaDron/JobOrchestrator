@@ -51,7 +51,7 @@ public sealed class KeyspaceRegistryTests {
 		reg.Add(shops, "u3");
 		var buckets = reg.SnapshotByStage(Shops).ToList();
 		buckets.Should().ContainSingle();
-		buckets[0].Emitter.DependencyKeys.Should().BeEmpty();
+		buckets[0].Emitter.Keys.Should().BeEmpty();
 		buckets[0].Keys.Should().BeEquivalentTo(["u1", "u2", "u3"]);
 	}
 

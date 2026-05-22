@@ -1,3 +1,5 @@
+using System.Collections.Concurrent;
+
 namespace JobOrchestrator.Internal;
 
 /// <summary>
@@ -37,6 +39,7 @@ internal sealed class Instance {
 	// Identity-facades — immutable, делегируют для краткости call-sites.
 	public StageDescriptor Stage => Identity.Stage;
 	public IReadOnlyDictionary<string, string> DependencyKeys => Identity.DependencyKeys;
+	public InstanceKeys Keys => Identity.Keys;
 	public string FullyQualifiedName => Identity.FullyQualifiedName;
 
 	// Lazy-кеш: StateScope — application-концерн (ключ state store), не часть Identity.
@@ -50,6 +53,12 @@ internal sealed class Instance {
 	int _pendingTick;
 	volatile CancellationTokenSource? _runCts;
 	TaskCompletionSource? _iterationOutcomeTcs;
+	private const int IterationBufferCapacity = 64;
+
+	private volatile IIterationHandle? _runningIteration;
+	// CHM-as-Set: subscriber add/remove из caller-потоков concurrent с notify-iteration из event-loop —
+	// нужен lock-free thread-safe set. В BCL ConcurrentHashSet<T> отсутствует, value=byte неиспользуется.
+	private readonly ConcurrentDictionary<BoundedSubscriber<IIterationHandle>, byte> _iterationSubscribers = new();
 
 	/// <summary>Атомарный snapshot мутирующихся метрик. Безопасно вызывать из любого потока.</summary>
 	public JobMetrics Metrics => Volatile.Read(ref _metrics);
@@ -82,13 +91,14 @@ internal sealed class Instance {
 	public bool TryBeginRunning() => Interlocked.CompareExchange(ref _running, 1, 0) == 0;
 
 	/// <summary>
-	/// Снимает Running-флаг + pendingTick. Вызывается из <see cref="EventLoop"/>
+	/// Снимает Running-флаг + pendingTick + RunningIteration. Вызывается из <see cref="EventLoop"/>
 	/// (<c>HandleStageCompletedAsync</c>/<c>HandleStageFailedAsync</c>, <c>DrainPendingRequests</c>)
 	/// или из <see cref="StageRunner"/> в <c>finally</c>, если completion не опубликован в channel.
 	/// </summary>
 	public void EndRunning() {
 		Volatile.Write(ref _pendingTick, 0);
 		Volatile.Write(ref _running, 0);
+		_runningIteration = null;
 	}
 
 	/// <summary>
@@ -128,39 +138,69 @@ internal sealed class Instance {
 		Interlocked.CompareExchange(ref _runCts, null, expected);
 
 	/// <summary>
-	/// Привязывает iteration-scoped TCS, который event-loop резолвит при завершении текущей итерации
-	/// (<c>TrySetResult()</c> при success, <c>TrySetException(IterationFailedException)</c> при любом
-	/// не-успешном исходе). Используется <see cref="IInstanceHandle.RunAsync"/> для возврата caller'у
-	/// результата именно этого запуска (без race с Auto-тиками).
+	/// Текущая активная итерация (running), либо <c>null</c> когда инстанс Idle/Terminating. Volatile-read
+	/// для consistency между event-loop-consumer-потоком (writer) и polling-сценариями
+	/// (<see cref="IInstanceHandle.RunningIteration"/>, читатели — любые потоки).
+	/// </summary>
+	public IIterationHandle? RunningIteration => _runningIteration;
+
+	/// <summary>
+	/// Регистрирует только что начавшуюся итерацию: привязывает iteration-scoped TCS (резолвится в
+	/// completion-handler'е через <see cref="TakeIterationOutcomeTcs"/>), выставляет
+	/// <see cref="RunningIteration"/>, и публикует handle всем подписчикам iteration-broadcaster'а.
 	/// <para>
-	/// Single-writer: пишется ТОЛЬКО из event-loop-consumer-потока (<c>HandleManualTrigger</c>) сразу
-	/// после <c>TryBeginRunning</c> — конкурентного writer'а не существует, потому что параллельная
-	/// итерация на том же инстансе невозможна.
+	/// Single-writer: вызывается только из event-loop-consumer-потока в <c>EventLoop.BeginIteration</c>
+	/// сразу после CAS-перевода в Running. Конкурентного writer'а не существует — параллельная итерация
+	/// на том же инстансе невозможна.
 	/// </para>
 	/// <para>
-	/// <b>Race-free инвариант:</b> Runner запускается на ThreadPool в <c>BeginIteration</c>; даже если
-	/// он завершится моментально и опубликует <c>StageCompletedEvent</c> в channel, event-loop не
-	/// обработает это событие до возврата из <c>HandleManualTrigger</c> (single-threaded consumer).
-	/// Поэтому к моменту, когда <c>HandleStageCompletedAsync</c> вызывает <see cref="TakeIterationOutcomeTcs"/>,
-	/// TCS гарантированно уже привязан.
+	/// <b>Race-free инвариант:</b> Runner запускается на ThreadPool в <c>BeginIteration</c>; даже если он
+	/// завершится моментально и опубликует <c>StageCompletedEvent</c> в channel, event-loop не обработает
+	/// это событие до возврата из <c>HandleManualTrigger</c> (single-threaded consumer). Поэтому к моменту,
+	/// когда <c>HandleStageCompletedAsync</c> зовёт <see cref="TakeIterationOutcomeTcs"/>, TCS гарантированно
+	/// уже привязан.
 	/// </para>
 	/// </summary>
-	public void SetIterationOutcomeTcs(TaskCompletionSource tcs) =>
-		_iterationOutcomeTcs = tcs;
+	public void OnIterationStarted(IIterationHandle handle, TaskCompletionSource outcomeTcs) {
+		_iterationOutcomeTcs = outcomeTcs;
+		_runningIteration = handle;
+		foreach (var sub in _iterationSubscribers.Keys) sub.Publish(handle);
+	}
 
 	/// <summary>
 	/// Атомарно снимает iteration-outcome TCS (set to null) и возвращает прежнее значение, либо
 	/// <c>null</c>, если TCS не был привязан (Auto-тик — никто не ждёт исход конкретного цикла).
+	/// Вызывается в completion-handler'е <c>StageCompleted/Failed</c> для разрешения task'а caller'а.
 	/// </summary>
 	public TaskCompletionSource? TakeIterationOutcomeTcs() =>
 		Interlocked.Exchange(ref _iterationOutcomeTcs, null);
+
+	/// <summary>
+	/// Subscribe на поток итераций инстанса. Subscriber — <see cref="IAsyncDisposable"/>; caller использует
+	/// <c>await using</c> для отписки. Bulk-finish со стороны owner'а — через <see cref="CompleteIterationSubscribers"/>
+	/// (cascade-removal / shutdown). Реализация <see cref="IInstanceHandle.GetAsyncEnumerator"/>.
+	/// </summary>
+	public BoundedSubscriber<IIterationHandle> SubscribeIterations() {
+		var sub = new BoundedSubscriber<IIterationHandle>(IterationBufferCapacity, _iterationSubscribers);
+		_iterationSubscribers.TryAdd(sub, 0);
+		return sub;
+	}
+
+	/// <summary>
+	/// Complete все subscriber-каналы — вызывается из event-loop при finalize этого инстанса
+	/// (cascade-removal либо shutdown). Consumer'ы получат естественный exit из <c>ReadAllAsync</c>.
+	/// </summary>
+	public void CompleteIterationSubscribers() {
+		foreach (var sub in _iterationSubscribers.Keys) sub.Complete();
+		_iterationSubscribers.Clear();
+	}
 
 	/// <summary>Проецирует текущее состояние инстанса в публичный snapshot. Вызывается из <see cref="InstanceManager"/> и InstanceHandle.</summary>
 	public InstanceInfo ToInstanceInfo() {
 		var stats = Metrics.Stats;
 		return new InstanceInfo {
 			StageName = Identity.Stage.Name,
-			DependencyKeys = Identity.DependencyKeys,
+			Keys = Identity.Keys,
 			FullyQualifiedName = Identity.FullyQualifiedName,
 			State = State,
 			LastSuccess = stats.LastSuccess,

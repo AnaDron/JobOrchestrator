@@ -33,7 +33,7 @@ public sealed class ScenarioMultiInstanceEmitterCascadeTests {
 		var shopsFake = new FakeServiceB();
 		shopsFake.ExecuteHandler = async (ctx, ct) => {
 			// shops[regions=EU] эмитит eu-1, shops[regions=US] эмитит us-1.
-			var region = ctx.DependencyKeys["regions"];
+			var region = ctx.Keys["regions"];
 			await ctx.AddKeyAsync($"{region.ToLowerInvariant()}-1", ct);
 		};
 
@@ -70,7 +70,7 @@ public sealed class ScenarioMultiInstanceEmitterCascadeTests {
 
 			// Удаляем регион EU. По цепочке: shops[regions=EU] cascade'нется, и от него же
 			// удалится bucket с ключом "eu-1" → products[regions=EU,shops=eu-1] тоже cascade'нется.
-			orchestrator["regions"].UnregisterKey("EU");
+			orchestrator.Root["regions"].UnregisterKey("EU");
 
 			// Дать event loop'у обработать каскад.
 			var settled = await TestSync.WaitForAsync(() => {

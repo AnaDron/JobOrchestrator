@@ -33,7 +33,7 @@ public sealed class JobContextSinkTests {
 			Trigger = TriggerSource.Manual,
 			State = new NoopState(),
 			StageName = "x",
-			DependencyKeys = new Dictionary<string, string>(StringComparer.Ordinal),
+			Keys = InstanceKeys.Empty,
 			FullyQualifiedName = "x[]",
 			Sink = sink,
 		};
@@ -53,7 +53,7 @@ public sealed class JobContextSinkTests {
 			Trigger = TriggerSource.Auto,
 			State = new NoopState(),
 			StageName = "x",
-			DependencyKeys = new Dictionary<string, string>(StringComparer.Ordinal),
+			Keys = InstanceKeys.Empty,
 			FullyQualifiedName = "x[]",
 			Sink = sink,
 		};
@@ -69,7 +69,7 @@ public sealed class JobContextSinkTests {
 			Trigger = TriggerSource.Auto,
 			State = new NoopState(),
 			StageName = "x",
-			DependencyKeys = new Dictionary<string, string>(StringComparer.Ordinal),
+			Keys = InstanceKeys.Empty,
 			FullyQualifiedName = "x[]",
 			Sink = new RecordingSink(),
 		};

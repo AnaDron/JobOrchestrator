@@ -43,11 +43,11 @@ public sealed class ScenarioKeyedMultiTenancyTests {
 		evotor.Should().NotBeSameAs(ozon);
 
 		// Каждый видит ТОЛЬКО свои стадии.
-		evotor.Invoking(o => _ = o["evotor:shops"]).Should().NotThrow();
-		evotor.Invoking(o => _ = o["ozon:offers"]).Should().Throw<ArgumentException>(
+		evotor.Invoking(o => _ = o.GetStage("evotor:shops")).Should().NotThrow();
+		evotor.Invoking(o => _ = o.GetStage("ozon:offers")).Should().Throw<ArgumentException>(
 			because: "стадия ozon:offers зарегистрирована под другим tenant'ом");
-		ozon.Invoking(o => _ = o["ozon:offers"]).Should().NotThrow();
-		ozon.Invoking(o => _ = o["evotor:shops"]).Should().Throw<ArgumentException>(
+		ozon.Invoking(o => _ = o.GetStage("ozon:offers")).Should().NotThrow();
+		ozon.Invoking(o => _ = o.GetStage("evotor:shops")).Should().Throw<ArgumentException>(
 			because: "стадия evotor:shops зарегистрирована под другим tenant'ом");
 
 		// Internal state — раздельный.
@@ -133,8 +133,8 @@ public sealed class ScenarioKeyedMultiTenancyTests {
 		var evotorOrch = host.Services.GetRequiredKeyedService<IJobOrchestrator>("evotor");
 
 		globalOrch.Should().NotBeSameAs(evotorOrch);
-		globalOrch.Invoking(o => _ = o["global"]).Should().NotThrow();
-		evotorOrch.Invoking(o => _ = o["evotor:shops"]).Should().NotThrow();
+		globalOrch.Invoking(o => _ = o.GetStage("global")).Should().NotThrow();
+		evotorOrch.Invoking(o => _ = o.GetStage("evotor:shops")).Should().NotThrow();
 	}
 
 	private sealed class SharedStage : IJobService {

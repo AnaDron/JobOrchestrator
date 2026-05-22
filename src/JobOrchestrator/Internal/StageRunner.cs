@@ -57,7 +57,7 @@ internal sealed class StageRunner(
 				State = jobState,
 				LastSuccessAt = instance.Metrics.Stats.LastSuccess,
 				StageName = instance.Stage.Name,
-				DependencyKeys = instance.DependencyKeys,
+				Keys = instance.Identity.Keys,
 				FullyQualifiedName = instance.FullyQualifiedName,
 				Sink = instance.Sink,    // pre-allocated в InstanceCreator, переиспользуется через все итерации
 			};

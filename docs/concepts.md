@@ -95,13 +95,13 @@ var products = jobs.Stage("products")
 
 **Триггеры запуска:**
 - `Auto` — internal timer тикает по `Instance.NextTickAtMs`.
-- `Manual` — `orchestrator["stageName"][(keyName, keyValue), ...].RunAsync()`.
+- `Manual` — `orchestrator.Root["stageName"][(keyName, keyValue)].RunAsync()`.
 
 **Что происходит вокруг одной итерации:**
 1. EventLoop принимает решение `TryAccept(instance, source)` — проверяет `Running`/`AlreadyRunning`, retry-delay (для Auto), debounce (для Manual).
 2. Переход `instance.State = Running`.
 3. `StageRunner.RunIterationAsync` создаёт fresh DI-scope, watchdog-CTS, формирует `JobContext`, кладёт в `logger.BeginScope` структурные поля (`FullyQualifiedName`, `StageName`, `{depStage}Key`).
-4. `service.ExecuteAsync(ctx, ct)` — пользовательский код. Может вызывать `ctx.AddKeyAsync/RemoveKeyAsync` любое число раз, может работать с `ctx.State` (`IJobState`), читает `ctx.LastSuccessAt`, `ctx.DependencyKeys`.
+4. `service.ExecuteAsync(ctx, ct)` — пользовательский код. Может вызывать `ctx.AddKeyAsync/RemoveKeyAsync` любое число раз, может работать с `ctx.State` (`IJobState`), читает `ctx.LastSuccessAt`, `ctx.Keys`.
 5. По завершении публикуется `StageCompletedEvent` (если без исключения) или `StageFailedEvent`.
 6. EventLoop обновляет `instance.LastAttempt`, `LastSuccess` / `ConsecutiveFailures`, и перепланирует следующий тик.
 

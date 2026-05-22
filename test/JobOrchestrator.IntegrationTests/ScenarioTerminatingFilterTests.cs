@@ -49,15 +49,15 @@ public sealed class ScenarioTerminatingFilterTests {
 		try {
 			// Дождаться bootstrap keyless-инстанса root[] через event-loop — иначе RegisterKey
 			// бросает «keyless-инстанс ещё не создан» (race с async StartAsync → background-loop).
-			await AsyncWait.UntilAsync(() => orchestrator["root"][InstanceKey.None].Snapshot is not null,
+			await AsyncWait.UntilAsync(() => orchestrator.Root["root"][InstanceKeys.Empty].Snapshot is not null,
 				TimeSpan.FromSeconds(5), "root[] должен пробуститься event-loop'ом");
-			orchestrator["root"].RegisterKey("r1");
+			orchestrator.Root["root"].RegisterKey("r1");
 
 			await AsyncWait.UntilAsync(() => leaf.RunsForB("b1") >= 1, TimeSpan.FromSeconds(5),
 				"leaf[root=r1,mid=b1] должен стартовать после AddKey(\"b1\") в mid");
 
 			// На этой точке mid висит на gate. Каскадно отменяем mid[root=r1] и потомков.
-			orchestrator["root"].UnregisterKey("r1");
+			orchestrator.Root["root"].UnregisterKey("r1");
 
 			// Дать каскаду пометить mid в Terminating и Cancel-нуть его CTS.
 			await AsyncWait.UntilAsync(() => mid.SeenCancellation, TimeSpan.FromSeconds(5),
@@ -122,7 +122,7 @@ public sealed class ScenarioTerminatingFilterTests {
 		public int RunsForB(string b) => _runs.TryGetValue(b, out var n) ? n : 0;
 
 		public Task ExecuteAsync(JobContext ctx, CancellationToken ct) {
-			var mid = ctx.DependencyKeys["mid"];
+			var mid = ctx.Keys["mid"];
 			_runs.AddOrUpdate(mid, 1, (_, v) => v + 1);
 			return Task.CompletedTask;
 		}

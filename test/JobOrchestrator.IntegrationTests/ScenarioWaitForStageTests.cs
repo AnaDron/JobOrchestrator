@@ -18,7 +18,7 @@ public sealed class ScenarioWaitForStageTests {
 		var orchestrator = host.Services.GetRequiredService<IJobOrchestrator>();
 		await host.StartAsync().ConfigureAwait(false);
 		try {
-			var waitTask = orchestrator["a"][InstanceKey.None].WaitForSuccessAsync();
+			var waitTask = orchestrator.Root["a"][InstanceKeys.Empty].WaitForSuccessAsync();
 			await waitTask.WaitAsync(Timeout).ConfigureAwait(false);
 			fake.CallCount.Should().BeGreaterThan(0);
 		} finally {
@@ -40,7 +40,7 @@ public sealed class ScenarioWaitForStageTests {
 			(await fake.WaitForCallCountAsync(1, Timeout).ConfigureAwait(false)).Should().BeTrue();
 			await Task.Delay(100).ConfigureAwait(false);
 
-			var alreadyCompleted = orchestrator["a"][InstanceKey.None].WaitForSuccessAsync();
+			var alreadyCompleted = orchestrator.Root["a"][InstanceKeys.Empty].WaitForSuccessAsync();
 			alreadyCompleted.IsCompletedSuccessfully.Should().BeTrue(
 				"fast-path: LastSuccess уже выставлен → SignalSuccess сразу резолвит");
 		} finally {
@@ -61,7 +61,7 @@ public sealed class ScenarioWaitForStageTests {
 			(await fake.WaitForCallCountAsync(1, Timeout).ConfigureAwait(false)).Should().BeTrue();
 			await Task.Delay(100).ConfigureAwait(false);
 
-			var iteration = await orchestrator["a"][InstanceKey.None].RunAsync().WaitAsync(Timeout).ConfigureAwait(false);
+			var iteration = await orchestrator.Root["a"][InstanceKeys.Empty].RunAsync().WaitAsync(Timeout).ConfigureAwait(false);
 			iteration.FullyQualifiedName.Should().Be("a[]");
 
 			// Тихий await = success. Если итерация Failed/Cancelled/Faulted — здесь бросится, тест fail.
@@ -90,7 +90,7 @@ public sealed class ScenarioWaitForStageTests {
 			(await fake.WaitForCallCountAsync(1, Timeout).ConfigureAwait(false)).Should().BeTrue();
 			await Task.Delay(100).ConfigureAwait(false);
 
-			var iteration = await orchestrator["a"][InstanceKey.None].RunAsync().WaitAsync(Timeout).ConfigureAwait(false);
+			var iteration = await orchestrator.Root["a"][InstanceKeys.Empty].RunAsync().WaitAsync(Timeout).ConfigureAwait(false);
 
 			Func<Task> awaitCompletion = () => iteration.Completion.WaitAsync(Timeout);
 			var ex = (await awaitCompletion.Should().ThrowAsync<IterationFailedException>().ConfigureAwait(false)).Which;
@@ -119,7 +119,7 @@ public sealed class ScenarioWaitForStageTests {
 		try {
 			(await fake.WaitForCallCountAsync(1, Timeout).ConfigureAwait(false)).Should().BeTrue();
 
-			Func<Task> act = () => orchestrator["a"][InstanceKey.None].RunAsync();
+			Func<Task> act = () => orchestrator.Root["a"][InstanceKeys.Empty].RunAsync();
 			var ex = (await act.Should().ThrowAsync<IterationRejectedException>().ConfigureAwait(false)).Which;
 			ex.Reason.Should().Be(IterationRejectReason.AlreadyRunning);
 			ex.FullyQualifiedName.Should().Be("a[]");
@@ -144,7 +144,7 @@ public sealed class ScenarioWaitForStageTests {
 		var orchestrator = host.Services.GetRequiredService<IJobOrchestrator>();
 		await host.StartAsync().ConfigureAwait(false);
 		try {
-			Func<Task> act = () => orchestrator["pg"][("shops", "missing")].RunAsync();
+			Func<Task> act = () => orchestrator.Root["pg"][("shops", "missing")].RunAsync();
 			var ex = (await act.Should().ThrowAsync<IterationRejectedException>().ConfigureAwait(false)).Which;
 			ex.Reason.Should().Be(IterationRejectReason.NotFound);
 		} finally {
@@ -168,7 +168,7 @@ public sealed class ScenarioWaitForStageTests {
 			(await fake.WaitForCallCountAsync(1, Timeout).ConfigureAwait(false)).Should().BeTrue();
 			await Task.Delay(100).ConfigureAwait(false);
 
-			Func<Task> act = () => orchestrator["a"][InstanceKey.None].RunAsync();
+			Func<Task> act = () => orchestrator.Root["a"][InstanceKeys.Empty].RunAsync();
 			var ex = (await act.Should().ThrowAsync<IterationRejectedException>().ConfigureAwait(false)).Which;
 			ex.Reason.Should().Be(IterationRejectReason.Debounced);
 		} finally {
@@ -207,8 +207,8 @@ public sealed class ScenarioWaitForStageTests {
 		try {
 			(await pgFake.WaitForCallCountAsync(1, Timeout).ConfigureAwait(false)).Should().BeTrue("pg должен начать выполняться");
 
-			var waitTask = orchestrator["pg"][("shops", "u1")].WaitForSuccessAsync();
-			orchestrator["shops"].UnregisterKey("u1");
+			var waitTask = orchestrator.Root["pg"][("shops", "u1")].WaitForSuccessAsync();
+			orchestrator.Root["shops"].UnregisterKey("u1");
 
 			Func<Task> awaitWaiter = async () => await waitTask.WaitAsync(Timeout).ConfigureAwait(false);
 			(await awaitWaiter.Should().ThrowAsync<InvalidOperationException>().ConfigureAwait(false))
@@ -227,7 +227,7 @@ public sealed class ScenarioWaitForStageTests {
 		var orchestrator = host.Services.GetRequiredService<IJobOrchestrator>();
 		await host.StartAsync().ConfigureAwait(false);
 		try {
-			Action act = () => _ = orchestrator["nonexistent"];
+			Action act = () => _ = orchestrator.Root["nonexistent"];
 			act.Should().Throw<ArgumentException>();
 		} finally {
 			await host.StopAsync().ConfigureAwait(false);
@@ -243,7 +243,7 @@ public sealed class ScenarioWaitForStageTests {
 		var orchestrator = host.Services.GetRequiredService<IJobOrchestrator>();
 		await host.StartAsync().ConfigureAwait(false);
 		try {
-			Action act = () => _ = orchestrator["a"][("unexpected", "x")];
+			Action act = () => _ = orchestrator.Root["a"][("unexpected", "x")];
 			act.Should().Throw<ArgumentException>();
 		} finally {
 			await host.StopAsync().ConfigureAwait(false);
@@ -265,7 +265,7 @@ public sealed class ScenarioWaitForStageTests {
 		await host.StartAsync().ConfigureAwait(false);
 		try {
 			using var cts = new CancellationTokenSource();
-			var waitTask = orchestrator["a"][InstanceKey.None].WaitForSuccessAsync(cts.Token);
+			var waitTask = orchestrator.Root["a"][InstanceKeys.Empty].WaitForSuccessAsync(cts.Token);
 			cts.Cancel();
 			Func<Task> act = async () => await waitTask.ConfigureAwait(false);
 			await act.Should().ThrowAsync<OperationCanceledException>().ConfigureAwait(false);
@@ -306,12 +306,12 @@ public sealed class ScenarioWaitForStageTests {
 		try {
 			await pgGate.Task.WaitAsync(Timeout).ConfigureAwait(false);
 
-			orchestrator["shops"].UnregisterKey("u1");
+			orchestrator.Root["shops"].UnregisterKey("u1");
 			// Дать event-loop'у обработать KeyRemoved + перевести pg[shops=u1] в Terminating (cascade).
 			// Runner всё ещё спит (3s без ct) — инстанс остаётся в InstanceManager как Terminating.
 			await Task.Delay(200).ConfigureAwait(false);
 
-			Func<Task> act = () => orchestrator["pg"][("shops", "u1")].RunAsync();
+			Func<Task> act = () => orchestrator.Root["pg"][("shops", "u1")].RunAsync();
 			var ex = (await act.Should().ThrowAsync<IterationRejectedException>().ConfigureAwait(false)).Which;
 			ex.Reason.Should().Be(IterationRejectReason.Terminating);
 		} finally {
@@ -352,7 +352,7 @@ public sealed class ScenarioWaitForStageTests {
 			// Дать event-loop'у дойти до завершения bootstrap-tick'а (он cancelled через Task.Delay).
 			// Wait, bootstrap-tick виснет — он не завершился. RunAsync вернёт AlreadyRunning.
 			// Поэтому делаем cancellation через UnregisterKey ПОСЛЕ того как мы убедились что bootstrap бежит.
-			Func<Task> act = () => orchestrator["pg"][("shops", "u1")].RunAsync();
+			Func<Task> act = () => orchestrator.Root["pg"][("shops", "u1")].RunAsync();
 			var ex = (await act.Should().ThrowAsync<IterationRejectedException>().ConfigureAwait(false)).Which;
 			ex.Reason.Should().Be(IterationRejectReason.AlreadyRunning,
 				"bootstrap-tick ещё бежит; cancelled outcome через RunAsync проверяется в shutdown-сценарии ниже");
@@ -389,7 +389,7 @@ public sealed class ScenarioWaitForStageTests {
 			(await fake.WaitForCallCountAsync(1, Timeout).ConfigureAwait(false)).Should().BeTrue();
 			await Task.Delay(100).ConfigureAwait(false);
 
-			var iteration = await orchestrator["a"][InstanceKey.None].RunAsync().WaitAsync(Timeout).ConfigureAwait(false);
+			var iteration = await orchestrator.Root["a"][InstanceKeys.Empty].RunAsync().WaitAsync(Timeout).ConfigureAwait(false);
 			await iterationStarted.Task.WaitAsync(Timeout).ConfigureAwait(false);
 			iteration.Completion.IsCompleted.Should().BeFalse();
 
@@ -424,7 +424,7 @@ public sealed class ScenarioWaitForStageTests {
 		await host.StartAsync().ConfigureAwait(false);
 		await host.StopAsync().ConfigureAwait(false);
 
-		Func<Task> act = () => orchestrator["a"][InstanceKey.None].RunAsync();
+		Func<Task> act = () => orchestrator.Root["a"][InstanceKeys.Empty].RunAsync();
 		var ex = (await act.Should().ThrowAsync<IterationRejectedException>().ConfigureAwait(false)).Which;
 		ex.Reason.Should().Be(IterationRejectReason.Faulted);
 		ex.FullyQualifiedName.Should().Be("a[]");
@@ -448,7 +448,7 @@ public sealed class ScenarioWaitForStageTests {
 
 			using var cts = new CancellationTokenSource();
 			cts.Cancel();
-			Func<Task> act = () => orchestrator["a"][InstanceKey.None].RunAsync(cts.Token);
+			Func<Task> act = () => orchestrator.Root["a"][InstanceKeys.Empty].RunAsync(cts.Token);
 			await act.Should().ThrowAsync<OperationCanceledException>().ConfigureAwait(false);
 
 			// Gap: после OCE bootstrap-tick — единственный legit вызов.

@@ -45,7 +45,7 @@ public sealed class ScenarioCascadeFinalizeRaceTests {
 			await iterationStarted.Task.WaitAsync(Timeout).ConfigureAwait(false);
 
 			var orchestrator = host.Services.GetRequiredService<IJobOrchestrator>();
-			orchestrator["shops"].UnregisterKey("u1");
+			orchestrator.Root["shops"].UnregisterKey("u1");
 
 			releaseIteration.TrySetResult();
 

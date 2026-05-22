@@ -51,7 +51,7 @@ public sealed class ScenarioMultiInstanceCartesianTests {
 				"должны появиться 4 documents — cartesian product 2×2 (shops × currencies)");
 
 			var pairs = recorder.ForStage("documents")
-				.Select(e => (e.DependencyKeys["shops"], e.DependencyKeys["currencies"]))
+				.Select(e => (e.Keys["shops"], e.Keys["currencies"]))
 				.ToHashSet();
 
 			pairs.Should().BeEquivalentTo([

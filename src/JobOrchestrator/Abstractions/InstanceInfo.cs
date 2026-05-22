@@ -5,8 +5,8 @@ public sealed record InstanceInfo {
 	/// <summary>Имя стадии этого инстанса.</summary>
 	public required string StageName { get; init; }
 
-	/// <summary>Композитный ключ инстанса (см. <see cref="JobContext.DependencyKeys"/>).</summary>
-	public required IReadOnlyDictionary<string, string> DependencyKeys { get; init; }
+	/// <summary>Композитный ключ инстанса (см. <see cref="JobContext.Keys"/>).</summary>
+	public required InstanceKeys Keys { get; init; }
 
 	/// <summary>Имя инстанса для логирования (см. <see cref="JobContext.FullyQualifiedName"/>).</summary>
 	public required string FullyQualifiedName { get; init; }

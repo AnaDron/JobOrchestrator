@@ -23,6 +23,7 @@ internal sealed class JobOrchestratorHostedService(
 	IServiceProvider services,
 	OrchestratorLifecycle lifecycle,
 	JobOrchestratorHostOptions hostOptions,
+	JobOrchestratorRuntime runtime,
 	ILogger<JobOrchestratorHostedService> logger
 ) : BackgroundService {
 	private readonly Guid _instanceId = Guid.NewGuid();
@@ -46,6 +47,9 @@ internal sealed class JobOrchestratorHostedService(
 		// строка в логе stopped.
 		if (Interlocked.Exchange(ref _stopGate, 1) != 0) return;
 		await base.StopAsync(cancellationToken).ConfigureAwait(false);
+		// Event-loop остановлен — complete все висящие broadcaster-каналы (Changes / iteration stream),
+		// чтобы consumer'ы без явно переданного ct вышли из await foreach естественно.
+		runtime.OnShutdown();
 		Log.Stopped(logger, _instanceId, null);
 	}
 

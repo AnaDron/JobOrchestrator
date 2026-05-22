@@ -15,7 +15,7 @@ public sealed class ScenarioManualTriggerTests {
 		await host.StartAsync().ConfigureAwait(false);
 		try {
 			var orchestrator = host.Services.GetRequiredService<IJobOrchestrator>();
-			Action act = () => _ = orchestrator["nonexistent"];
+			Action act = () => _ = orchestrator.Root["nonexistent"];
 			act.Should().Throw<ArgumentException>().WithMessage("*nonexistent*");
 		} finally {
 			await host.StopAsync().ConfigureAwait(false);
@@ -47,7 +47,7 @@ public sealed class ScenarioManualTriggerTests {
 			await Task.Delay(200).ConfigureAwait(false);
 
 			var orchestrator = host.Services.GetRequiredService<IJobOrchestrator>();
-			var iteration = await orchestrator["a"][InstanceKey.None].RunAsync().WaitAsync(Timeout).ConfigureAwait(false);
+			var iteration = await orchestrator.Root["a"][InstanceKeys.Empty].RunAsync().WaitAsync(Timeout).ConfigureAwait(false);
 			// Manual игнорирует retry-delay; second call успешен → тихий await без exception.
 			await iteration.Completion.WaitAsync(Timeout).ConfigureAwait(false);
 
@@ -88,7 +88,7 @@ public sealed class ScenarioManualTriggerTests {
 			// без ArgumentException. Runtime может отвергнуть AlreadyRunning/Debounced — это OK,
 			// ключевой инвариант: keys приняты handle-API.
 			try {
-				_ = await orchestrator["products"][("shops", "u1")].RunAsync().ConfigureAwait(false);
+				_ = await orchestrator.Root["products"][("shops", "u1")].RunAsync().ConfigureAwait(false);
 			} catch (IterationRejectedException ex) {
 				ex.Reason.Should().BeOneOf(IterationRejectReason.AlreadyRunning, IterationRejectReason.Debounced);
 			}
@@ -108,7 +108,7 @@ public sealed class ScenarioManualTriggerTests {
 		await host.StartAsync().ConfigureAwait(false);
 		try {
 			var orchestrator = host.Services.GetRequiredService<IJobOrchestrator>();
-			Action act = () => _ = orchestrator["keyless"][("unexpected", "x")];
+			Action act = () => _ = orchestrator.Root["keyless"][("unexpected", "x")];
 			act.Should().Throw<ArgumentException>();
 		} finally {
 			await host.StopAsync().ConfigureAwait(false);
@@ -126,7 +126,7 @@ public sealed class ScenarioManualTriggerTests {
 		string? runningShopKey = null;
 		var pgFake = new FakeServiceB();
 		pgFake.ExecuteHandler = async (ctx, ct) => {
-			runningShopKey = ctx.DependencyKeys["shops"];
+			runningShopKey = ctx.Keys["shops"];
 			gate.TrySetResult();
 			await Task.Delay(TimeSpan.FromMinutes(1), ct).ConfigureAwait(false);
 		};
@@ -155,7 +155,7 @@ public sealed class ScenarioManualTriggerTests {
 			var idleShop = runningShopKey == "shop-0" ? "shop-1" : "shop-0";
 
 			var orchestrator = host.Services.GetRequiredService<IJobOrchestrator>();
-			Func<Task> act = () => orchestrator["productGroups"][("shops", idleShop)].RunAsync();
+			Func<Task> act = () => orchestrator.Root["productGroups"][("shops", idleShop)].RunAsync();
 			var ex = (await act.Should().ThrowAsync<IterationRejectedException>().ConfigureAwait(false)).Which;
 			ex.Reason.Should().Be(IterationRejectReason.ConcurrencyDeferred,
 				"Manual RunAsync при занятом ConcurrencyLimit отвергается до TryBeginRunning");
@@ -180,7 +180,7 @@ public sealed class ScenarioManualTriggerTests {
 			await Task.Delay(200).ConfigureAwait(false);
 
 			var orchestrator = host.Services.GetRequiredService<IJobOrchestrator>();
-			Func<Task> act = () => orchestrator["a"][InstanceKey.None].RunAsync();
+			Func<Task> act = () => orchestrator.Root["a"][InstanceKeys.Empty].RunAsync();
 			var ex = (await act.Should().ThrowAsync<IterationRejectedException>().ConfigureAwait(false)).Which;
 			ex.Reason.Should().Be(IterationRejectReason.Debounced);
 		} finally {

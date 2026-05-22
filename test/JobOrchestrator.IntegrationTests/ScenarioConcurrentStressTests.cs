@@ -38,9 +38,9 @@ public sealed class ScenarioConcurrentStressTests {
 						string key = $"w{worker}-k{j % 10}";
 						try {
 							switch (j % 4) {
-								case 0: orchestrator["producer"].RegisterKey(key); break;
-								case 1: await orchestrator["producer"][InstanceKey.None].RunAsync(stopCts.Token).ConfigureAwait(false); break;
-								case 2: orchestrator["producer"].UnregisterKey(key); break;
+								case 0: orchestrator.Root["producer"].RegisterKey(key); break;
+								case 1: await orchestrator.Root["producer"][InstanceKeys.Empty].RunAsync(stopCts.Token).ConfigureAwait(false); break;
+								case 2: orchestrator.Root["producer"].UnregisterKey(key); break;
 								case 3: orchestrator.GetOverview(); break;
 							}
 						} catch (OperationCanceledException) {
@@ -106,8 +106,8 @@ public sealed class ScenarioConcurrentStressTests {
 			tasks.Add(Task.Run(() => {
 				for (int j = 0; j < 50; j++) {
 					string k = keys[j % 3];
-					if (j % 2 == 0) orchestrator["producer"].RegisterKey(k);
-					else orchestrator["producer"].UnregisterKey(k);
+					if (j % 2 == 0) orchestrator.Root["producer"].RegisterKey(k);
+					else orchestrator.Root["producer"].UnregisterKey(k);
 				}
 			}));
 		}
@@ -123,7 +123,7 @@ public sealed class ScenarioConcurrentStressTests {
 		var overview = orchestrator.GetOverview();
 		var consumerInstances = overview.Instances.Where(i => i.StageName == "consumer").ToList();
 		consumerInstances.Should().HaveCountLessThanOrEqualTo(3, "consumer не может иметь больше инстансов, чем размер keyspace");
-		consumerInstances.Select(i => i.DependencyKeys["producer"]).Should().OnlyContain(k => keys.Contains(k));
+		consumerInstances.Select(i => i.Keys["producer"]).Should().OnlyContain(k => keys.Contains(k));
 
 		await host.StopAsync().ConfigureAwait(false);
 	}

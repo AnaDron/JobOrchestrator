@@ -58,7 +58,7 @@ await host.StartAsync();
 // Bootstrap keyspace из «БД» — типовой production-сценарий, когда оркестратор подхватывает
 // набор объектов, который уже существует, и не ждёт первого producer-успеха для их обнаружения.
 Console.WriteLine("\n=== Bootstrap: RegisterKey для существующих объектов ===");
-var producer = orchestrator["producer"];
+var producer = orchestrator.Root["producer"];
 foreach (var shopId in new[] { "shop-100", "shop-200", "shop-300" }) {
 	producer.RegisterKey(shopId);
 }
@@ -78,7 +78,7 @@ Console.WriteLine();
 // при любом не-успешном исходе.
 Console.WriteLine("=== Manual trigger reporter[producer=shop-100] ===");
 try {
-	var iteration = await orchestrator["reporter"][("producer", "shop-100")].RunAsync();
+	var iteration = await orchestrator.Root["reporter"][("producer", "shop-100")].RunAsync();
 	await iteration.Completion;
 	Console.WriteLine("  итерация завершилась успешно");
 } catch (IterationRejectedException ex) {

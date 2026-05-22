@@ -20,7 +20,7 @@ public sealed class ScenarioGracefulShutdownTests {
 		await host.StopAsync().ConfigureAwait(false);
 
 		using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
-		Func<Task> act = () => orchestrator["a"][InstanceKey.None].RunAsync(cts.Token);
+		Func<Task> act = () => orchestrator.Root["a"][InstanceKeys.Empty].RunAsync(cts.Token);
 		var ex = (await act.Should().ThrowAsync<IterationRejectedException>().ConfigureAwait(false)).Which;
 		ex.Reason.Should().Be(IterationRejectReason.Faulted);
 	}
@@ -40,7 +40,7 @@ public sealed class ScenarioGracefulShutdownTests {
 		await host.StartAsync().ConfigureAwait(false);
 		await host.StopAsync().ConfigureAwait(false);
 
-		Action act = () => orchestrator["a"].RegisterKey("key1");
+		Action act = () => orchestrator.Root["a"].RegisterKey("key1");
 		// Либо silent (NotThrow), либо InvalidOperationException — оба ОК.
 		try { act(); } catch (InvalidOperationException) { /* допустимо */ }
 	}

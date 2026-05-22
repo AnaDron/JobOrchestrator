@@ -39,9 +39,9 @@ public sealed class JobContext {
 	/// <summary>
 	/// Композитный ключ инстанса: для каждой <c>DependsOnInstance(X)</c> этой стадии — парный ключ из keyspace(X),
 	/// плюс ключи, унаследованные через <c>DependsOn(Y)</c> от инстансов вышестоящих стадий.
-	/// Для безключевой стадии — пустой словарь.
+	/// Для безключевой стадии — <see cref="InstanceKeys.Empty"/>.
 	/// </summary>
-	public required IReadOnlyDictionary<string, string> DependencyKeys { get; init; }
+	public required InstanceKeys Keys { get; init; }
 
 	/// <summary>
 	/// Имя инстанса для логирования: <c>"stageName[dep1=val1,dep2=val2,...]"</c> без пробелов после запятых,

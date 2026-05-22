@@ -15,8 +15,8 @@ Job Orchestrator — SDK периодических задач с зависим
 ```
               Producers (any thread)                Consumer (single thread)
               ─────────────────────                 ───────────────────────
-   orchestrator["s"][keys].RunAsync ──────┐
-   orchestrator["s"].RegisterKey ─────────┤
+   orchestrator.Root["s"][keys].RunAsync ──────┐
+   orchestrator.Root["s"].RegisterKey ─────────┤
                                           ├──► Channel<OrchestratorEvent> ──► EventLoop.RunAsync
    ctx.AddKeyAsync  (из IJobService) ─────┤        (bounded 10_000)            ├─ HandleTimerTick
    ctx.RemoveKeyAsync ────────────────────┤                                    ├─ HandleManualTrigger
@@ -46,7 +46,7 @@ Job Orchestrator — SDK периодических задач с зависим
 
 ## Каскадное удаление инстансов
 
-`ctx.RemoveKeyAsync(K)` или `orchestrator["stage"].UnregisterKey(K)` инициирует двухэтапный cleanup:
+`ctx.RemoveKeyAsync(K)` или `orchestrator.Root["stage"].UnregisterKey(K)` инициирует двухэтапный cleanup:
 
 **Этап 1 (синхронно в `HandleKeyRemovedAsync`):**
 - Транзитивное замыкание стадий через pre-computed `StageDescriptor.AffectedByKeyRemoval` (O(1)).
@@ -142,8 +142,8 @@ BeginIteration (после принятия политики):
 2. `FinalizeAllTerminatingAsync` — для застрявших terminating-инстансов вызывается `RemoveScopeAsync` (best-effort, исключения логируются).
 
 После Faulted внешний API (`IJobOrchestrator`):
-- `orchestrator["stage"][keys].RunAsync()` бросает `IterationRejectedException(Reason=Faulted)`.
-- `orchestrator["stage"].RegisterKey` / `UnregisterKey` бросают `InvalidOperationException`.
+- `orchestrator.Root["stage"][keys].RunAsync()` бросает `IterationRejectedException(Reason=Faulted)`.
+- `orchestrator.Root["stage"].RegisterKey` / `UnregisterKey` бросают `InvalidOperationException`.
 - `GetOverview` доступен (для post-mortem snapshot'а — что было в InstanceManager на момент краша).
 
 ## Restart-behavior

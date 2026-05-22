@@ -36,8 +36,8 @@ public sealed class ScenarioMultiCallAccumulationTests {
 		});
 
 		var orchestrator = host.Services.GetRequiredService<IJobOrchestrator>();
-		orchestrator.Invoking(o => _ = o["evotor:shops"]).Should().NotThrow();
-		orchestrator.Invoking(o => _ = o["ozon:offers"]).Should().NotThrow();
+		orchestrator.Invoking(o => _ = o.GetStage("evotor:shops")).Should().NotThrow();
+		orchestrator.Invoking(o => _ = o.GetStage("ozon:offers")).Should().NotThrow();
 
 		var registry = host.Services.GetRequiredService<StageRegistry>();
 		registry.AllStages.Select(s => s.Name).Should().BeEquivalentTo(["evotor:shops", "ozon:offers"]);
