@@ -127,7 +127,6 @@ public static class ServiceCollectionExtensions {
 		});
 
 		services.AddSingleton<InstanceManager>();
-		services.AddSingleton<KeyspaceRegistry>();
 		services.AddSingleton<ConcurrencyLimits>();
 		services.AddSingleton<GlobalIterationLimiter>();
 		services.AddSingleton<InstanceCreator>();
@@ -186,7 +185,6 @@ public static class ServiceCollectionExtensions {
 
 		// Простые keyed-singleton'ы без keyed-зависимостей — дефолтный ActivatorUtilities-резолв.
 		services.AddKeyedSingleton<InstanceManager>(tenantKey);
-		services.AddKeyedSingleton<KeyspaceRegistry>(tenantKey);
 
 		// Per-tenant дефолтный HostOptions: keyed-singleton под tenantKey. Пользовательский override
 		// через jobs.ConfigureJobOrchestratorHost(...) уже зарегистрирован на probe-pass ДО этой

@@ -53,6 +53,11 @@ internal sealed class Instance {
 	int _pendingTick;
 	volatile CancellationTokenSource? _runCts;
 	TaskCompletionSource? _iterationOutcomeTcs;
+	// Keyspace эмитера: ключи, опубликованные этим инстансом через JobContext.AddKeyAsync /
+	// IStageHandle.RegisterKey. Plain HashSet — мутации только на event-loop-consumer-потоке
+	// (HandleKeyAdded/HandleKeyRemovedAsync/CascadeKeyRemovalAsync), читает только event-loop
+	// (через InstanceCreator.ComputeDimension), без concurrent-обёртки.
+	private readonly HashSet<string> _emittedKeys = new(StringComparer.Ordinal);
 	private const int IterationBufferCapacity = 64;
 
 	private volatile IIterationHandle? _runningIteration;
@@ -193,6 +198,33 @@ internal sealed class Instance {
 	public void CompleteIterationSubscribers() {
 		foreach (var sub in _iterationSubscribers.Keys) sub.Complete();
 		_iterationSubscribers.Clear();
+	}
+
+	/// <summary>
+	/// Все ключи, опубликованные этим инстансом-эмитером. Read-only-проекция приватного <c>_emittedKeys</c>.
+	/// Читается <see cref="EventLoop"/>-ом из своего же потока (через <c>InstanceMatching.ComputeDimension</c>) —
+	/// safe-snapshot не нужен.
+	/// </summary>
+	public IReadOnlyCollection<string> EmittedKeys => _emittedKeys;
+
+	/// <summary>Добавляет ключ в keyspace эмитера. <c>true</c>, если ключ был новый; <c>false</c> — идемпотентно.</summary>
+	public bool AddEmittedKey(string key) => _emittedKeys.Add(key);
+
+	/// <summary>Удаляет ключ из keyspace эмитера. <c>true</c>, если ключ существовал.</summary>
+	public bool RemoveEmittedKey(string key) => _emittedKeys.Remove(key);
+
+	/// <summary>True, если ключ был ранее эмитирован этим инстансом и ещё не удалён.</summary>
+	public bool ContainsEmittedKey(string key) => _emittedKeys.Contains(key);
+
+	/// <summary>
+	/// Снимает весь keyspace-bucket (вызывается при cascade-removal инстанса). Возвращает orphan-ключи
+	/// для рекурсивного cascade потомков. После вызова <see cref="EmittedKeys"/> пуст.
+	/// </summary>
+	public IReadOnlyCollection<string> TakeEmittedKeys() {
+		if (_emittedKeys.Count == 0) return [];
+		var orphans = new List<string>(_emittedKeys);
+		_emittedKeys.Clear();
+		return orphans;
 	}
 
 	/// <summary>Проецирует текущее состояние инстанса в публичный snapshot. Вызывается из <see cref="InstanceManager"/> и InstanceHandle.</summary>

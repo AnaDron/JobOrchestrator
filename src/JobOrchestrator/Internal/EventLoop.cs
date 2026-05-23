@@ -34,7 +34,6 @@ namespace JobOrchestrator.Internal;
 internal sealed class EventLoop(
 	StageRegistry registry,
 	InstanceManager instances,
-	KeyspaceRegistry keyspace,
 	InstanceCreator creator,
 	StageRunner runner,
 	DueScanner scanner,
@@ -413,7 +412,7 @@ internal sealed class EventLoop(
 			Log.IgnoredAddKeyFromTerminating(logger, source.Stage.Name, key, source.FullyQualifiedName, null);
 			return;
 		}
-		if (!keyspace.Add(source.Identity, key)) {
+		if (!source.AddEmittedKey(key)) {
 			Log.AddKeyAlreadyPresent(logger, source.Stage.Name, key, null);
 			return;
 		}
@@ -429,7 +428,7 @@ internal sealed class EventLoop(
 			Log.IgnoredRemoveKeyFromTerminating(logger, source.Stage.Name, key, source.FullyQualifiedName, null);
 			return;
 		}
-		if (!keyspace.Remove(source.Identity, key)) {
+		if (!source.RemoveEmittedKey(key)) {
 			Log.RemoveKeyAbsent(logger, source.Stage.Name, key, null);
 			return;
 		}
@@ -491,7 +490,7 @@ internal sealed class EventLoop(
 
 				// Снимаем bucket этого инстанса — orphan-ключи enqueue'ём для дальнейшего обхода.
 				// Identity иммутабельна, сохраняется в seed после Remove — для рекурсивного matching.
-				var orphans = keyspace.RemoveInstance(instance.Identity);
+				var orphans = instance.TakeEmittedKeys();
 				foreach (var orphanKey in orphans) {
 					queue.Enqueue(new CascadeSeed(instance.Identity, orphanKey));
 				}

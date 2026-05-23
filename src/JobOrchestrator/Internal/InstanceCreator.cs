@@ -26,7 +26,6 @@ namespace JobOrchestrator.Internal;
 /// </summary>
 internal sealed class InstanceCreator(
 	InstanceManager instances,
-	KeyspaceRegistry keyspace,
 	TimeProvider time,
 	Channel<OrchestratorEvent> channel
 ) {
@@ -144,7 +143,7 @@ internal sealed class InstanceCreator(
 				if (parent.Metrics.Stats.LastSuccess is null) return false;
 			} else {
 				// Per-emitter keyspace-check защищает от race «KeyAdded → KeyRemoved».
-				if (!childKeys.TryGetValue(dep.Target.Name, out var key) || !keyspace.Contains(parent.Identity, key)) return false;
+				if (!childKeys.TryGetValue(dep.Target.Name, out var key) || !parent.ContainsEmittedKey(key)) return false;
 			}
 		}
 		return true;
@@ -155,13 +154,14 @@ internal sealed class InstanceCreator(
 
 		switch (dep.Mode) {
 		case DependencyMode.Instance:
-			// Per-emitter buckets: для каждого инстанса-эмитера X.bucket даёт пары (emitterKeys, keys).
-			// Candidate = emitter's keys ∪ { Target.Name: k } per каждый k в bucket.Keys.
+			// Per-emitter keyspace живёт на самом инстансе (Instance.EmittedKeys).
+			// Candidate = emitter's DependencyKeys ∪ { Target.Name: k } per каждый k в emittedKeys.
 			// Это корректно поддерживает multi-instance-эмитеров, поскольку каждый эмитер вносит ТОЛЬКО
 			// свои ключи (а не глобальный пул всех ключей стадии).
-			foreach (var bucket in keyspace.SnapshotByStage(dep.Target)) {
-				foreach (var key in bucket.Keys) {
-					var emitterKeys = bucket.Emitter.DependencyKeys;
+			foreach (var emitter in instances.InstancesOf(dep.Target)) {
+				if (emitter.EmittedKeys.Count == 0) continue;
+				var emitterKeys = emitter.DependencyKeys;
+				foreach (var key in emitter.EmittedKeys) {
 					var combined = new Dictionary<string, string>(emitterKeys.Count + 1, StringComparer.Ordinal);
 					foreach (var ek in emitterKeys) combined[ek.Key] = ek.Value;
 					combined[dep.Target.Name] = key;
