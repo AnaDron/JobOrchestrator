@@ -80,7 +80,11 @@ public static class JobOrchestratorExtensions {
 		await using var iterEnum = handle.GetAsyncEnumerator(ct);
 		var current = handle.RunningIteration;
 		if (current is not null) {
-			try { await current.Completion.ConfigureAwait(false); return; }
+			// WaitAsync(ct) — без неё cancel-токен caller'а не доходит до running-итерации, и waiter
+			// висит до её естественного завершения. Остальные phase'ы ct уважают (WithCancellation /
+			// MoveNextAsync(ct)); Phase 3 без WaitAsync был единственным «глухим» местом.
+			try { await current.Completion.WaitAsync(ct).ConfigureAwait(false); return; }
+			catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
 			catch (IterationFailedException) { /* fall through to stream */ }
 		}
 		// Re-check после RunningIteration — success мог завершиться в окне между фазами.

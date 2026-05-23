@@ -211,8 +211,12 @@ public sealed class ScenarioWaitForStageTests {
 			orchestrator.Root["shops"].UnregisterKey("u1");
 
 			Func<Task> awaitWaiter = async () => await waitTask.WaitAsync(Timeout).ConfigureAwait(false);
+			// WaitForSuccessAsync ловит per-iteration IterationFailedException (cancel-by-cascade) и
+			// fall-through-ит к stream loop'у; когда subscriber-канал закрыт через CompleteIterationSubscribers
+			// (часть NotifyInstanceRemoved), extension бросает InvalidOperationException с сообщением о
+			// причине завершения stream'а.
 			(await awaitWaiter.Should().ThrowAsync<InvalidOperationException>().ConfigureAwait(false))
-				.WithMessage("*удалён каскадом*");
+				.WithMessage("*cascade-removal*");
 		} finally {
 			await host.StopAsync().ConfigureAwait(false);
 		}
