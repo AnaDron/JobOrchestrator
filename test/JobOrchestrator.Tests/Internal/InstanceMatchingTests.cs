@@ -1,6 +1,12 @@
+using System.Threading.Channels;
+
 namespace JobOrchestrator.Tests.Internal;
 
-public sealed class InstanceCreatorTests {
+/// <summary>
+/// Тесты алгоритма backtracking-merge, который раньше жил в <c>InstanceCreator</c>, а теперь —
+/// internal static methods в partial-секции <c>EventLoop.InstanceMatching</c>.
+/// </summary>
+public sealed class InstanceMatchingTests {
 	private static StageDescriptor MakeStage(string name, params StageDependency[] deps) =>
 		TestStages.Make(name, new() { Dependencies = deps });
 
@@ -11,12 +17,15 @@ public sealed class InstanceCreatorTests {
 		return inst;
 	}
 
-	private static InstanceCreator NewCreator(InstanceManager instances) =>
-		new(instances, TimeProvider.System, System.Threading.Channels.Channel.CreateUnbounded<OrchestratorEvent>());
+	private static Channel<OrchestratorEvent> NewChannel() =>
+		Channel.CreateUnbounded<OrchestratorEvent>();
+
+	private static List<Instance> EvaluateAndCreate(StageDescriptor stage, InstanceManager instances) =>
+		EventLoop.EvaluateAndCreate(stage, instances, NewChannel(), TimeProvider.System);
 
 	/// <summary>
 	/// Helper для setup-логики «инстанс <paramref name="stage"/> с такими-то <paramref name="depKeys"/>
-	/// эмитит ключи <paramref name="keys"/>». Скрывает создание Instance + Add + AddEmittedKey.
+	/// эмитит ключи <paramref name="keys"/>». Скрывает создание Instance + Add + AddEmittedKey в одной строке.
 	/// </summary>
 	private static void AddEmittingInstance(
 		InstanceManager instances,
@@ -33,9 +42,8 @@ public sealed class InstanceCreatorTests {
 	public void EvaluateAndCreate_KeylessStage_CreatesOneInstanceWithEmptyKeys() {
 		var stage = MakeStage("shops");
 		var instances = new InstanceManager();
-		var creator = NewCreator(instances);
 
-		var created = creator.EvaluateAndCreate(stage);
+		var created = EvaluateAndCreate(stage, instances);
 		created.Should().ContainSingle();
 		created[0].Stage.Should().Be(stage);
 		created[0].Keys.Should().BeEmpty();
@@ -47,10 +55,9 @@ public sealed class InstanceCreatorTests {
 	public void EvaluateAndCreate_AlreadyExists_NoDuplicate() {
 		var stage = MakeStage("shops");
 		var instances = new InstanceManager();
-		var creator = NewCreator(instances);
 
-		creator.EvaluateAndCreate(stage).Should().ContainSingle();
-		creator.EvaluateAndCreate(stage).Should().BeEmpty();  // идемпотентно
+		EvaluateAndCreate(stage, instances).Should().ContainSingle();
+		EvaluateAndCreate(stage, instances).Should().BeEmpty();  // идемпотентно
 		instances.Count.Should().Be(1);
 	}
 
@@ -60,9 +67,8 @@ public sealed class InstanceCreatorTests {
 		var pg = MakeStage("productGroups", new StageDependency(shops, DependencyMode.Instance));
 		var instances = new InstanceManager();
 		instances.Add(MakeInstanceWithSuccess(shops));  // shops успешен, но EmittedKeys пуст
-		var creator = NewCreator(instances);
 
-		creator.EvaluateAndCreate(pg).Should().BeEmpty();
+		EvaluateAndCreate(pg, instances).Should().BeEmpty();
 	}
 
 	[Fact]
@@ -71,9 +77,8 @@ public sealed class InstanceCreatorTests {
 		var pg = MakeStage("productGroups", new StageDependency(shops, DependencyMode.Instance));
 		var instances = new InstanceManager();
 		AddEmittingInstance(instances, shops, depKeys: null, "u1", "u2", "u3");
-		var creator = NewCreator(instances);
 
-		var created = creator.EvaluateAndCreate(pg);
+		var created = EvaluateAndCreate(pg, instances);
 		created.Should().HaveCount(3);
 		created.Select(j => j.Keys["shops"]).Should().BeEquivalentTo("u1", "u2", "u3");
 		created.Select(j => j.FullyQualifiedName).Should().BeEquivalentTo(
@@ -90,9 +95,8 @@ public sealed class InstanceCreatorTests {
 		var products = MakeStage("products", new StageDependency(pg, DependencyMode.Whole));
 		var instances = new InstanceManager();
 		instances.Add(MakeInstanceWithSuccess(pg, new Dictionary<string, string> { ["shops"] = "u1" }));
-		var creator = NewCreator(instances);
 
-		var created = creator.EvaluateAndCreate(products);
+		var created = EvaluateAndCreate(products, instances);
 		created.Should().ContainSingle();
 		created[0].Keys.Should().ContainKey("shops").WhoseValue.Should().Be("u1");
 		created[0].FullyQualifiedName.Should().Be("products[shops=u1]");
@@ -108,9 +112,8 @@ public sealed class InstanceCreatorTests {
 		instances.Add(MakeInstanceWithSuccess(pg, new Dictionary<string, string> { ["shops"] = "u1" }));
 		instances.Add(MakeInstanceWithSuccess(pg, new Dictionary<string, string> { ["shops"] = "u2" }));
 		instances.Add(MakeInstanceWithSuccess(pg, new Dictionary<string, string> { ["shops"] = "u3" }));
-		var creator = NewCreator(instances);
 
-		var created = creator.EvaluateAndCreate(products);
+		var created = EvaluateAndCreate(products, instances);
 		created.Select(j => j.Keys["shops"]).Should().BeEquivalentTo("u1", "u2", "u3");
 	}
 
@@ -122,9 +125,8 @@ public sealed class InstanceCreatorTests {
 		// LastSuccess = null — ещё не был успешен.
 		var pgInst = new Instance { Identity = new InstanceIdentity(pg) };
 		instances.Add(pgInst);
-		var creator = NewCreator(instances);
 
-		creator.EvaluateAndCreate(products).Should().BeEmpty();
+		EvaluateAndCreate(products, instances).Should().BeEmpty();
 	}
 
 	[Fact]
@@ -138,9 +140,8 @@ public sealed class InstanceCreatorTests {
 		var instances = new InstanceManager();
 		AddEmittingInstance(instances, a, depKeys: null, "1", "2");
 		AddEmittingInstance(instances, b, depKeys: null, "x", "y");
-		var creator = NewCreator(instances);
 
-		var created = creator.EvaluateAndCreate(c);
+		var created = EvaluateAndCreate(c, instances);
 		// 2 × 2 = 4 комбинации
 		created.Should().HaveCount(4);
 		var pairs = created.Select(j => (j.Keys["a"], j.Keys["b"])).OrderBy(p => p).ToList();
@@ -159,9 +160,8 @@ public sealed class InstanceCreatorTests {
 		var instances = new InstanceManager();
 		instances.Add(MakeInstanceWithSuccess(a, new Dictionary<string, string> { ["k"] = "1" }));
 		instances.Add(MakeInstanceWithSuccess(b, new Dictionary<string, string> { ["k"] = "2" }));
-		var creator = NewCreator(instances);
 
-		creator.EvaluateAndCreate(x).Should().BeEmpty();
+		EvaluateAndCreate(x, instances).Should().BeEmpty();
 	}
 
 	[Fact]
@@ -175,9 +175,8 @@ public sealed class InstanceCreatorTests {
 		var instances = new InstanceManager();
 		instances.Add(MakeInstanceWithSuccess(a, new Dictionary<string, string> { ["k"] = "1" }));
 		instances.Add(MakeInstanceWithSuccess(b, new Dictionary<string, string> { ["k"] = "1" }));
-		var creator = NewCreator(instances);
 
-		var created = creator.EvaluateAndCreate(x);
+		var created = EvaluateAndCreate(x, instances);
 		created.Should().ContainSingle();
 		created[0].Keys.Should().ContainKey("k").WhoseValue.Should().Be("1");
 	}

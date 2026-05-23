@@ -129,7 +129,6 @@ public static class ServiceCollectionExtensions {
 		services.AddSingleton<InstanceManager>();
 		services.AddSingleton<ConcurrencyLimits>();
 		services.AddSingleton<GlobalIterationLimiter>();
-		services.AddSingleton<InstanceCreator>();
 		services.AddSingleton<StageRunner>();
 		services.AddSingleton<DueScanner>();
 		services.AddSingleton<EventLoop>();
@@ -196,7 +195,6 @@ public static class ServiceCollectionExtensions {
 		services.AddKeyedSingletonWithPropagation<ConcurrencyLimits>(tenantKey);
 		services.AddKeyedSingletonWithPropagation<GlobalIterationLimiter>(tenantKey);
 		services.AddKeyedSingletonWithPropagation<OrchestratorLifecycle>(tenantKey);
-		services.AddKeyedSingletonWithPropagation<InstanceCreator>(tenantKey);
 		services.AddKeyedSingletonWithPropagation<StageRunner>(tenantKey);
 		services.AddKeyedSingletonWithPropagation<DueScanner>(tenantKey);
 		services.AddKeyedSingletonWithPropagation<EventLoop>(tenantKey);

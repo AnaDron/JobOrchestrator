@@ -31,10 +31,9 @@ namespace JobOrchestrator.Internal;
 /// проставляется в finally — exception между SetMetrics и State=Idle не оставит инстанс залипшим в Running.
 /// </para>
 /// </remarks>
-internal sealed class EventLoop(
+internal sealed partial class EventLoop(
 	StageRegistry registry,
 	InstanceManager instances,
-	InstanceCreator creator,
 	StageRunner runner,
 	DueScanner scanner,
 	ConcurrencyLimits concurrency,
@@ -602,7 +601,7 @@ internal sealed class EventLoop(
 	}
 
 	private void CreateAndStart(StageDescriptor stage) {
-		var created = creator.EvaluateAndCreate(stage);
+		var created = EvaluateAndCreate(stage, instances, channel, time);
 		foreach (var instance in created) {
 			runtime.NotifyInstanceAdded(instance);
 			Log.InstanceCreated(logger, instance.FullyQualifiedName, null);
