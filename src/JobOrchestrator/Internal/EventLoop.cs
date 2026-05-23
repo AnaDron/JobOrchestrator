@@ -164,7 +164,7 @@ internal sealed class EventLoop(
 			} catch (Exception ex) {
 				Log.FinalizeShutdownFailed(logger, instance.FullyQualifiedName, ex);
 			}
-			instances.Remove(instance);
+			if (instances.Remove(instance)) runtime.NotifyInstanceRemoved(instance);
 		}
 	}
 
@@ -584,10 +584,13 @@ internal sealed class EventLoop(
 		// один вызывающий получит true, второй — false и просто выйдет. Это страхует от повторной
 		// сигнализации waiters и повторного RemoveScopeAsync.
 		if (!instances.Remove(instance)) return;
+		// Notify ПЕРЕД RemoveScopeAsync: iteration-broadcaster инстанса complete'ится сразу,
+		// и waiter-ы выходят из await foreach без ожидания I/O state-store.
+		runtime.NotifyInstanceRemoved(instance);
 
 		// Iteration-scoped TCS (RunAsync) — отстреливаем IterationFailedException(Cancelled).
 		// WaitForSuccessAsync-extension'у достаточно того, что iteration-broadcaster инстанса
-		// completes через InstanceManager.Remove → Runtime.OnInstanceRemoved → instance.CompleteIterationSubscribers,
+		// completes через Runtime.NotifyInstanceRemoved → instance.CompleteIterationSubscribers,
 		// и его stream loop завершится с throw InvalidOperationException.
 		instance.TakeIterationOutcomeTcs()?.TrySetException(
 			IterationFailures.CancelledByCascade(instance));
@@ -602,6 +605,7 @@ internal sealed class EventLoop(
 	private void CreateAndStart(StageDescriptor stage) {
 		var created = creator.EvaluateAndCreate(stage);
 		foreach (var instance in created) {
+			runtime.NotifyInstanceAdded(instance);
 			Log.InstanceCreated(logger, instance.FullyQualifiedName, null);
 		}
 	}

@@ -18,8 +18,9 @@ namespace JobOrchestrator.Internal;
 /// топология frozen на старте, runtime-добавление доменов не поддерживается.
 /// </para>
 /// <para>
-/// Подписываемся на <see cref="InstanceManager.InstanceAdded"/>/<see cref="InstanceManager.InstanceRemoved"/>
-/// для dispatch'а в <see cref="StageHandle.NotifyAdded"/>/<see cref="StageHandle.NotifyRemoved"/>
+/// <see cref="EventLoop"/> явно дёргает <see cref="NotifyInstanceAdded"/>/<see cref="NotifyInstanceRemoved"/>
+/// сразу после <see cref="InstanceManager.Add"/>/<see cref="InstanceManager.Remove"/>; здесь мы
+/// dispatch'им в соответствующий <see cref="StageHandle.NotifyAdded"/>/<see cref="StageHandle.NotifyRemoved"/>
 /// — источник <see cref="IStageHandle.Changes"/>.
 /// </para>
 /// </summary>
@@ -71,10 +72,6 @@ internal sealed class JobOrchestratorRuntime : IJobOrchestrator {
 		_stageHandles = _domainsOrdered
 			.SelectMany(d => d.Cast<StageHandle>())
 			.ToDictionary(s => s.Name, StringComparer.Ordinal);
-
-		// Подписка на life-cycle InstanceManager → dispatch в соответствующий StageHandle.
-		instances.InstanceAdded = OnInstanceAdded;
-		instances.InstanceRemoved = OnInstanceRemoved;
 	}
 
 	public bool IsFaulted => _lifecycle.IsFaulted;
@@ -109,17 +106,25 @@ internal sealed class JobOrchestratorRuntime : IJobOrchestrator {
 
 	internal Instance? FindInstance(InstanceIdentity identity) => _instances.Find(identity);
 
-	private void OnInstanceAdded(Instance instance) {
+	/// <summary>
+	/// Уведомляет stage-handle о добавлении инстанса. Вызывается <see cref="EventLoop"/>
+	/// явно после <see cref="InstanceManager.Add"/> — на event-loop-consumer-потоке.
+	/// </summary>
+	internal void NotifyInstanceAdded(Instance instance) {
 		if (_stageHandles.TryGetValue(instance.Stage.Name, out var handle)) {
 			handle.NotifyAdded(instance);
 		}
 	}
 
-	private void OnInstanceRemoved(Instance instance) {
+	/// <summary>
+	/// Уведомляет stage-handle об удалении инстанса и завершает iteration-broadcaster
+	/// (consumer'ы инстанса получат естественный exit). Вызывается <see cref="EventLoop"/>
+	/// явно после <see cref="InstanceManager.Remove"/> — на event-loop-consumer-потоке.
+	/// </summary>
+	internal void NotifyInstanceRemoved(Instance instance) {
 		if (_stageHandles.TryGetValue(instance.Stage.Name, out var handle)) {
 			handle.NotifyRemoved(instance);
 		}
-		// При cascade-removal завершаем iteration-broadcaster — consumer'ы инстанса получат естественный exit.
 		instance.CompleteIterationSubscribers();
 	}
 
@@ -128,7 +133,7 @@ internal sealed class JobOrchestratorRuntime : IJobOrchestrator {
 	/// (<see cref="IStageHandle.Changes"/> и <see cref="IInstanceHandle"/>-as-AsyncEnumerable), чтобы
 	/// consumer'ы без явно переданного <see cref="CancellationToken"/> вышли из <c>await foreach</c>
 	/// естественно. Для инстансов, удалённых каскадом, iteration-subscribers уже completed в
-	/// <see cref="OnInstanceRemoved"/>; здесь — для idle-инстансов, переживших shutdown.
+	/// <see cref="NotifyInstanceRemoved"/>; здесь — для idle-инстансов, переживших shutdown.
 	/// </summary>
 	internal void OnShutdown() {
 		foreach (var stage in _stageHandles.Values) stage.CompleteAllSubscribers();
