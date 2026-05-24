@@ -90,6 +90,11 @@ internal sealed partial class EventLoop(
 		} catch (ChannelClosedException) {
 			// Канал закрыт извне (lifecycle.MarkFaulted/CloseChannel). Нормальный shutdown.
 		} finally {
+			// Закрываем channel ПЕРВЫМ делом: между exit'ом из ReadAllAsync и финализацией ниже
+			// HostedService.ExecuteAsync ещё не успел вызвать свой CloseChannel — race-окно, в которое
+			// внешние Runtime.RunAsync/RegisterKey могут проскочить WriteAsync (channel ещё open) и
+			// зависнуть на await tcs.Task, потому что consumer уже ушёл. TryComplete идемпотентен.
+			lifecycle.CloseChannel();
 			DrainPendingRequests();
 			// Финализируем все Terminating-инстансы (их finalize-events не прилетят при закрытом Channel).
 			await FinalizeAllTerminatingAsync().ConfigureAwait(false);

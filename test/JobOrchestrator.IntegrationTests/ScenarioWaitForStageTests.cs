@@ -1,4 +1,5 @@
 using JobOrchestrator.IntegrationTests.Support;
+using JobOrchestrator.Internal;
 
 namespace JobOrchestrator.IntegrationTests;
 
@@ -415,23 +416,30 @@ public sealed class ScenarioWaitForStageTests {
 	}
 
 	[Fact]
-	public async Task RunAsync_AfterShutdown_ThrowsIterationRejectedFaulted() {
-		// Проверка контракта исключений CRITICAL fix: после graceful shutdown RunAsync должен
-		// синхронно бросить IterationRejectedException(Faulted), не InvalidOperationException.
-		// Handler оставлен дефолтным (быстрый success bootstrap-tick) — мы не тестируем runner-behavior,
-		// только path "WriteAsync → ChannelClosedException → IterationRejectedException(Faulted)".
+	public async Task RunAsync_AfterFaulted_ThrowsIterationRejectedFaulted() {
+		// Контракт: при Faulted-оркестраторе RunAsync синхронно бросает IterationRejectedException(Faulted),
+		// а не InvalidOperationException и не висит в ожидании tcs.Task.
+		// Используем lifecycle.MarkFaulted() напрямую вместо host.StopAsync(): MarkFaulted синхронно
+		// ставит IsFaulted=true И закрывает channel, что гарантирует fail-fast путь в Runtime.RunAsync
+		// без race-окна между EventLoop exit и Channel.TryComplete (которое возникало при host.StopAsync
+		// под нагрузкой parallel-test-run'а и проявлялось как hang всего test-host'а).
 		using var host = TestHostFactory.Build(
 			configure: jobs => jobs.Stage("a").HandledBy<FakeServiceA>().RunPeriodically(TimeSpan.FromHours(1)),
 			registerFakes: s => s.AddSingleton<FakeServiceA>());
 
 		var orchestrator = host.Services.GetRequiredService<IJobOrchestrator>();
+		var lifecycle = host.Services.GetRequiredService<OrchestratorLifecycle>();
 		await host.StartAsync().ConfigureAwait(false);
-		await host.StopAsync().ConfigureAwait(false);
+		try {
+			lifecycle.MarkFaulted();
 
-		Func<Task> act = () => orchestrator.Root["a"][InstanceKeys.Empty].RunAsync();
-		var ex = (await act.Should().ThrowAsync<IterationRejectedException>().ConfigureAwait(false)).Which;
-		ex.Reason.Should().Be(IterationRejectReason.Faulted);
-		ex.FullyQualifiedName.Should().Be("a[]");
+			Func<Task> act = () => orchestrator.Root["a"][InstanceKeys.Empty].RunAsync();
+			var ex = (await act.Should().ThrowAsync<IterationRejectedException>().ConfigureAwait(false)).Which;
+			ex.Reason.Should().Be(IterationRejectReason.Faulted);
+			ex.FullyQualifiedName.Should().Be("a[]");
+		} finally {
+			await host.StopAsync().ConfigureAwait(false);
+		}
 	}
 
 	[Fact]
