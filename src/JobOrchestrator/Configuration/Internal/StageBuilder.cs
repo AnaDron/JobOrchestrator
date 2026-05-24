@@ -17,7 +17,7 @@ internal sealed class StageBuilder(string name, JobDefaults defaults) : IStageBu
 	/// <summary>
 	/// Сырые зависимости (by-name) в порядке объявления в Fluent API. Используется
 	/// <see cref="ConfigurationValidator"/> (cycle / dangling-checks) и <c>JobOrchestratorBuilder.BuildRegistry</c>
-	/// (resolve в <see cref="StageDependency"/> через <see cref="Internal.StageInitializer"/>).
+	/// (resolve в <see cref="StageDependency"/> через <see cref="Internal.StageRegistry"/>-ctor).
 	/// </summary>
 	internal IReadOnlyList<(string TargetName, DependencyMode Mode)> Dependencies => _dependencies;
 

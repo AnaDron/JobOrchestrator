@@ -13,8 +13,8 @@ internal enum DependencyMode {
 /// <para>
 /// <see cref="Target"/> — прямая ссылка на дескриптор родителя (а не имя-строка): граф самодостаточен
 /// в дескрипторах, lookup через <see cref="StageRegistry"/> по имени для resolve не требуется.
-/// Forward-references разруливаются в <see cref="StageInitializer"/>.<c>DependenciesOf</c>: он
-/// получает уже-существующий registry и резолвит имена в descriptor-refs.
+/// Forward-references разруливаются в <see cref="StageRegistry"/>-ctor'е: он получает
+/// raw-deps map по именам и резолвит их в descriptor-refs во время финализации.
 /// </para>
 /// </summary>
 internal sealed record StageDependency(StageDescriptor Target, DependencyMode Mode);

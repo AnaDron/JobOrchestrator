@@ -2,12 +2,12 @@ namespace JobOrchestrator.Tests.Helpers;
 
 /// <summary>
 /// Утилита для unit-тестов: создаёт fully-initialized <see cref="StageDescriptor"/> без поднятия
-/// всего pipeline (<c>JobOrchestratorBuilder.BuildRegistry</c>). Использует фейковый
-/// <see cref="IStageInitializer"/>, который для target-стадии возвращает указанные deps и
-/// транзитивно-вычисленные <c>ExpectedKeyNames</c>; reverse-поля — empty, rank — 0.
+/// всего pipeline (<c>JobOrchestratorBuilder.BuildRegistry</c>). Заполняет computed-поля напрямую
+/// через <c>internal set</c>: для target-стадии — указанные deps и транзитивно вычисленные
+/// <c>ExpectedKeyNames</c>; reverse-поля — empty, rank — 0.
 /// <para>
 /// Тесты, которым нужны конкретные reverse-поля (cascade-сценарии и т.п.), должны идти через
-/// полный pipeline или собирать кастомный <see cref="IStageInitializer"/>.
+/// полный pipeline или собирать <see cref="StageRegistry"/> над rawDeps.
 /// </para>
 /// </summary>
 internal static class TestStages {
@@ -48,8 +48,12 @@ internal static class TestStages {
 			ExecutionTimeout = options.ExecutionTimeout,
 			ConcurrencyLimit = options.ConcurrencyLimit,
 		};
-		var expected = options.ExpectedKeyNames ?? ComputeExpectedFromDeps(options.Dependencies);
-		stage.Initialize(new FakeInitializer(stage, options.Dependencies, expected));
+		stage.Dependencies = options.Dependencies;
+		stage.ExpectedKeyNames = options.ExpectedKeyNames ?? ComputeExpectedFromDeps(options.Dependencies);
+		stage.DependentsWhole = [];
+		stage.DependentsInstance = [];
+		stage.AffectedByKeyRemoval = [];
+		stage.CancellationRank = 0;
 		return stage;
 	}
 
@@ -65,26 +69,5 @@ internal static class TestStages {
 			}
 		}
 		return names;
-	}
-
-	/// <summary>
-	/// Тестовый <see cref="IStageInitializer"/>: возвращает заданные значения для target-стадии,
-	/// дефолтные empty/0 для всех остальных (на случай accidental пересечения).
-	/// </summary>
-	private sealed class FakeInitializer(
-		StageDescriptor target,
-		IReadOnlyList<StageDependency> deps,
-		IReadOnlyList<string> expected
-	) : IStageInitializer {
-		public IReadOnlyList<StageDependency> DependenciesOf(StageDescriptor s) =>
-			ReferenceEquals(s, target) ? deps : [];
-
-		public IReadOnlyList<string> ExpectedKeyNamesOf(StageDescriptor s) =>
-			ReferenceEquals(s, target) ? expected : [];
-
-		public IReadOnlyList<StageDescriptor> DependentsWholeOf(StageDescriptor s) => [];
-		public IReadOnlyList<StageDescriptor> DependentsInstanceOf(StageDescriptor s) => [];
-		public IReadOnlyList<StageDescriptor> AffectedByKeyRemovalOf(StageDescriptor s) => [];
-		public int CancellationRankOf(StageDescriptor s) => 0;
 	}
 }

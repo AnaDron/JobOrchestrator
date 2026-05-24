@@ -3,10 +3,8 @@ using JobOrchestrator.Configuration.Internal;
 namespace JobOrchestrator.Tests.Configuration;
 
 /// <summary>
-/// Тесты Configuration-слоя после Phase B/C: проверки <see cref="ConfigurationValidator"/>
-/// (structural + per-stage) и computed-полей через <see cref="StageInitializer"/>. Раньше эта
-/// логика жила в <c>StageDescriptorGraph</c> и <c>StageRegistry</c>; теперь распределена:
-/// валидация — в Configuration, computed-fields — в Internal.
+/// Тесты Configuration-слоя: проверки <see cref="ConfigurationValidator"/> (structural + per-stage)
+/// и computed-полей <see cref="StageDescriptor"/>-ов после <see cref="StageRegistry"/>-ctor.
 /// </summary>
 public sealed class StageRegistryValidationTests {
 	private static IReadOnlyList<(string TargetName, DependencyMode Mode)> Deps(params (string, DependencyMode)[] items) => items;
@@ -35,10 +33,7 @@ public sealed class StageRegistryValidationTests {
 				Debounce = TimeSpan.Zero,
 			});
 		}
-		var registry = new StageRegistry(descriptors);
-		var initializer = new StageInitializer(registry, rawDeps);
-		foreach (var d in descriptors) d.Initialize(initializer);
-		return registry;
+		return new StageRegistry(descriptors, rawDeps);
 	}
 
 	[Fact]

@@ -6,20 +6,9 @@ namespace JobOrchestrator.Internal;
 /// (<see cref="Dependencies"/>, <see cref="ExpectedKeyNames"/>, <see cref="DependentsWhole"/>,
 /// <see cref="DependentsInstance"/>, <see cref="AffectedByKeyRemoval"/>, <see cref="CancellationRank"/>).
 /// <para>
-/// <b>Two-phase initialization:</b>
-/// </para>
-/// <list type="number">
-/// <item>Construction: задаются только raw user-fields через <c>required init</c>. Computed-поля
-/// дефолтятся как <c>null!</c> (для collection-типов) и <c>-1</c> для <see cref="CancellationRank"/>.</item>
-/// <item><see cref="Initialize"/>: заполняет computed-поля через <see cref="IStageInitializer"/>.
-/// Вызывается ровно один раз — из <c>JobOrchestratorBuilder.BuildRegistry</c>. Type-level барьер:
-/// получить <see cref="IStageInitializer"/> можно только внутри pipeline, поэтому случайный
-/// mutation практически невозможен.</item>
-/// </list>
-/// <para>
-/// <b>Fail-fast на uninit-чтении:</b> collection-поля имеют <c>null!</c>-defaults; production-чтение
-/// без Initialize даст <see cref="NullReferenceException"/>. <see cref="CancellationRank"/>
-/// дефолтится в <c>-1</c> — это sentinel «не инициализирован» (валидные ранги — неотрицательные).
+/// Computed-поля имеют <c>internal set</c> и заполняются <see cref="StageRegistry"/>-ctor'ом сразу
+/// после построения raw-дескриптора. Снаружи сборки они readonly — InternalsVisibleTo даёт тестам
+/// возможность собирать дескрипторы в обход полного pipeline.
 /// </para>
 /// </summary>
 internal sealed class StageDescriptor {
@@ -37,48 +26,32 @@ internal sealed class StageDescriptor {
 	/// </summary>
 	public int? ConcurrencyLimit { get; init; }
 
-	/// <summary>Зависимости в порядке объявления в Fluent API. Заполняется через <see cref="Initialize"/>.</summary>
-	public IReadOnlyList<StageDependency> Dependencies { get; private set; } = null!;
+	/// <summary>Зависимости в порядке объявления в Fluent API.</summary>
+	public IReadOnlyList<StageDependency> Dependencies { get; internal set; } = null!;
 
 	/// <summary>
 	/// Имена компонентов <c>DependencyKeys</c>, ожидаемые у инстансов этой стадии. Транзитивно
-	/// включает имена, унаследованные через цепочку <c>DependsOn</c>-родителей. Заполняется через
-	/// <see cref="Initialize"/>.
+	/// включает имена, унаследованные через цепочку <c>DependsOn</c>-родителей.
 	/// </summary>
-	public IReadOnlyList<string> ExpectedKeyNames { get; private set; } = null!;
+	public IReadOnlyList<string> ExpectedKeyNames { get; internal set; } = null!;
 
-	/// <summary>Стадии, имеющие <c>DependsOn(this)</c> — прямые dependents. Заполняется через <see cref="Initialize"/>.</summary>
-	public IReadOnlyList<StageDescriptor> DependentsWhole { get; private set; } = null!;
+	/// <summary>Стадии, имеющие <c>DependsOn(this)</c> — прямые dependents.</summary>
+	public IReadOnlyList<StageDescriptor> DependentsWhole { get; internal set; } = null!;
 
-	/// <summary>Стадии, имеющие <c>DependsOnInstance(this)</c> — прямые dependents. Заполняется через <see cref="Initialize"/>.</summary>
-	public IReadOnlyList<StageDescriptor> DependentsInstance { get; private set; } = null!;
+	/// <summary>Стадии, имеющие <c>DependsOnInstance(this)</c> — прямые dependents.</summary>
+	public IReadOnlyList<StageDescriptor> DependentsInstance { get; internal set; } = null!;
 
 	/// <summary>
 	/// Транзитивное замыкание стадий вниз по графу: инстансы могут унаследовать компонент ключа
 	/// от <c>this</c> (через прямую <c>DependsOnInstance</c> или цепочку <c>DependsOn</c>).
-	/// Используется при cascade-removal по <c>KeyRemovedEvent</c>. Заполняется через <see cref="Initialize"/>.
+	/// Используется при cascade-removal по <c>KeyRemovedEvent</c>.
 	/// </summary>
-	public IReadOnlyList<StageDescriptor> AffectedByKeyRemoval { get; private set; } = null!;
+	public IReadOnlyList<StageDescriptor> AffectedByKeyRemoval { get; internal set; } = null!;
 
 	/// <summary>
 	/// Глобальный ранг стадии для каскадной отмены: чем меньше ранг — тем «ближе к листу»
 	/// (cancel-ить первым). Pre-computed: листья (стадии без зависимых-вниз) получают ранг 0,
-	/// корни — наибольший. <c>-1</c> = sentinel «не инициализирован» (Initialize не вызван).
+	/// корни — наибольший. <c>-1</c> = sentinel «не инициализирован».
 	/// </summary>
-	public int CancellationRank { get; private set; } = -1;
-
-	/// <summary>
-	/// Заполняет computed-поля через <see cref="IStageInitializer"/>. Вызывается ровно один раз
-	/// — из pipeline <c>JobOrchestratorBuilder.BuildRegistry</c>. Type-level барьер: получить
-	/// IStageInitializer можно только внутри pipeline (production) или через test-helper.
-	/// </summary>
-	internal void Initialize(IStageInitializer initializer) {
-		ArgumentNullException.ThrowIfNull(initializer);
-		Dependencies = initializer.DependenciesOf(this);
-		ExpectedKeyNames = initializer.ExpectedKeyNamesOf(this);
-		DependentsWhole = initializer.DependentsWholeOf(this);
-		DependentsInstance = initializer.DependentsInstanceOf(this);
-		AffectedByKeyRemoval = initializer.AffectedByKeyRemovalOf(this);
-		CancellationRank = initializer.CancellationRankOf(this);
-	}
+	public int CancellationRank { get; internal set; } = -1;
 }
