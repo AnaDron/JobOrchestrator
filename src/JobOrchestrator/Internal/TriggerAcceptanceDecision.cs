@@ -1,6 +1,6 @@
 namespace JobOrchestrator.Internal;
 
-/// <summary>Результат политики <see cref="TriggerAcceptance.TryAccept"/> — внутренний gate event loop.</summary>
+/// <summary>Результат политики <see cref="EventLoop.TryAcceptTrigger"/> — внутренний gate event loop.</summary>
 internal readonly struct TriggerAcceptanceDecision {
 	public TriggerResult? Rejection { get; init; }
 
