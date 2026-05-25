@@ -1,3 +1,5 @@
+using System.Collections.Frozen;
+using System.Diagnostics.CodeAnalysis;
 using System.Threading.Channels;
 using JobOrchestrator.Configuration;
 using Microsoft.Extensions.Logging;
@@ -31,22 +33,99 @@ namespace JobOrchestrator.Internal;
 /// проставляется в finally — exception между SetMetrics и State=Idle не оставит инстанс залипшим в Running.
 /// </para>
 /// </remarks>
-internal sealed partial class EventLoop(
-	StageRegistry registry,
-	InstanceManager instances,
-	StageRunner runner,
-	DueScanner scanner,
-	ConcurrencyLimits concurrency,
-	GlobalIterationLimiter globalLimiter,
-	Channel<OrchestratorEvent> channel,
-	IJobStateStore stateStore,
-	OrchestratorLifecycle lifecycle,
-	JobOrchestratorHostOptions hostOptions,
-	JobOrchestratorRuntime runtime,
-	ILogger<EventLoop> logger,
-	TimeProvider time
-) {
+[SuppressMessage("Usage", "CA1816:Dispose methods should call SuppressFinalize",
+	Justification = "Sealed class без финализатора — GC.SuppressFinalize был бы no-op и misleading.")]
+internal sealed partial class EventLoop : IDisposable {
+	private readonly StageRegistry registry;
+	private readonly InstanceManager instances;
+	private readonly StageRunner runner;
+	private readonly DueScanner scanner;
+	private readonly Channel<OrchestratorEvent> channel;
+	private readonly IJobStateStore stateStore;
+	private readonly OrchestratorLifecycle lifecycle;
+	private readonly JobOrchestratorHostOptions hostOptions;
+	private readonly JobOrchestratorRuntime runtime;
+	private readonly ILogger<EventLoop> logger;
+	private readonly TimeProvider time;
+	private readonly FrozenDictionary<StageDescriptor, SemaphoreSlim> _stageSemaphores;
+	private readonly SemaphoreSlim? _globalSem;
 	private int _handlerCrashCount;
+
+	public EventLoop(
+		StageRegistry registry,
+		InstanceManager instances,
+		StageRunner runner,
+		DueScanner scanner,
+		Channel<OrchestratorEvent> channel,
+		IJobStateStore stateStore,
+		OrchestratorLifecycle lifecycle,
+		JobOrchestratorHostOptions hostOptions,
+		JobOrchestratorRuntime runtime,
+		ILogger<EventLoop> logger,
+		TimeProvider time
+	) {
+		this.registry = registry;
+		this.instances = instances;
+		this.runner = runner;
+		this.scanner = scanner;
+		this.channel = channel;
+		this.stateStore = stateStore;
+		this.lifecycle = lifecycle;
+		this.hostOptions = hostOptions;
+		this.runtime = runtime;
+		this.logger = logger;
+		this.time = time;
+
+		// Per-stage семафоры: стадии без ConcurrencyLimit отсутствуют в словаре (TryAcquire = true бесплатно).
+		var seed = new Dictionary<StageDescriptor, SemaphoreSlim>();
+		foreach (var stage in registry.AllStages) {
+			if (stage.ConcurrencyLimit is { } limit) {
+				seed[stage] = new SemaphoreSlim(limit, limit);
+			}
+		}
+		_stageSemaphores = seed.ToFrozenDictionary();
+
+		// Глобальный лимит итераций поверх per-stage.
+		if (registry.GlobalConcurrencyLimit is { } globalLimit) {
+			if (globalLimit < 1) {
+				throw new ArgumentOutOfRangeException(nameof(registry), globalLimit,
+					"GlobalConcurrencyLimit должен быть >= 1.");
+			}
+			_globalSem = new SemaphoreSlim(globalLimit, globalLimit);
+		}
+	}
+
+	/// <summary>
+	/// <c>true</c>, если у стадии нет лимита или токен успешно захвачен — caller'у нужно отложить запуск
+	/// при <c>false</c>. Вызывается только из event-loop-consumer-потока.
+	/// </summary>
+	private bool TryAcquireStageConcurrency(StageDescriptor stage) =>
+		!_stageSemaphores.TryGetValue(stage, out var sem) || sem.Wait(0);
+
+	private void ReleaseStageConcurrency(StageDescriptor stage) {
+		if (_stageSemaphores.TryGetValue(stage, out var sem)) sem.Release();
+	}
+
+	private bool TryAcquireGlobalConcurrency() => _globalSem is null || _globalSem.Wait(0);
+
+	private void ReleaseGlobalConcurrency() {
+		if (_globalSem is not null) _globalSem.Release();
+	}
+
+	/// <summary>
+	/// Освобождает оба лимита (per-stage + global). Используется как callback для
+	/// <see cref="StageRunner.RunIterationAsync"/>, чтобы runner мог отпустить ресурсы в finally без
+	/// собственной ссылки на EventLoop-инфраструктуру.
+	/// </summary>
+	internal void ReleaseConcurrencyFor(StageDescriptor stage) {
+		ReleaseGlobalConcurrency();
+		ReleaseStageConcurrency(stage);
+	}
+
+	public void Dispose() {
+		_globalSem?.Dispose();
+		foreach (var sem in _stageSemaphores.Values) sem.Dispose();
+	}
 
 	public async Task RunAsync(CancellationToken stoppingToken) {
 		Log.Starting(logger, registry.AllStages.Count, null);
@@ -271,18 +350,17 @@ internal sealed partial class EventLoop(
 		// Сначала per-stage — он чаще узкий (типично 1-2). Только после успеха per-stage захватываем
 		// глобальный, чтобы не делать холостые global-acquire/release-циклы под нагрузкой
 		// «много стадий с ConcurrencyLimit=1 + длинные runner-ы».
-		if (!concurrency.TryAcquire(instance.Stage)) {
+		if (!TryAcquireStageConcurrency(instance.Stage)) {
 			DeferIteration(instance, trigger);
 			return (TriggerResult.ConcurrencyDeferred, null);
 		}
-		if (!globalLimiter.TryAcquire()) {
-			concurrency.Release(instance.Stage);
+		if (!TryAcquireGlobalConcurrency()) {
+			ReleaseStageConcurrency(instance.Stage);
 			DeferIteration(instance, trigger);
 			return (TriggerResult.ConcurrencyDeferred, null);
 		}
 		if (!instance.TryBeginRunning()) {
-			globalLimiter.Release();
-			concurrency.Release(instance.Stage);
+			ReleaseConcurrencyFor(instance.Stage);
 			throw new InvalidOperationException(
 				$"Invariant violation: инстанс {instance.FullyQualifiedName} уже Running до BeginIteration. " +
 				"Event-loop single-threaded contract нарушен.");
@@ -295,22 +373,23 @@ internal sealed partial class EventLoop(
 			var handle = new IterationHandle(runtime, instance.Identity, outcomeTcs.Task);
 			instance.OnIterationStarted(handle, outcomeTcs);
 			Log.BeginIteration(logger, instance.FullyQualifiedName, trigger, null);
-			_ = Task.Run(() => RunIterationSafeAsync(instance, trigger, ct), ct);
+			var stageRef = instance.Stage;
+			Action releaseConcurrency = () => ReleaseConcurrencyFor(stageRef);
+			_ = Task.Run(() => RunIterationSafeAsync(instance, trigger, releaseConcurrency, ct), ct);
 			return (TriggerResult.Started, handle);
 		} catch {
 			// EndRunning() clear-ит _runningIteration + _running + _pendingTick одним вызовом.
 			// TakeIterationOutcomeTcs() освобождает iteration-scoped TCS (caller-у его всё равно не доставили).
 			instance.TakeIterationOutcomeTcs();
 			instance.EndRunning();
-			globalLimiter.Release();
-			concurrency.Release(instance.Stage);
+			ReleaseConcurrencyFor(instance.Stage);
 			throw;
 		}
 	}
 
-	private async Task RunIterationSafeAsync(Instance instance, TriggerSource trigger, CancellationToken ct) {
+	private async Task RunIterationSafeAsync(Instance instance, TriggerSource trigger, Action releaseConcurrency, CancellationToken ct) {
 		try {
-			await runner.RunIterationAsync(instance, trigger, ct).ConfigureAwait(false);
+			await runner.RunIterationAsync(instance, trigger, releaseConcurrency, ct).ConfigureAwait(false);
 		} catch (Exception ex) {
 			Log.UnhandledIterationFault(logger, instance.FullyQualifiedName, ex);
 		}

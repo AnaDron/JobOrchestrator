@@ -127,8 +127,6 @@ public static class ServiceCollectionExtensions {
 		});
 
 		services.AddSingleton<InstanceManager>();
-		services.AddSingleton<ConcurrencyLimits>();
-		services.AddSingleton<GlobalIterationLimiter>();
 		services.AddSingleton<StageRunner>();
 		services.AddSingleton<DueScanner>();
 		services.AddSingleton<EventLoop>();
@@ -192,8 +190,6 @@ public static class ServiceCollectionExtensions {
 		services.TryAddKeyedSingleton<JobOrchestratorHostOptions>(tenantKey, (_, _) => new JobOrchestratorHostOptions());
 
 		// Keyed-сервисы с keyed-зависимостями — авто-пропагация ключа через wrapper.
-		services.AddKeyedSingletonWithPropagation<ConcurrencyLimits>(tenantKey);
-		services.AddKeyedSingletonWithPropagation<GlobalIterationLimiter>(tenantKey);
 		services.AddKeyedSingletonWithPropagation<OrchestratorLifecycle>(tenantKey);
 		services.AddKeyedSingletonWithPropagation<StageRunner>(tenantKey);
 		services.AddKeyedSingletonWithPropagation<DueScanner>(tenantKey);

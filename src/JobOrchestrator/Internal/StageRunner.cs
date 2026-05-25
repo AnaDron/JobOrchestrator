@@ -13,14 +13,17 @@ internal sealed class StageRunner(
 	IJobStateStore stateStore,
 	Channel<OrchestratorEvent> channel,
 	OrchestratorLifecycle lifecycle,
-	ConcurrencyLimits concurrency,
-	GlobalIterationLimiter globalLimiter,
 	TimeProvider time,
 	ILoggerFactory loggerFactory
 ) {
 	private readonly ILogger _logger = loggerFactory.CreateLogger("JobOrchestrator.StageRunner");
 
-	public async Task RunIterationAsync(Instance instance, TriggerSource trigger, CancellationToken stoppingToken) {
+	/// <summary>
+	/// Запускает одну итерацию. <paramref name="releaseConcurrency"/> вызывается в finally — это callback
+	/// от <see cref="EventLoop"/>, освобождающий per-stage + global семафоры. Runner не знает о структуре
+	/// лимитов, ему нужен только action-hook.
+	/// </summary>
+	public async Task RunIterationAsync(Instance instance, TriggerSource trigger, Action releaseConcurrency, CancellationToken stoppingToken) {
 		string correlationId = Guid.NewGuid().ToString("N");
 		var logFields = BuildLogScopeFields(instance, correlationId);
 
@@ -99,8 +102,7 @@ internal sealed class StageRunner(
 			runCts.Dispose();
 			watchdogCts?.Dispose();
 			cascadeCts.Dispose();
-			concurrency.Release(instance.Stage);
-			globalLimiter.Release();
+			releaseConcurrency();
 			// При успешной публикации EndRunning делает event-loop handler — иначе race с уже
 			// стартовавшим следующим runner-ом. Если channel закрыт — событие не дойдёт, снимаем здесь.
 			if (!completionPublished) {
