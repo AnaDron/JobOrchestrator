@@ -4,7 +4,7 @@ namespace JobOrchestrator.Abstractions;
 /// Public-fasade для домена — корневая точка доступа к стадиям домена. Получается через
 /// <see cref="IJobOrchestrator.this[string]"/> либо <see cref="IJobOrchestrator.Root"/>.
 /// <para>
-/// Доменом считается префикс полного имени стадии до <c>':'</c>: для <c>"evotor:shops"</c> домен — <c>"evotor"</c>,
+/// Доменом считается префикс полного имени стадии до <c>':'</c>: для <c>"catalog:shops"</c> домен — <c>"catalog"</c>,
 /// локальное имя — <c>"shops"</c>. Безымянный домен (root) — <see cref="DomainName.Root"/> — содержит стадии
 /// без префикса; полное и локальное имена стадий root-домена совпадают.
 /// </para>
@@ -16,7 +16,7 @@ namespace JobOrchestrator.Abstractions;
 public interface IDomainHandle : IReadOnlyCollection<IStageHandle> {
 	/// <summary>
 	/// Имя домена без separator'а. <see cref="DomainName.Root"/> (пустая строка) — для root-домена;
-	/// иначе непустое имя (например, <c>"evotor"</c>).
+	/// иначе непустое имя (например, <c>"catalog"</c>).
 	/// </summary>
 	string Name { get; }
 

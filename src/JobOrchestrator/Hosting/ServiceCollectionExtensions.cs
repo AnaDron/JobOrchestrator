@@ -18,8 +18,8 @@ public static class ServiceCollectionExtensions {
 	/// Также регистрирует все <see cref="IJobService"/>-реализации как scoped в DI (per-итерация scope).
 	/// <para>
 	/// <b>Multi-call accumulation</b>: метод можно вызывать многократно — каждая независимая
-	/// integration-библиотека предоставляет свой extension-метод (<c>services.AddEvotorJobs()</c>,
-	/// <c>services.AddOzonJobs()</c>), внутри дёргающий <c>AddJobOrchestrator</c>. Все <paramref name="configure"/>-actions
+	/// integration-библиотека предоставляет свой extension-метод (<c>services.AddCatalogJobs()</c>,
+	/// <c>services.AddMarketplaceJobs()</c>), внутри дёргающий <c>AddJobOrchestrator</c>. Все <paramref name="configure"/>-actions
 	/// аккумулируются и применяются к одному shared <see cref="JobOrchestratorBuilder"/> при первом
 	/// resolve'е <see cref="Internal.StageRegistry"/>.
 	/// </para>

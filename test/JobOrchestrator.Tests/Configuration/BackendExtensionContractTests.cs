@@ -30,14 +30,14 @@ public sealed class BackendExtensionContractTests {
 	[Fact]
 	public void UseInMemoryStateStore_OnProbePassBuilderWithTenant_RegistersKeyedSingleton() {
 		var services = new ServiceCollection();
-		var builder = new JobOrchestratorBuilder(services, tenantKey: "evotor");
+		var builder = new JobOrchestratorBuilder(services, tenantKey: "catalog");
 
 		builder.UseInMemoryStateStore();
 
 		services.Should().ContainSingle(d =>
 			d.ServiceType == typeof(IJobStateStore)
 			&& d.IsKeyedService
-			&& Equals(d.ServiceKey, "evotor"));
+			&& Equals(d.ServiceKey, "catalog"));
 	}
 
 	[Fact]
@@ -74,15 +74,15 @@ public sealed class BackendExtensionContractTests {
 		// чтобы пользователь сразу понял в каком конкретно AddJobOrchestrator(...)-блоке забыт store.
 		var services = new ServiceCollection();
 		services.AddLogging();
-		services.AddJobOrchestrator("evotor", jobs =>
-			jobs.WithDomain("evotor", e =>
+		services.AddJobOrchestrator("catalog", jobs =>
+			jobs.WithDomain("catalog", e =>
 				e.Stage("shops").HandledBy<FakeJob>().RunPeriodically(TimeSpan.FromMinutes(1))));
 
 		using var sp = services.BuildServiceProvider();
-		Action act = () => sp.GetRequiredKeyedService<StageRegistry>("evotor");
+		Action act = () => sp.GetRequiredKeyedService<StageRegistry>("catalog");
 
 		act.Should().Throw<InvalidOperationException>()
-			.WithMessage("*\"evotor\"*UseInMemoryStateStore*");
+			.WithMessage("*\"catalog\"*UseInMemoryStateStore*");
 	}
 
 	private sealed class FakeJob : IJobService {

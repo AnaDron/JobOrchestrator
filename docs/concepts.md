@@ -125,7 +125,7 @@ var products = jobs.Stage("products")
 - В public API слово «Job» = «work unit» в самом общем смысле (итерация, конфигурация, контракт).
 - Во внутреннем коде («что я держу в `Dictionary`?») — это `Instance`.
 
-## Эвотор — иллюстрация на полном графе
+## Иллюстрация на полном графе
 
 ```csharp
 var shops = jobs.Stage("shops").HandledBy<ShopsService>()

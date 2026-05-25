@@ -8,7 +8,7 @@ namespace JobOrchestrator.IntegrationTests.Support;
 /// </summary>
 internal static class TestHostBuilder {
 	/// <summary>
-	/// Полная Evotor-топология: shops → productGroups → products → documents + employees.
+	/// Полная canonical-топология: shops → productGroups → products → documents + employees.
 	/// Используется в bootstrap-chain / key-propagation / structured-logging тестах.
 	/// </summary>
 	/// <param name="recorder">Recorder, записывающий все executions всех стадий.</param>
@@ -16,7 +16,7 @@ internal static class TestHostBuilder {
 	/// <param name="extra">Опциональная дополнительная DI-регистрация.</param>
 	/// <param name="loggerProvider">Опциональный capturing-logger для structured logging-тестов.</param>
 	/// <param name="interval">Интервал auto-tick для всех стадий (default = 80мс — баланс reactivity vs test speed).</param>
-	public static IHost BuildEvotorGraph(
+	public static IHost BuildCatalogGraph(
 		ExecutionRecorder recorder,
 		ShopsKeySource shopsKeys,
 		Action<IServiceCollection>? extra = null,

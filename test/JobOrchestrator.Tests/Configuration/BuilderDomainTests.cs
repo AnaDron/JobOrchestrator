@@ -15,29 +15,29 @@ public sealed class BuilderDomainTests {
 	[Fact]
 	public void WithDomain_StateStyle_StagesGetPrefixed() {
 		var jobs = new JobOrchestratorBuilder();
-		jobs.WithDomain("evotor");
+		jobs.WithDomain("catalog");
 		var shops = ConfigureStage(jobs.Stage("shops"));
 		var products = ConfigureStage(jobs.Stage("products"));
 
-		shops.Name.Should().Be("evotor:shops");
-		products.Name.Should().Be("evotor:products");
+		shops.Name.Should().Be("catalog:shops");
+		products.Name.Should().Be("catalog:products");
 	}
 
 	[Fact]
 	public void WithDomain_ActionStyle_StagesGetPrefixed() {
 		var jobs = new JobOrchestratorBuilder();
 		IStageBuilder? shops = null;
-		jobs.WithDomain("evotor", evotor => {
-			shops = ConfigureStage(evotor.Stage("shops"));
+		jobs.WithDomain("catalog", catalog => {
+			shops = ConfigureStage(catalog.Stage("shops"));
 		});
 
-		shops!.Name.Should().Be("evotor:shops");
+		shops!.Name.Should().Be("catalog:shops");
 	}
 
 	[Fact]
 	public void WithDomain_ActionAutoResets_AfterExit() {
 		var jobs = new JobOrchestratorBuilder();
-		jobs.WithDomain("evotor", evotor => ConfigureStage(evotor.Stage("shops")));
+		jobs.WithDomain("catalog", catalog => ConfigureStage(catalog.Stage("shops")));
 
 		// После выхода из action-scope domain должен быть сброшен — Stage("global") даёт имя без префикса.
 		var global = ConfigureStage(jobs.Stage("global"));
@@ -94,7 +94,7 @@ public sealed class BuilderDomainTests {
 	[Fact]
 	public void WithDomain_NameContainsColon_Throws() {
 		var jobs = new JobOrchestratorBuilder();
-		Action act = () => jobs.WithDomain("evotor:nested");
+		Action act = () => jobs.WithDomain("catalog:nested");
 		act.Should().Throw<JobConfigurationException>()
 			.WithMessage("*':'*");
 	}
@@ -102,7 +102,7 @@ public sealed class BuilderDomainTests {
 	[Fact]
 	public void Stage_NameContainsColon_Throws() {
 		var jobs = new JobOrchestratorBuilder();
-		Action act = () => jobs.Stage("evotor:shops");
+		Action act = () => jobs.Stage("catalog:shops");
 		act.Should().Throw<JobConfigurationException>()
 			.WithMessage("*':'*");
 	}
@@ -111,8 +111,8 @@ public sealed class BuilderDomainTests {
 	public void CrossDomainDependsOn_CapturesFullName() {
 		var jobs = new JobOrchestratorBuilder();
 		IStageBuilder? shops = null;
-		jobs.WithDomain("evotor", evotor => {
-			shops = ConfigureStage(evotor.Stage("shops"));
+		jobs.WithDomain("catalog", catalog => {
+			shops = ConfigureStage(catalog.Stage("shops"));
 		});
 
 		// global-стадия без domain зависит от domain'ed-handle: должна захватить полное имя.
@@ -120,7 +120,7 @@ public sealed class BuilderDomainTests {
 			.DependsOn(shops!);
 
 		report.Name.Should().Be("report");
-		// Через BuildRegistry проверим, что зависимость зарезолвилась на "evotor:shops".
+		// Через BuildRegistry проверим, что зависимость зарезолвилась на "catalog:shops".
 		var registry = jobs.GetType()
 			.GetMethod("BuildRegistry", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
 			.Invoke(jobs, null);
@@ -132,7 +132,7 @@ public sealed class BuilderDomainTests {
 	[Fact]
 	public void WithDomain_ExceptionInAction_RestoresState() {
 		var jobs = new JobOrchestratorBuilder();
-		Action act = () => jobs.WithDomain("evotor", _ => throw new InvalidOperationException("boom"));
+		Action act = () => jobs.WithDomain("catalog", _ => throw new InvalidOperationException("boom"));
 		act.Should().Throw<InvalidOperationException>();
 
 		// После exception domain должен быть сброшен — следующий Stage без префикса.
@@ -143,11 +143,11 @@ public sealed class BuilderDomainTests {
 	[Fact]
 	public void WithDomain_DuplicateStageInSameDomain_Throws() {
 		var jobs = new JobOrchestratorBuilder();
-		jobs.WithDomain("evotor");
+		jobs.WithDomain("catalog");
 		ConfigureStage(jobs.Stage("shops"));
 
 		Action act = () => jobs.Stage("shops");
 		act.Should().Throw<JobConfigurationException>()
-			.WithMessage("*'evotor:shops'*");
+			.WithMessage("*'catalog:shops'*");
 	}
 }

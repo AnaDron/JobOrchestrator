@@ -3,18 +3,18 @@ using JobOrchestrator.IntegrationTests.Support;
 namespace JobOrchestrator.IntegrationTests;
 
 /// <summary>
-/// Сценарии на полной canonical Evotor-топологии (shops → productGroups → products → documents + employees),
-/// собранной через <see cref="TestHostBuilder.BuildEvotorGraph"/>. Демонстрирует use-case helper-а и
+/// Сценарии на полной canonical-топологии (shops → productGroups → products → documents + employees),
+/// собранной через <see cref="TestHostBuilder.BuildCatalogGraph"/>. Демонстрирует use-case helper-а и
 /// проверяет key-propagation через многоуровневую цепочку <c>DependsOnInstance</c> + <c>DependsOn</c>.
 /// </summary>
-public sealed class ScenarioEvotorGraphTests {
+public sealed class ScenarioCatalogGraphTests {
 	[Fact]
 	public async Task ThreeShops_Propagate_DownThroughGraph_To_Documents() {
 		var recorder = new ExecutionRecorder();
 		var shops = new ShopsKeySource();
 		shops.EnqueueAdds("s-1", "s-2", "s-3");
 
-		using var host = TestHostBuilder.BuildEvotorGraph(recorder, shops);
+		using var host = TestHostBuilder.BuildCatalogGraph(recorder, shops);
 		await host.StartAsync().ConfigureAwait(false);
 		try {
 			await AsyncWait.UntilAsync(() => recorder.Count("documents") >= 3, TimeSpan.FromSeconds(5),

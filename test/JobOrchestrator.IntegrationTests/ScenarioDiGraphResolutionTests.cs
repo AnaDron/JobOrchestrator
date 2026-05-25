@@ -66,12 +66,12 @@ public sealed class ScenarioDiGraphResolutionTests {
 
 	[Fact]
 	public void SingleTenant_KeyedRootGraph_Resolves() {
-		const string tenant = "evotor";
+		const string tenant = "catalog";
 		using var host = Build(s => {
 			s.AddJobOrchestrator(tenant, jobs => {
 				jobs.UseInMemoryStateStore();
-				jobs.WithDomain(tenant, evotor =>
-					evotor.Stage("shops")
+				jobs.WithDomain(tenant, catalog =>
+					catalog.Stage("shops")
 						.HandledBy<FakeServiceA>()
 						.RunPeriodically(TimeSpan.FromMinutes(1)));
 			});
@@ -103,26 +103,26 @@ public sealed class ScenarioDiGraphResolutionTests {
 	[Fact]
 	public void MultiTenant_BothGraphsResolveIndependently() {
 		using var host = Build(s => {
-			s.AddJobOrchestrator("evotor", jobs => {
+			s.AddJobOrchestrator("catalog", jobs => {
 				jobs.UseInMemoryStateStore();
-				jobs.WithDomain("evotor", evotor =>
-					evotor.Stage("shops")
+				jobs.WithDomain("catalog", catalog =>
+					catalog.Stage("shops")
 						.HandledBy<FakeServiceA>()
 						.RunPeriodically(TimeSpan.FromMinutes(1)));
 			});
-			s.AddJobOrchestrator("ozon", jobs => {
+			s.AddJobOrchestrator("marketplace", jobs => {
 				jobs.UseInMemoryStateStore();
-				jobs.WithDomain("ozon", ozon =>
-					ozon.Stage("offers")
+				jobs.WithDomain("marketplace", marketplace =>
+					marketplace.Stage("offers")
 						.HandledBy<FakeServiceB>()
 						.RunPeriodically(TimeSpan.FromMinutes(1)));
 			});
-			s.AddKeyedSingleton<FakeServiceA>("evotor", new FakeServiceA());
-			s.AddKeyedSingleton<FakeServiceB>("ozon", new FakeServiceB());
+			s.AddKeyedSingleton<FakeServiceA>("catalog", new FakeServiceA());
+			s.AddKeyedSingleton<FakeServiceB>("marketplace", new FakeServiceB());
 		});
 
 		// Резолвим оба leaf-graph'а независимо — failure одного tenant'а не должен прятать failure другого.
-		foreach (var tenant in new[] { "evotor", "ozon" }) {
+		foreach (var tenant in new[] { "catalog", "marketplace" }) {
 			((Action)(() => _ = host.Services.GetRequiredKeyedService<EventLoop>(tenant)))
 				.Should().NotThrow(because: $"keyed[{tenant}]: EventLoop тянет за собой весь tenant-граф");
 			((Action)(() => _ = host.Services.GetRequiredKeyedService<IJobOrchestrator>(tenant)))

@@ -1,6 +1,6 @@
 namespace JobOrchestrator.IntegrationTests.Support;
 
-// Stage-services для типового Evotor-сценария + cartesian-теста.
+// Stage-services для типового сценария + cartesian-теста.
 // Каждый сервис записывает свой execution в ExecutionRecorder и (опционально) эмитит ключи.
 
 internal sealed class ShopsStageService(ExecutionRecorder recorder, ShopsKeySource keys) : IJobService {

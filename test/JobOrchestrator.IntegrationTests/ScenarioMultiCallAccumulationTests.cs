@@ -23,24 +23,24 @@ public sealed class ScenarioMultiCallAccumulationTests {
 		using var host = BuildHost(s => {
 			s.AddJobOrchestrator(jobs => {
 				jobs.UseInMemoryStateStore();
-				jobs.WithDomain("evotor", evotor =>
-					evotor.Stage("shops").HandledBy<FakeServiceA>().RunPeriodically(TimeSpan.FromMinutes(1)));
+				jobs.WithDomain("catalog", catalog =>
+					catalog.Stage("shops").HandledBy<FakeServiceA>().RunPeriodically(TimeSpan.FromMinutes(1)));
 			});
 			s.AddJobOrchestrator(jobs => {
 				jobs.UseInMemoryStateStore();
-				jobs.WithDomain("ozon", ozon =>
-					ozon.Stage("offers").HandledBy<FakeServiceB>().RunPeriodically(TimeSpan.FromMinutes(1)));
+				jobs.WithDomain("marketplace", marketplace =>
+					marketplace.Stage("offers").HandledBy<FakeServiceB>().RunPeriodically(TimeSpan.FromMinutes(1)));
 			});
 			s.AddSingleton<FakeServiceA>();
 			s.AddSingleton<FakeServiceB>();
 		});
 
 		var orchestrator = host.Services.GetRequiredService<IJobOrchestrator>();
-		orchestrator.Invoking(o => _ = o.GetStage("evotor:shops")).Should().NotThrow();
-		orchestrator.Invoking(o => _ = o.GetStage("ozon:offers")).Should().NotThrow();
+		orchestrator.Invoking(o => _ = o.GetStage("catalog:shops")).Should().NotThrow();
+		orchestrator.Invoking(o => _ = o.GetStage("marketplace:offers")).Should().NotThrow();
 
 		var registry = host.Services.GetRequiredService<StageRegistry>();
-		registry.AllStages.Select(s => s.Name).Should().BeEquivalentTo(["evotor:shops", "ozon:offers"]);
+		registry.AllStages.Select(s => s.Name).Should().BeEquivalentTo(["catalog:shops", "marketplace:offers"]);
 	}
 
 	[Fact]
@@ -48,27 +48,27 @@ public sealed class ScenarioMultiCallAccumulationTests {
 		using var host = BuildHost(s => {
 			s.AddJobOrchestrator(jobs => {
 				jobs.UseInMemoryStateStore();
-				jobs.WithDomain("evotor", evotor =>
-					evotor.Stage("shops").HandledBy<FakeServiceA>().RunPeriodically(TimeSpan.FromMinutes(1)));
+				jobs.WithDomain("catalog", catalog =>
+					catalog.Stage("shops").HandledBy<FakeServiceA>().RunPeriodically(TimeSpan.FromMinutes(1)));
 			});
 			s.AddJobOrchestrator(jobs => {
 				jobs.UseInMemoryStateStore();
-				jobs.WithDomain("ozon", ozon =>
-					ozon.Stage("offers").HandledBy<FakeServiceB>().RunPeriodically(TimeSpan.FromMinutes(1)));
+				jobs.WithDomain("marketplace", marketplace =>
+					marketplace.Stage("offers").HandledBy<FakeServiceB>().RunPeriodically(TimeSpan.FromMinutes(1)));
 			});
 			s.AddSingleton<FakeServiceA>();
 			s.AddSingleton<FakeServiceB>();
 		});
 
-		var evotorFake = host.Services.GetRequiredService<FakeServiceA>();
-		var ozonFake = host.Services.GetRequiredService<FakeServiceB>();
+		var catalogFake = host.Services.GetRequiredService<FakeServiceA>();
+		var marketplaceFake = host.Services.GetRequiredService<FakeServiceB>();
 		await host.StartAsync().ConfigureAwait(false);
 		try {
 			// Обе стадии — keyless, обе стартуют на bootstrap, обе вызывают свой IJobService.
-			(await evotorFake.WaitForNextCallAsync(Timeout).ConfigureAwait(false)).Should().BeTrue();
-			(await ozonFake.WaitForNextCallAsync(Timeout).ConfigureAwait(false)).Should().BeTrue();
-			evotorFake.Calls[0].FullyQualifiedName.Should().Be("evotor:shops[]");
-			ozonFake.Calls[0].FullyQualifiedName.Should().Be("ozon:offers[]");
+			(await catalogFake.WaitForNextCallAsync(Timeout).ConfigureAwait(false)).Should().BeTrue();
+			(await marketplaceFake.WaitForNextCallAsync(Timeout).ConfigureAwait(false)).Should().BeTrue();
+			catalogFake.Calls[0].FullyQualifiedName.Should().Be("catalog:shops[]");
+			marketplaceFake.Calls[0].FullyQualifiedName.Should().Be("marketplace:offers[]");
 		} finally {
 			await host.StopAsync().ConfigureAwait(false);
 		}
@@ -80,20 +80,20 @@ public sealed class ScenarioMultiCallAccumulationTests {
 		using var host = BuildHost(s => {
 			s.AddJobOrchestrator(jobs => {
 				jobs.UseInMemoryStateStore();
-				jobs.WithDomain("ozon", ozon =>
-					ozon.Stage("offers").HandledBy<FakeServiceB>().RunPeriodically(TimeSpan.FromMinutes(1)));
+				jobs.WithDomain("marketplace", marketplace =>
+					marketplace.Stage("offers").HandledBy<FakeServiceB>().RunPeriodically(TimeSpan.FromMinutes(1)));
 			});
 			s.AddJobOrchestrator(jobs => {
 				jobs.UseInMemoryStateStore();
-				jobs.WithDomain("evotor", evotor =>
-					evotor.Stage("shops").HandledBy<FakeServiceA>().RunPeriodically(TimeSpan.FromMinutes(1)));
+				jobs.WithDomain("catalog", catalog =>
+					catalog.Stage("shops").HandledBy<FakeServiceA>().RunPeriodically(TimeSpan.FromMinutes(1)));
 			});
 			s.AddSingleton<FakeServiceA>();
 			s.AddSingleton<FakeServiceB>();
 		});
 
 		var registry = host.Services.GetRequiredService<StageRegistry>();
-		registry.AllStages.Select(s => s.Name).Should().BeEquivalentTo(["evotor:shops", "ozon:offers"]);
+		registry.AllStages.Select(s => s.Name).Should().BeEquivalentTo(["catalog:shops", "marketplace:offers"]);
 	}
 
 	[Fact]

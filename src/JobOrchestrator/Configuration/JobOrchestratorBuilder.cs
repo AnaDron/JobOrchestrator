@@ -5,7 +5,7 @@ namespace JobOrchestrator.Configuration;
 
 /// <summary>Точка входа Fluent API для конфигурации SDK через <c>services.AddJobOrchestrator(jobs => {...})</c>.</summary>
 public sealed class JobOrchestratorBuilder {
-	/// <summary>Разделитель domain-префикса и имени стадии в полном FQN-имени (<c>"evotor:shops"</c>).</summary>
+	/// <summary>Разделитель domain-префикса и имени стадии в полном FQN-имени (<c>"catalog:shops"</c>).</summary>
 	internal const char DomainSeparator = ':';
 
 	private readonly Dictionary<string, StageBuilder> _stages = new(StringComparer.Ordinal);

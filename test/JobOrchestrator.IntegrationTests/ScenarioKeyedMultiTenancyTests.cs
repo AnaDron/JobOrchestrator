@@ -22,67 +22,67 @@ public sealed class ScenarioKeyedMultiTenancyTests {
 	[Fact]
 	public void KeyedMultiTenancy_TwoTenants_HaveIsolatedRegistries() {
 		using var host = BuildHost(s => {
-			s.AddJobOrchestrator("evotor", jobs => {
+			s.AddJobOrchestrator("catalog", jobs => {
 				jobs.UseInMemoryStateStore();
-				jobs.WithDomain("evotor", evotor =>
-					evotor.Stage("shops").HandledBy<FakeServiceA>().RunPeriodically(TimeSpan.FromMinutes(1)));
+				jobs.WithDomain("catalog", catalog =>
+					catalog.Stage("shops").HandledBy<FakeServiceA>().RunPeriodically(TimeSpan.FromMinutes(1)));
 			});
-			s.AddJobOrchestrator("ozon", jobs => {
+			s.AddJobOrchestrator("marketplace", jobs => {
 				jobs.UseInMemoryStateStore();
-				jobs.WithDomain("ozon", ozon =>
-					ozon.Stage("offers").HandledBy<FakeServiceB>().RunPeriodically(TimeSpan.FromMinutes(1)));
+				jobs.WithDomain("marketplace", marketplace =>
+					marketplace.Stage("offers").HandledBy<FakeServiceB>().RunPeriodically(TimeSpan.FromMinutes(1)));
 			});
 			// Keyed-singleton: overrides probe-pass TryAddKeyedScoped, чтобы test и runner видели один инстанс.
-			s.AddKeyedSingleton<FakeServiceA>("evotor", new FakeServiceA());
-			s.AddKeyedSingleton<FakeServiceB>("ozon", new FakeServiceB());
+			s.AddKeyedSingleton<FakeServiceA>("catalog", new FakeServiceA());
+			s.AddKeyedSingleton<FakeServiceB>("marketplace", new FakeServiceB());
 		});
 
-		var evotor = host.Services.GetRequiredKeyedService<IJobOrchestrator>("evotor");
-		var ozon = host.Services.GetRequiredKeyedService<IJobOrchestrator>("ozon");
+		var catalog = host.Services.GetRequiredKeyedService<IJobOrchestrator>("catalog");
+		var marketplace = host.Services.GetRequiredKeyedService<IJobOrchestrator>("marketplace");
 
-		evotor.Should().NotBeSameAs(ozon);
+		catalog.Should().NotBeSameAs(marketplace);
 
 		// Каждый видит ТОЛЬКО свои стадии.
-		evotor.Invoking(o => _ = o.GetStage("evotor:shops")).Should().NotThrow();
-		evotor.Invoking(o => _ = o.GetStage("ozon:offers")).Should().Throw<ArgumentException>(
-			because: "стадия ozon:offers зарегистрирована под другим tenant'ом");
-		ozon.Invoking(o => _ = o.GetStage("ozon:offers")).Should().NotThrow();
-		ozon.Invoking(o => _ = o.GetStage("evotor:shops")).Should().Throw<ArgumentException>(
-			because: "стадия evotor:shops зарегистрирована под другим tenant'ом");
+		catalog.Invoking(o => _ = o.GetStage("catalog:shops")).Should().NotThrow();
+		catalog.Invoking(o => _ = o.GetStage("marketplace:offers")).Should().Throw<ArgumentException>(
+			because: "стадия marketplace:offers зарегистрирована под другим tenant'ом");
+		marketplace.Invoking(o => _ = o.GetStage("marketplace:offers")).Should().NotThrow();
+		marketplace.Invoking(o => _ = o.GetStage("catalog:shops")).Should().Throw<ArgumentException>(
+			because: "стадия catalog:shops зарегистрирована под другим tenant'ом");
 
 		// Internal state — раздельный.
-		host.Services.GetRequiredKeyedService<StageRegistry>("evotor")
-			.Should().NotBeSameAs(host.Services.GetRequiredKeyedService<StageRegistry>("ozon"));
-		host.Services.GetRequiredKeyedService<InstanceManager>("evotor")
-			.Should().NotBeSameAs(host.Services.GetRequiredKeyedService<InstanceManager>("ozon"));
+		host.Services.GetRequiredKeyedService<StageRegistry>("catalog")
+			.Should().NotBeSameAs(host.Services.GetRequiredKeyedService<StageRegistry>("marketplace"));
+		host.Services.GetRequiredKeyedService<InstanceManager>("catalog")
+			.Should().NotBeSameAs(host.Services.GetRequiredKeyedService<InstanceManager>("marketplace"));
 	}
 
 	[Fact]
 	public async Task KeyedMultiTenancy_BothOrchestratorsRunEndToEnd() {
 		using var host = BuildHost(s => {
-			s.AddJobOrchestrator("evotor", jobs => {
+			s.AddJobOrchestrator("catalog", jobs => {
 				jobs.UseInMemoryStateStore();
-				jobs.WithDomain("evotor", evotor =>
-					evotor.Stage("shops").HandledBy<FakeServiceA>().RunPeriodically(TimeSpan.FromMinutes(1)));
+				jobs.WithDomain("catalog", catalog =>
+					catalog.Stage("shops").HandledBy<FakeServiceA>().RunPeriodically(TimeSpan.FromMinutes(1)));
 			});
-			s.AddJobOrchestrator("ozon", jobs => {
+			s.AddJobOrchestrator("marketplace", jobs => {
 				jobs.UseInMemoryStateStore();
-				jobs.WithDomain("ozon", ozon =>
-					ozon.Stage("offers").HandledBy<FakeServiceB>().RunPeriodically(TimeSpan.FromMinutes(1)));
+				jobs.WithDomain("marketplace", marketplace =>
+					marketplace.Stage("offers").HandledBy<FakeServiceB>().RunPeriodically(TimeSpan.FromMinutes(1)));
 			});
-			s.AddKeyedSingleton<FakeServiceA>("evotor", new FakeServiceA());
-			s.AddKeyedSingleton<FakeServiceB>("ozon", new FakeServiceB());
+			s.AddKeyedSingleton<FakeServiceA>("catalog", new FakeServiceA());
+			s.AddKeyedSingleton<FakeServiceB>("marketplace", new FakeServiceB());
 		});
 
-		var evotorFake = host.Services.GetRequiredKeyedService<FakeServiceA>("evotor");
-		var ozonFake = host.Services.GetRequiredKeyedService<FakeServiceB>("ozon");
+		var catalogFake = host.Services.GetRequiredKeyedService<FakeServiceA>("catalog");
+		var marketplaceFake = host.Services.GetRequiredKeyedService<FakeServiceB>("marketplace");
 		await host.StartAsync().ConfigureAwait(false);
 		try {
 			// Оба HostedService стартовали, оба event-loop'а выполняют свои стадии независимо.
-			(await evotorFake.WaitForNextCallAsync(Timeout).ConfigureAwait(false)).Should().BeTrue();
-			(await ozonFake.WaitForNextCallAsync(Timeout).ConfigureAwait(false)).Should().BeTrue();
-			evotorFake.Calls[0].FullyQualifiedName.Should().Be("evotor:shops[]");
-			ozonFake.Calls[0].FullyQualifiedName.Should().Be("ozon:offers[]");
+			(await catalogFake.WaitForNextCallAsync(Timeout).ConfigureAwait(false)).Should().BeTrue();
+			(await marketplaceFake.WaitForNextCallAsync(Timeout).ConfigureAwait(false)).Should().BeTrue();
+			catalogFake.Calls[0].FullyQualifiedName.Should().Be("catalog:shops[]");
+			marketplaceFake.Calls[0].FullyQualifiedName.Should().Be("marketplace:offers[]");
 		} finally {
 			await host.StopAsync().ConfigureAwait(false);
 		}
@@ -90,25 +90,25 @@ public sealed class ScenarioKeyedMultiTenancyTests {
 
 	[Fact]
 	public void KeyedMultiTenancy_MultipleAddJobOrchestratorPerTenant_AccumulateInSameTenant() {
-		// Два вызова с tenantKey="evotor" — должны объединиться в один tenant'ный registry.
+		// Два вызова с tenantKey="catalog" — должны объединиться в один tenant'ный registry.
 		using var host = BuildHost(s => {
-			s.AddJobOrchestrator("evotor", jobs => {
+			s.AddJobOrchestrator("catalog", jobs => {
 				jobs.UseInMemoryStateStore();
-				jobs.WithDomain("evotor", evotor =>
-					evotor.Stage("shops").HandledBy<FakeServiceA>().RunPeriodically(TimeSpan.FromMinutes(1)));
+				jobs.WithDomain("catalog", catalog =>
+					catalog.Stage("shops").HandledBy<FakeServiceA>().RunPeriodically(TimeSpan.FromMinutes(1)));
 			});
-			s.AddJobOrchestrator("evotor", jobs => {
+			s.AddJobOrchestrator("catalog", jobs => {
 				jobs.UseInMemoryStateStore();
-				jobs.WithDomain("evotor", evotor =>
-					evotor.Stage("products").HandledBy<FakeServiceB>().RunPeriodically(TimeSpan.FromMinutes(1)));
+				jobs.WithDomain("catalog", catalog =>
+					catalog.Stage("products").HandledBy<FakeServiceB>().RunPeriodically(TimeSpan.FromMinutes(1)));
 			});
-			s.AddKeyedSingleton<FakeServiceA>("evotor", new FakeServiceA());
-			s.AddKeyedSingleton<FakeServiceB>("evotor", new FakeServiceB());
+			s.AddKeyedSingleton<FakeServiceA>("catalog", new FakeServiceA());
+			s.AddKeyedSingleton<FakeServiceB>("catalog", new FakeServiceB());
 		});
 
-		var registry = host.Services.GetRequiredKeyedService<StageRegistry>("evotor");
+		var registry = host.Services.GetRequiredKeyedService<StageRegistry>("catalog");
 		registry.AllStages.Select(s => s.Name).Should()
-			.BeEquivalentTo(["evotor:shops", "evotor:products"]);
+			.BeEquivalentTo(["catalog:shops", "catalog:products"]);
 	}
 
 	[Fact]
@@ -120,21 +120,21 @@ public sealed class ScenarioKeyedMultiTenancyTests {
 				jobs.Stage("global").HandledBy<FakeServiceA>().RunPeriodically(TimeSpan.FromMinutes(1));
 			});
 			// Keyed tenant в том же ServiceCollection — отдельный orchestrator.
-			s.AddJobOrchestrator("evotor", jobs => {
+			s.AddJobOrchestrator("catalog", jobs => {
 				jobs.UseInMemoryStateStore();
-				jobs.WithDomain("evotor", evotor =>
-					evotor.Stage("shops").HandledBy<FakeServiceB>().RunPeriodically(TimeSpan.FromMinutes(1)));
+				jobs.WithDomain("catalog", catalog =>
+					catalog.Stage("shops").HandledBy<FakeServiceB>().RunPeriodically(TimeSpan.FromMinutes(1)));
 			});
 			s.AddSingleton<FakeServiceA>();    // unkeyed для unkeyed-orchestrator
-			s.AddKeyedSingleton<FakeServiceB>("evotor", new FakeServiceB());
+			s.AddKeyedSingleton<FakeServiceB>("catalog", new FakeServiceB());
 		});
 
 		var globalOrch = host.Services.GetRequiredService<IJobOrchestrator>();
-		var evotorOrch = host.Services.GetRequiredKeyedService<IJobOrchestrator>("evotor");
+		var catalogOrch = host.Services.GetRequiredKeyedService<IJobOrchestrator>("catalog");
 
-		globalOrch.Should().NotBeSameAs(evotorOrch);
+		globalOrch.Should().NotBeSameAs(catalogOrch);
 		globalOrch.Invoking(o => _ = o.GetStage("global")).Should().NotThrow();
-		evotorOrch.Invoking(o => _ = o.GetStage("evotor:shops")).Should().NotThrow();
+		catalogOrch.Invoking(o => _ = o.GetStage("catalog:shops")).Should().NotThrow();
 	}
 
 	private sealed class SharedStage : IJobService {
@@ -149,33 +149,33 @@ public sealed class ScenarioKeyedMultiTenancyTests {
 	public async Task KeyedMultiTenancy_SharedIJobServiceType_GetsKeyedScopedResolution() {
 		// Два tenant'а используют ОДИН тип IJobService. Регистрируем как keyed-singleton per tenant —
 		// DI выдаёт РАЗНЫЕ инстансы под разными ключами; каждый tenant дёргает свой.
-		var evotorInstance = new SharedStage();
-		var ozonInstance = new SharedStage();
+		var catalogInstance = new SharedStage();
+		var marketplaceInstance = new SharedStage();
 		using var host = BuildHost(s => {
-			s.AddJobOrchestrator("evotor", jobs => {
+			s.AddJobOrchestrator("catalog", jobs => {
 				jobs.UseInMemoryStateStore();
-				jobs.WithDomain("evotor", evotor =>
-					evotor.Stage("work").HandledBy<SharedStage>().RunPeriodically(TimeSpan.FromMinutes(1)));
+				jobs.WithDomain("catalog", catalog =>
+					catalog.Stage("work").HandledBy<SharedStage>().RunPeriodically(TimeSpan.FromMinutes(1)));
 			});
-			s.AddJobOrchestrator("ozon", jobs => {
+			s.AddJobOrchestrator("marketplace", jobs => {
 				jobs.UseInMemoryStateStore();
-				jobs.WithDomain("ozon", ozon =>
-					ozon.Stage("work").HandledBy<SharedStage>().RunPeriodically(TimeSpan.FromMinutes(1)));
+				jobs.WithDomain("marketplace", marketplace =>
+					marketplace.Stage("work").HandledBy<SharedStage>().RunPeriodically(TimeSpan.FromMinutes(1)));
 			});
-			s.AddKeyedSingleton("evotor", evotorInstance);
-			s.AddKeyedSingleton("ozon", ozonInstance);
+			s.AddKeyedSingleton("catalog", catalogInstance);
+			s.AddKeyedSingleton("marketplace", marketplaceInstance);
 		});
 
 		await host.StartAsync().ConfigureAwait(false);
 		try {
 			var deadline = DateTime.UtcNow + Timeout;
-			while (DateTime.UtcNow < deadline && (evotorInstance.CallCount == 0 || ozonInstance.CallCount == 0)) {
+			while (DateTime.UtcNow < deadline && (catalogInstance.CallCount == 0 || marketplaceInstance.CallCount == 0)) {
 				await Task.Delay(50).ConfigureAwait(false);
 			}
-			evotorInstance.CallCount.Should().BeGreaterThan(0, because: "evotor:work должен был выполниться");
-			ozonInstance.CallCount.Should().BeGreaterThan(0, because: "ozon:work должен был выполниться");
+			catalogInstance.CallCount.Should().BeGreaterThan(0, because: "catalog:work должен был выполниться");
+			marketplaceInstance.CallCount.Should().BeGreaterThan(0, because: "marketplace:work должен был выполниться");
 			// Два РАЗНЫХ инстанса — keyed-isolation работает на уровне DI.
-			evotorInstance.Should().NotBeSameAs(ozonInstance);
+			catalogInstance.Should().NotBeSameAs(marketplaceInstance);
 		} finally {
 			await host.StopAsync().ConfigureAwait(false);
 		}

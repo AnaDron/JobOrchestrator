@@ -2,7 +2,7 @@
 
 Инфраструктурный SDK для оркестрации стадий с зависимостями: расписание, retry/debounce/watchdog, ручные триггеры, потоковая параметризация инстансов через keyspace и каскадное наследование ключей по графу зависимостей.
 
-SDK независим от какой-либо доменной области — это переиспользуемая библиотека внутри monorepo Aura, развязанная от Aura-кода и готовая к экстракции в самостоятельный repo / публикации в NuGet.
+SDK независим от какой-либо доменной области — это переиспользуемая библиотека, развязанная от прикладного кода и готовая к экстракции в самостоятельный repo / публикации в NuGet.
 
 ## Структура
 
@@ -90,7 +90,7 @@ foreach (var domain in orchestrator) {
 }
 
 // Lookup стадии по полному имени (для конфигурации/логов):
-var stage = orchestrator.GetStage("evotor:shops");
+var stage = orchestrator.GetStage("catalog:shops");
 var all = orchestrator.AllStages();  // плоский срез по всем доменам
 ```
 
@@ -101,7 +101,7 @@ await orchestrator.Root["docs"][new InstanceKeys(("shops", "u1"), ("currencies",
 
 **Observable life-cycle keyspace** — `IStageHandle.Changes` отдаёт replay существующих + live-поток `StageChange(Added/Removed)`:
 ```csharp
-await foreach (var change in orchestrator["evotor"]["shops"].Changes.WithCancellation(ct)) {
+await foreach (var change in orchestrator["catalog"]["shops"].Changes.WithCancellation(ct)) {
     Console.WriteLine($"{change.Kind}: {change.Instance.FullyQualifiedName}");
 }
 ```
@@ -125,13 +125,13 @@ while (running) {
 
 ## Концепции
 
-SDK оперирует тремя сущностями: **Stage** (immutable декларация в Fluent API), **StageInstance** (long-lived runtime-экземпляр с композитным ключом), **Job** (одна итерация = один вызов `IJobService.ExecuteAsync`). Соотношение `Stage:Instance = 1:N`, `Instance:Job = 1:M`. Подробный разбор и иллюстрация на Эвотор-сценарии — в [docs/concepts.md](docs/concepts.md).
+SDK оперирует тремя сущностями: **Stage** (immutable декларация в Fluent API), **StageInstance** (long-lived runtime-экземпляр с композитным ключом), **Job** (одна итерация = один вызов `IJobService.ExecuteAsync`). Соотношение `Stage:Instance = 1:N`, `Instance:Job = 1:M`. Подробный разбор и иллюстрация на типовом графовом сценарии — в [docs/concepts.md](docs/concepts.md).
 
 ## Архитектура
 
 Описание устройства SDK (single-threaded event loop, dynamic-delay DueScanner, каскадное удаление с deferred cleanup, backtracking-merge при создании инстансов, lock-free `GetOverview()` через atomic-fields, lifecycle/IsFaulted, структурное логирование) — в [docs/architecture.md](docs/architecture.md).
 
-### Эксплуатация (Aura)
+### Эксплуатация
 
 - **Один оркестратор на процесс** — граф, keyspace и waiters in-memory; горизонтальное масштабирование нескольких writer'ов без внешнего lease не поддерживается (см. `TODO.md`).
 - **Рестарт процесса** — граф стадий, keyspace и метрики инстансов в RAM; после рестарта нужен bootstrap (`RegisterKey`, первые sync-итерации). Персистентность — через `IJobState` / `IJobStateStore`.

@@ -17,7 +17,7 @@ namespace JobOrchestrator.Abstractions;
 /// <b>Кэширование handles в hot-path:</b> indexer-вызовы создают per-call аллокации (InstanceHandle + Identity).
 /// Для polling-сценариев (UI-обновления, метрики) — кэшируйте handle локально:
 /// <code>
-/// var h = orchestrator["evotor"]["shops"][("region", "EU")];  // один раз
+/// var h = orchestrator["catalog"]["shops"][("region", "EU")];  // один раз
 /// while (running) {
 ///     var state = h.State;
 ///     await Task.Delay(...);
@@ -26,7 +26,7 @@ namespace JobOrchestrator.Abstractions;
 /// </para>
 /// <para>
 /// <b>Поиск стадии по полному имени</b> (например, из конфигурации) делается через extension-метод
-/// <c>orchestrator.GetStage("evotor:shops")</c> — см. <see cref="JobOrchestratorExtensions.GetStage"/>.
+/// <c>orchestrator.GetStage("catalog:shops")</c> — см. <see cref="JobOrchestratorExtensions.GetStage"/>.
 /// </para>
 /// </summary>
 public interface IJobOrchestrator : IReadOnlyCollection<IDomainHandle> {
