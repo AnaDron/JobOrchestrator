@@ -23,7 +23,7 @@ public sealed class JobOrchestratorHostOptions {
 
 	/// <summary>
 	/// Случайный разброс (0..N мс) к отложенному <c>NextAutoUtc</c> при <see cref="TriggerResult.ConcurrencyDeferred"/>,
-	/// чтобы DueScanner не будил все deferred-инстансы в одну миллисекунду. <c>0</c> — без jitter.
+	/// чтобы due-scan-loop не будил все deferred-инстансы в одну миллисекунду. <c>0</c> — без jitter.
 	/// </summary>
 	public int ConcurrencyDeferJitterMaxMilliseconds { get; set; } = 500;
 

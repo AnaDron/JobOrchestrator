@@ -1,5 +1,4 @@
 using System.Threading.Channels;
-using Microsoft.Extensions.Logging.Abstractions;
 
 namespace JobOrchestrator.Tests.Internal;
 
@@ -21,74 +20,65 @@ public sealed class InstanceMatchingTests {
 	private static Channel<OrchestratorEvent> NewChannel() =>
 		Channel.CreateUnbounded<OrchestratorEvent>();
 
-	/// <summary>Минимальный <see cref="JobOrchestratorRuntime"/> для тестов matching: пустой registry,
-	/// instance-store пуст, channel и логгер — заглушки. Каждая стадия в тесте добавляется в runtime
-	/// через <see cref="JobOrchestratorRuntime.AddInstance"/>.</summary>
-	private static JobOrchestratorRuntime NewRuntime(Channel<OrchestratorEvent>? channel = null) {
-		channel ??= NewChannel();
-		var registry = new StageRegistry([]);
-		return new JobOrchestratorRuntime(channel, registry, NullLogger<JobOrchestratorRuntime>.Instance);
-	}
-
-	private static List<Instance> EvaluateAndCreate(StageDescriptor stage, JobOrchestratorRuntime runtime) =>
-		EventLoop.EvaluateAndCreate(stage, runtime, NewChannel(), TimeProvider.System);
+	private static List<Instance> EvaluateAndCreate(StageDescriptor stage, InstanceManager instances) =>
+		EventLoop.EvaluateAndCreate(stage, instances, NewChannel(), TimeProvider.System);
 
 	/// <summary>
 	/// Helper для setup-логики «инстанс <paramref name="stage"/> с такими-то <paramref name="depKeys"/>
 	/// эмитит ключи <paramref name="keys"/>». Скрывает создание Instance + Add + AddEmittedKey в одной строке.
 	/// </summary>
 	private static void AddEmittingInstance(
-		JobOrchestratorRuntime runtime,
+		InstanceManager instances,
 		StageDescriptor stage,
 		Dictionary<string, string>? depKeys,
 		params string[] keys
 	) {
 		var inst = MakeInstanceWithSuccess(stage, depKeys);
-		runtime.AddInstance(inst);
+		instances.Add(inst);
 		foreach (var k in keys) inst.AddEmittedKey(k);
 	}
 
 	[Fact]
 	public void EvaluateAndCreate_KeylessStage_CreatesOneInstanceWithEmptyKeys() {
 		var stage = MakeStage("shops");
-		var runtime = NewRuntime();
+		var instances = new InstanceManager();
 
-		var created = EvaluateAndCreate(stage, runtime);
+		var created = EvaluateAndCreate(stage, instances);
 		created.Should().ContainSingle();
 		created[0].Stage.Should().Be(stage);
 		created[0].Keys.Should().BeEmpty();
 		created[0].FullyQualifiedName.Should().Be("shops[]");
-		runtime.ExistsInstance(new InstanceIdentity(stage)).Should().BeTrue();
+		instances.Exists(new InstanceIdentity(stage)).Should().BeTrue();
 	}
 
 	[Fact]
 	public void EvaluateAndCreate_AlreadyExists_NoDuplicate() {
 		var stage = MakeStage("shops");
-		var runtime = NewRuntime();
+		var instances = new InstanceManager();
 
-		EvaluateAndCreate(stage, runtime).Should().ContainSingle();
-		EvaluateAndCreate(stage, runtime).Should().BeEmpty();  // идемпотентно
-		runtime.InstanceCount.Should().Be(1);
+		EvaluateAndCreate(stage, instances).Should().ContainSingle();
+		EvaluateAndCreate(stage, instances).Should().BeEmpty();  // идемпотентно
+		instances.Count.Should().Be(1);
 	}
 
 	[Fact]
 	public void EvaluateAndCreate_DependsOnInstance_NoKeyspace_NoInstance() {
 		var shops = MakeStage("shops");
 		var pg = MakeStage("productGroups", new StageDependency(shops, DependencyMode.Instance));
-		var runtime = NewRuntime();
-		runtime.AddInstance(MakeInstanceWithSuccess(shops));  // shops успешен, но EmittedKeys пуст
+		var instances = new InstanceManager();
+		instances.Add(MakeInstanceWithSuccess(shops));  // shops успешен, но EmittedKeys пуст
 
-		EvaluateAndCreate(pg, runtime).Should().BeEmpty();
+		EvaluateAndCreate(pg, instances).Should().BeEmpty();
 	}
 
 	[Fact]
 	public void EvaluateAndCreate_DependsOnInstance_EmittedKeys_CreatesPerKey() {
 		var shops = MakeStage("shops");
 		var pg = MakeStage("productGroups", new StageDependency(shops, DependencyMode.Instance));
-		var runtime = NewRuntime();
-		AddEmittingInstance(runtime, shops, depKeys: null, "u1", "u2", "u3");
+		var instances = new InstanceManager();
+		AddEmittingInstance(instances, shops, depKeys: null, "u1", "u2", "u3");
 
-		var created = EvaluateAndCreate(pg, runtime);
+		var created = EvaluateAndCreate(pg, instances);
 		created.Should().HaveCount(3);
 		created.Select(j => j.Keys["shops"]).Should().BeEquivalentTo("u1", "u2", "u3");
 		created.Select(j => j.FullyQualifiedName).Should().BeEquivalentTo(
@@ -99,13 +89,14 @@ public sealed class InstanceMatchingTests {
 
 	[Fact]
 	public void EvaluateAndCreate_DependsOn_InheritsKeys() {
+		// pg[shops=u1] успешен → products[shops=u1] должен быть создан с теми же ключами.
 		var shops = MakeStage("shops");
 		var pg = MakeStage("productGroups", new StageDependency(shops, DependencyMode.Instance));
 		var products = MakeStage("products", new StageDependency(pg, DependencyMode.Whole));
-		var runtime = NewRuntime();
-		runtime.AddInstance(MakeInstanceWithSuccess(pg, new Dictionary<string, string> { ["shops"] = "u1" }));
+		var instances = new InstanceManager();
+		instances.Add(MakeInstanceWithSuccess(pg, new Dictionary<string, string> { ["shops"] = "u1" }));
 
-		var created = EvaluateAndCreate(products, runtime);
+		var created = EvaluateAndCreate(products, instances);
 		created.Should().ContainSingle();
 		created[0].Keys.Should().ContainKey("shops").WhoseValue.Should().Be("u1");
 		created[0].FullyQualifiedName.Should().Be("products[shops=u1]");
@@ -113,15 +104,16 @@ public sealed class InstanceMatchingTests {
 
 	[Fact]
 	public void EvaluateAndCreate_MultipleDependsOn_FanOutPerSuccessfulInstance() {
+		// 3 успешных pg → 3 products.
 		var shops = MakeStage("shops");
 		var pg = MakeStage("productGroups", new StageDependency(shops, DependencyMode.Instance));
 		var products = MakeStage("products", new StageDependency(pg, DependencyMode.Whole));
-		var runtime = NewRuntime();
-		runtime.AddInstance(MakeInstanceWithSuccess(pg, new Dictionary<string, string> { ["shops"] = "u1" }));
-		runtime.AddInstance(MakeInstanceWithSuccess(pg, new Dictionary<string, string> { ["shops"] = "u2" }));
-		runtime.AddInstance(MakeInstanceWithSuccess(pg, new Dictionary<string, string> { ["shops"] = "u3" }));
+		var instances = new InstanceManager();
+		instances.Add(MakeInstanceWithSuccess(pg, new Dictionary<string, string> { ["shops"] = "u1" }));
+		instances.Add(MakeInstanceWithSuccess(pg, new Dictionary<string, string> { ["shops"] = "u2" }));
+		instances.Add(MakeInstanceWithSuccess(pg, new Dictionary<string, string> { ["shops"] = "u3" }));
 
-		var created = EvaluateAndCreate(products, runtime);
+		var created = EvaluateAndCreate(products, instances);
 		created.Select(j => j.Keys["shops"]).Should().BeEquivalentTo("u1", "u2", "u3");
 	}
 
@@ -129,25 +121,28 @@ public sealed class InstanceMatchingTests {
 	public void EvaluateAndCreate_DependsOnNotYetSucceeded_NoInstance() {
 		var pg = MakeStage("productGroups");
 		var products = MakeStage("products", new StageDependency(pg, DependencyMode.Whole));
-		var runtime = NewRuntime();
+		var instances = new InstanceManager();
+		// LastSuccess = null — ещё не был успешен.
 		var pgInst = new Instance { Identity = new InstanceIdentity(pg) };
-		runtime.AddInstance(pgInst);
+		instances.Add(pgInst);
 
-		EvaluateAndCreate(products, runtime).Should().BeEmpty();
+		EvaluateAndCreate(products, instances).Should().BeEmpty();
 	}
 
 	[Fact]
 	public void EvaluateAndCreate_MultipleInstanceDeps_CartesianProduct() {
+		// C: DependsOnInstance(A) + DependsOnInstance(B) — cartesian product (a, b).
 		var a = MakeStage("a");
 		var b = MakeStage("b");
 		var c = MakeStage("c",
 			new StageDependency(a, DependencyMode.Instance),
 			new StageDependency(b, DependencyMode.Instance));
-		var runtime = NewRuntime();
-		AddEmittingInstance(runtime, a, depKeys: null, "1", "2");
-		AddEmittingInstance(runtime, b, depKeys: null, "x", "y");
+		var instances = new InstanceManager();
+		AddEmittingInstance(instances, a, depKeys: null, "1", "2");
+		AddEmittingInstance(instances, b, depKeys: null, "x", "y");
 
-		var created = EvaluateAndCreate(c, runtime);
+		var created = EvaluateAndCreate(c, instances);
+		// 2 × 2 = 4 комбинации
 		created.Should().HaveCount(4);
 		var pairs = created.Select(j => (j.Keys["a"], j.Keys["b"])).OrderBy(p => p).ToList();
 		pairs.Should().BeEquivalentTo([("1", "x"), ("1", "y"), ("2", "x"), ("2", "y")]);
@@ -155,30 +150,33 @@ public sealed class InstanceMatchingTests {
 
 	[Fact]
 	public void EvaluateAndCreate_MergeIncompatibleKeys_SkipsCombination() {
+		// stage X имеет DependsOn(A) и DependsOn(B). А-инстанс имеет {k=1}, B-инстанс {k=2}.
+		// Они несовместимы — комбинация пропускается, инстанс X не создаётся.
 		var a = MakeStage("a");
 		var b = MakeStage("b");
 		var x = MakeStage("x",
 			new StageDependency(a, DependencyMode.Whole),
 			new StageDependency(b, DependencyMode.Whole));
-		var runtime = NewRuntime();
-		runtime.AddInstance(MakeInstanceWithSuccess(a, new Dictionary<string, string> { ["k"] = "1" }));
-		runtime.AddInstance(MakeInstanceWithSuccess(b, new Dictionary<string, string> { ["k"] = "2" }));
+		var instances = new InstanceManager();
+		instances.Add(MakeInstanceWithSuccess(a, new Dictionary<string, string> { ["k"] = "1" }));
+		instances.Add(MakeInstanceWithSuccess(b, new Dictionary<string, string> { ["k"] = "2" }));
 
-		EvaluateAndCreate(x, runtime).Should().BeEmpty();
+		EvaluateAndCreate(x, instances).Should().BeEmpty();
 	}
 
 	[Fact]
 	public void EvaluateAndCreate_MergeCompatibleKeys_SuccessfullyMerges() {
+		// X с DependsOn(A[k=1]) и DependsOn(B[k=1]) — совместимы, merge → {k=1}.
 		var a = MakeStage("a");
 		var b = MakeStage("b");
 		var x = MakeStage("x",
 			new StageDependency(a, DependencyMode.Whole),
 			new StageDependency(b, DependencyMode.Whole));
-		var runtime = NewRuntime();
-		runtime.AddInstance(MakeInstanceWithSuccess(a, new Dictionary<string, string> { ["k"] = "1" }));
-		runtime.AddInstance(MakeInstanceWithSuccess(b, new Dictionary<string, string> { ["k"] = "1" }));
+		var instances = new InstanceManager();
+		instances.Add(MakeInstanceWithSuccess(a, new Dictionary<string, string> { ["k"] = "1" }));
+		instances.Add(MakeInstanceWithSuccess(b, new Dictionary<string, string> { ["k"] = "1" }));
 
-		var created = EvaluateAndCreate(x, runtime);
+		var created = EvaluateAndCreate(x, instances);
 		created.Should().ContainSingle();
 		created[0].Keys.Should().ContainKey("k").WhoseValue.Should().Be("1");
 	}

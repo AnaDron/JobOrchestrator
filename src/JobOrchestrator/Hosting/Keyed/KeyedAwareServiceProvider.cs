@@ -24,7 +24,7 @@ internal sealed class KeyedAwareServiceProvider(IServiceProvider inner, object k
 	: IServiceProvider, IKeyedServiceProvider, ISupportRequiredService {
 
 	public object? GetService(Type serviceType) {
-		// Если запросили IServiceProvider — отдаём себя, чтобы descendants (StageRunner и т.п.)
+		// Если запросили IServiceProvider — отдаём себя, чтобы descendants (EventLoop и т.п.)
 		// тоже резолвили зависимости keyed-aware.
 		if (serviceType == typeof(IServiceProvider)) return this;
 		// Перехват scope-factory: scope, созданный из этого провайдера, тоже должен быть keyed-aware.

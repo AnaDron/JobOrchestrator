@@ -5,7 +5,7 @@ namespace JobOrchestrator.Internal;
 /// резолвит ожидающий <see cref="Task"/>, <see cref="Reset"/> CAS-заменяет его на свежий pending.
 /// <para>
 /// Реализована для <see cref="EventLoop"/> в качестве wake-up-сигнала: producer-ов (event loop,
-/// StageRunner finally, RegisterKey API) — много; consumer (scanner loop) — один. Альтернатива
+/// iteration-runner finally, RegisterKey API) — много; consumer (due-scan loop) — один. Альтернатива
 /// «новый CTS + Cancel» дешевле по моральной нагрузке, но требует lock на смену ссылки и страдает
 /// от <c>ObjectDisposedException</c> при race на Dispose. Этот паттерн обходит обе проблемы:
 /// </para>

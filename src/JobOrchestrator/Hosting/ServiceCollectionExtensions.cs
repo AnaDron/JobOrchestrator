@@ -73,7 +73,7 @@ public static class ServiceCollectionExtensions {
 	/// Регистрирует Job Orchestrator для конкретного <paramref name="tenantKey"/> с keyed-services
 	/// изоляцией (Path A). Каждый tenant получает свой полный набор keyed-singleton'ов:
 	/// <see cref="Internal.StageRegistry"/>, <see cref="Internal.InstanceManager"/>, channel, event loop,
-	/// lifecycle, etc. <see cref="Microsoft.Extensions.Hosting.IHostedService"/> регистрируется по одному
+	/// runtime, etc. <see cref="Microsoft.Extensions.Hosting.IHostedService"/> регистрируется по одному
 	/// на tenant — .NET host стартует все.
 	/// <para>
 	/// Stage-services регистрируются как <c>AddKeyedScoped(stage.ServiceType, tenantKey)</c>, что
@@ -126,6 +126,7 @@ public static class ServiceCollectionExtensions {
 			return registry;
 		});
 
+		services.AddSingleton<InstanceManager>();
 		services.AddSingleton<EventLoop>();
 
 		// Bounded channel: backpressure через Wait. При заполнении внешние писатели (Manual triggers,
@@ -175,6 +176,9 @@ public static class ServiceCollectionExtensions {
 
 		// Per-tenant bounded channel — фабрика обязательна (у Channel нет конструктора).
 		services.AddKeyedSingleton(tenantKey, (_, _) => CreateEventChannel());
+
+		// Простые keyed-singleton'ы без keyed-зависимостей — дефолтный ActivatorUtilities-резолв.
+		services.AddKeyedSingleton<InstanceManager>(tenantKey);
 
 		// Per-tenant дефолтный HostOptions: keyed-singleton под tenantKey. Пользовательский override
 		// через jobs.ConfigureJobOrchestratorHost(...) уже зарегистрирован на probe-pass ДО этой

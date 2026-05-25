@@ -12,7 +12,7 @@ public enum InstanceLifecycleState {
 	/// <summary>
 	/// Инстанс помечен на удаление (cascade). Если был <see cref="Running"/>, runner-итерация была отменена;
 	/// SDK ждёт её фактического завершения, после чего finalize'ит cleanup (<c>IJobStateStore.RemoveScopeAsync</c>
-	/// и удаление из <c>InstanceManager</c>). Новые триггеры и DueScanner-tick'и для Terminating-инстансов
+	/// и удаление из <c>InstanceManager</c>). Новые триггеры и due-tick'и для Terminating-инстансов
 	/// игнорируются. После finalize инстанс исчезает целиком.
 	/// </summary>
 	Terminating,

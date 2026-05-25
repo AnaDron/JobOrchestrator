@@ -1,7 +1,5 @@
 using System.Collections;
-using System.Collections.Concurrent;
 using System.Collections.Immutable;
-using System.Collections.ObjectModel;
 using System.Diagnostics.CodeAnalysis;
 using System.Threading.Channels;
 using JobOrchestrator.Configuration;
@@ -23,7 +21,7 @@ namespace JobOrchestrator.Internal;
 /// </para>
 /// <para>
 /// <see cref="EventLoop"/> явно дёргает <see cref="NotifyInstanceAdded"/>/<see cref="NotifyInstanceRemoved"/>
-/// сразу после <see cref="JobOrchestratorRuntime.AddInstance"/>/<see cref="JobOrchestratorRuntime.RemoveInstance"/>; здесь мы
+/// сразу после <see cref="InstanceManager.Add"/>/<see cref="InstanceManager.Remove"/>; здесь мы
 /// dispatch'им в соответствующий <see cref="StageHandle.NotifyAdded"/>/<see cref="StageHandle.NotifyRemoved"/>
 /// — источник <see cref="IStageHandle.Changes"/>.
 /// </para>
@@ -32,8 +30,7 @@ namespace JobOrchestrator.Internal;
 	Justification = "Sealed class без финализатора — GC.SuppressFinalize был бы no-op и misleading.")]
 internal sealed class JobOrchestratorRuntime : IJobOrchestrator, IDisposable {
 	private readonly Channel<OrchestratorEvent> _channel;
-	private readonly ConcurrentDictionary<InstanceIdentity, Instance> _instances = new();
-	private readonly ConcurrentDictionary<StageDescriptor, ConcurrentDictionary<Instance, byte>> _instancesByStage = new();
+	private readonly InstanceManager _instances;
 	private readonly ILogger<JobOrchestratorRuntime> _logger;
 	private readonly Dictionary<string, StageHandle> _stageHandles;
 	private readonly Dictionary<string, DomainHandle> _domainsByName;
@@ -50,9 +47,11 @@ internal sealed class JobOrchestratorRuntime : IJobOrchestrator, IDisposable {
 	public JobOrchestratorRuntime(
 		Channel<OrchestratorEvent> channel,
 		StageRegistry registry,
+		InstanceManager instances,
 		ILogger<JobOrchestratorRuntime> logger
 	) {
 		_channel = channel;
+		_instances = instances;
 		_logger = logger;
 
 		var entriesByDomain = registry.AllStages
@@ -135,48 +134,20 @@ internal sealed class JobOrchestratorRuntime : IJobOrchestrator, IDisposable {
 
 	IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
 
-	public InstancesOverview GetOverview() {
-		var infos = new List<InstanceInfo>(_instances.Count);
-		foreach (var i in _instances.Values) infos.Add(i.ToInstanceInfo());
-		return new InstancesOverview(infos);
-	}
+	public InstancesOverview GetOverview() => _instances.Snapshot();
 
-	#region Internal API — instance storage (бывший InstanceManager) + handle-notifications
+	#region Internal API — handle-notifications + delegating store-access
 
 	/// <summary>O(1)-доступ к stage-handle для reverse-link <see cref="IInstanceHandle.Stage"/>.</summary>
 	internal StageHandle GetStageHandle(StageDescriptor stage) => _stageHandles[stage.Name];
 
-	internal bool ExistsInstance(InstanceIdentity identity) => _instances.ContainsKey(identity);
+	internal IReadOnlyCollection<Instance> InstancesOf(StageDescriptor stage) => _instances.InstancesOf(stage);
 
-	internal Instance? FindInstance(InstanceIdentity identity) =>
-		_instances.TryGetValue(identity, out var inst) ? inst : null;
-
-	internal IReadOnlyCollection<Instance> InstancesOf(StageDescriptor stage) =>
-		_instancesByStage.TryGetValue(stage, out var set) ? (IReadOnlyCollection<Instance>)set.Keys : ReadOnlyCollection<Instance>.Empty;
-
-	internal ICollection<Instance> AllInstances => _instances.Values;
-
-	internal int InstanceCount => _instances.Count;
-
-	internal void AddInstance(Instance instance) {
-		if (!_instances.TryAdd(instance.Identity, instance)) {
-			throw new InvalidOperationException($"Дубль инстанса: {instance.Identity.FullyQualifiedName}");
-		}
-		var set = _instancesByStage.GetOrAdd(instance.Stage, _ => new ConcurrentDictionary<Instance, byte>());
-		set.TryAdd(instance, 0);
-	}
-
-	internal bool RemoveInstance(Instance instance) {
-		var removed = _instances.TryRemove(instance.Identity, out _);
-		if (removed && _instancesByStage.TryGetValue(instance.Stage, out var set)) {
-			set.TryRemove(instance, out _);
-		}
-		return removed;
-	}
+	internal Instance? FindInstance(InstanceIdentity identity) => _instances.Find(identity);
 
 	/// <summary>
 	/// Уведомляет stage-handle о добавлении инстанса. Вызывается <see cref="EventLoop"/>
-	/// явно после <see cref="JobOrchestratorRuntime.AddInstance"/> — на event-loop-consumer-потоке.
+	/// явно после <see cref="InstanceManager.Add"/> — на event-loop-consumer-потоке.
 	/// </summary>
 	internal void NotifyInstanceAdded(Instance instance) {
 		if (_stageHandles.TryGetValue(instance.Stage.Name, out var handle)) {
@@ -187,7 +158,7 @@ internal sealed class JobOrchestratorRuntime : IJobOrchestrator, IDisposable {
 	/// <summary>
 	/// Уведомляет stage-handle об удалении инстанса и завершает iteration-broadcaster
 	/// (consumer'ы инстанса получат естественный exit). Вызывается <see cref="EventLoop"/>
-	/// явно после <see cref="JobOrchestratorRuntime.RemoveInstance"/> — на event-loop-consumer-потоке.
+	/// явно после <see cref="InstanceManager.Remove"/> — на event-loop-consumer-потоке.
 	/// </summary>
 	internal void NotifyInstanceRemoved(Instance instance) {
 		if (_stageHandles.TryGetValue(instance.Stage.Name, out var handle)) {
@@ -205,7 +176,7 @@ internal sealed class JobOrchestratorRuntime : IJobOrchestrator, IDisposable {
 	/// </summary>
 	internal void OnShutdown() {
 		foreach (var stage in _stageHandles.Values) stage.CompleteAllSubscribers();
-		foreach (var instance in _instances.Values) instance.CompleteIterationSubscribers();
+		foreach (var instance in _instances.All) instance.CompleteIterationSubscribers();
 	}
 
 	/// <summary>

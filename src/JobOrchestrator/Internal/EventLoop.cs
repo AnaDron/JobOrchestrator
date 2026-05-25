@@ -2,7 +2,6 @@ using System.Collections.Frozen;
 using System.Diagnostics.CodeAnalysis;
 using System.Threading.Channels;
 using JobOrchestrator.Configuration;
-using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
 namespace JobOrchestrator.Internal;
@@ -14,8 +13,8 @@ namespace JobOrchestrator.Internal;
 /// <remarks>
 /// <para>
 /// <b>Terminating state.</b> При <see cref="KeyRemovedEvent"/> аффектированные инстансы получают
-/// <see cref="InstanceLifecycleState.Terminating"/>. Они остаются в <see cref="JobOrchestratorRuntime"/>
-/// до фактического finalize'а, но новые триггеры (<see cref="EventLoop.TryAcceptTrigger"/>) и DueScanner
+/// <see cref="InstanceLifecycleState.Terminating"/>. Они остаются в <see cref="InstanceManager"/>
+/// до фактического finalize'а, но новые триггеры (<see cref="EventLoop.TryAcceptTrigger"/>) и due-scan-loop
 /// игнорируют их (state != Idle). Cleanup для Running-инстансов откладывается до их
 /// <see cref="StageCompletedEvent"/>/<see cref="StageFailedEvent"/>; для Idle-инстансов — синхронно
 /// в момент cascade.
@@ -47,6 +46,7 @@ internal sealed partial class EventLoop : IDisposable {
 	private static readonly TimeSpan BacklogWarningInterval = TimeSpan.FromSeconds(30);
 
 	private readonly StageRegistry registry;
+	private readonly InstanceManager instances;
 	private readonly Channel<OrchestratorEvent> channel;
 	private readonly IJobStateStore stateStore;
 	private readonly IServiceProvider rootProvider;
@@ -63,6 +63,7 @@ internal sealed partial class EventLoop : IDisposable {
 
 	public EventLoop(
 		StageRegistry registry,
+		InstanceManager instances,
 		Channel<OrchestratorEvent> channel,
 		IJobStateStore stateStore,
 		IServiceProvider rootProvider,
@@ -73,12 +74,16 @@ internal sealed partial class EventLoop : IDisposable {
 		TimeProvider time
 	) {
 		this.registry = registry;
+		this.instances = instances;
 		this.channel = channel;
 		this.stateStore = stateStore;
 		this.rootProvider = rootProvider;
 		this.hostOptions = hostOptions;
 		this.runtime = runtime;
 		this.logger = logger;
+		// Legacy-имя категории: подсистему `StageRunner` свернули в private-методы EventLoop, но
+		// production-Seq-дашборды и алерты фильтруют по SourceContext=JobOrchestrator.StageRunner.
+		// Не переименовывать без миграции этих фильтров — иначе сломаются stage-iteration-логи на ops-side.
 		_stageLogger = loggerFactory.CreateLogger("JobOrchestrator.StageRunner");
 		this.time = time;
 
@@ -165,12 +170,6 @@ internal sealed partial class EventLoop : IDisposable {
 		foreach (var sem in _stageSemaphores.Values) sem.Dispose();
 	}
 
-	/// <summary>
-	/// Будит due-scan loop: следующая итерация loop'а посмотрит на актуальный <c>NextAutoUtc</c>.
-	/// Безопасно вызывать из любого потока (event-loop-consumer или ThreadPool runner-finally).
-	/// </summary>
-	private void WakeDueScanner() => _dueScanWake.Set();
-
 	public async Task RunAsync(CancellationToken stoppingToken) {
 		Log.Starting(logger, registry.AllStages.Count, null);
 		var dueScanTask = Task.Run(() => RunDueScannerAsync(stoppingToken), stoppingToken);
@@ -227,7 +226,7 @@ internal sealed partial class EventLoop : IDisposable {
 			// runtime'ом HostedService после нашего exit. Поэтому здесь — только iteration-outcome TCS:
 			// runner мог не успеть опубликовать completion-event перед закрытием channel.
 			var stopReason = new InvalidOperationException("Оркестратор остановлен; ожидания не могут быть резолвлены.");
-			foreach (var inst in runtime.AllInstances) {
+			foreach (var inst in instances.All) {
 				inst.TakeIterationOutcomeTcs()?.TrySetException(
 					IterationFailures.OrchestratorShutdown(inst, stopReason));
 			}
@@ -238,85 +237,6 @@ internal sealed partial class EventLoop : IDisposable {
 			Log.DueScannerFaulted(logger, ex);
 		}
 		Log.Stopped(logger, null);
-	}
-
-	/// <summary>
-	/// Pull-based scheduler loop: вычисляет ближайший due-инстанс, спит до его <c>NextAutoUtc</c>
-	/// (либо <see cref="DueScanMaxSleep"/> при отсутствии расписания), либо просыпается через
-	/// <see cref="WakeDueScanner"/>. Запускается параллельно с event-loop'ом из <see cref="RunAsync"/>.
-	/// <para>
-	/// Profile-decision: linear scan на N=10k = ~1.66 мс (~165 нс/инстанс). Sorted-by-deadline даёт
-	/// O(log N) find-min, но ухудшает hot-path перепланирования; пересмотреть при N &gt; 50k.
-	/// </para>
-	/// </summary>
-	private async Task RunDueScannerAsync(CancellationToken stoppingToken) {
-		Log.DueScannerStarted(logger, null);
-		while (!stoppingToken.IsCancellationRequested) {
-			// Reset ДО scan: если WakeDueScanner придёт во время ScanAndPublishDue, флаг взведётся
-			// и следующий WaitAsync завершится мгновенно — wake-up не теряется.
-			_dueScanWake.Reset();
-
-			var now = time.GetUtcNow();
-			WarnOnChannelBacklog(now);
-			var nextDue = ScanAndPublishDue(now);
-
-			TimeSpan sleep;
-			if (nextDue is null) {
-				sleep = DueScanMaxSleep;
-			} else {
-				var delta = nextDue.Value - now;
-				sleep = delta < DueScanMinSleep ? DueScanMinSleep : delta > DueScanMaxSleep ? DueScanMaxSleep : delta;
-			}
-
-			try {
-				await _dueScanWake.WaitAsync().WaitAsync(sleep, time, stoppingToken).ConfigureAwait(false);
-			} catch (TimeoutException) {
-				// Sleep истёк — нормальное продолжение loop'а.
-			} catch (OperationCanceledException) {
-				// Shutdown — внешний while проверит stoppingToken и завершится.
-			}
-		}
-		Log.DueScannerStopped(logger, null);
-	}
-
-	/// <summary>
-	/// Operational visibility: если очередь оркестратор-событий превысила <see cref="ChannelBacklogThreshold"/>,
-	/// логирует warning с anti-spam suppression (<see cref="BacklogWarningInterval"/>).
-	/// </summary>
-	private void WarnOnChannelBacklog(DateTimeOffset now) {
-		var reader = channel.Reader;
-		if (!reader.CanCount) return;
-		int count = reader.Count;
-		if (count < ChannelBacklogThreshold) return;
-		if (now - _lastBacklogWarning < BacklogWarningInterval) return;
-		_lastBacklogWarning = now;
-		Log.ChannelBacklog(logger, count, null);
-	}
-
-	/// <summary>
-	/// Сканирует все инстансы, публикует <see cref="TimerTickedEvent"/> для due-инстансов,
-	/// возвращает ближайший <c>NextAutoUtc</c> в будущем (или <c>null</c>, если расписаний нет).
-	/// Идемпотентность через <see cref="Instance.TryAcquirePendingTick"/>.
-	/// </summary>
-	private DateTimeOffset? ScanAndPublishDue(DateTimeOffset now) {
-		DateTimeOffset? nextDue = null;
-		foreach (var instance in runtime.AllInstances) {
-			if (instance.State != InstanceLifecycleState.Idle) continue;
-			var next = instance.Metrics.Schedule.NextAutoUtc;
-			if (next is null) continue;
-			if (next.Value <= now) {
-				if (!instance.TryAcquirePendingTick()) continue;
-				try {
-					channel.Writer.Publish(new TimerTickedEvent(instance));
-				} catch {
-					instance.ReleasePendingTick();
-					throw;
-				}
-				continue;
-			}
-			if (nextDue is null || next.Value < nextDue.Value) nextDue = next;
-		}
-		return nextDue;
 	}
 
 	/// <summary>
@@ -366,7 +286,7 @@ internal sealed partial class EventLoop : IDisposable {
 
 	private async Task FinalizeAllTerminatingAsync() {
 		// Снимок терминирующих инстансов через State-чтение; их StageCompleted/Failed уже не придут.
-		var terminating = runtime.AllInstances
+		var terminating = instances.All
 			.Where(inst => inst.State == InstanceLifecycleState.Terminating)
 			.ToList();
 		foreach (var instance in terminating) {
@@ -375,7 +295,7 @@ internal sealed partial class EventLoop : IDisposable {
 			} catch (Exception ex) {
 				Log.FinalizeShutdownFailed(logger, instance.FullyQualifiedName, ex);
 			}
-			if (runtime.RemoveInstance(instance)) runtime.NotifyInstanceRemoved(instance);
+			if (instances.Remove(instance)) runtime.NotifyInstanceRemoved(instance);
 		}
 	}
 
@@ -402,7 +322,7 @@ internal sealed partial class EventLoop : IDisposable {
 		// pendingTick освобождается ВСЕГДА при обработке tick-события.
 		instance.ReleasePendingTick();
 		// Идемпотентность: инстанс мог быть уже Terminated/удалён.
-		if (runtime.FindInstance(instance.Identity) != instance) return;
+		if (instances.Find(instance.Identity) != instance) return;
 		if (instance.IsTerminating || instance.IsRunning) return;
 		var now = time.GetUtcNow();
 		var decision = TryAcceptTrigger(instance, TriggerSource.Auto, now);
@@ -420,7 +340,7 @@ internal sealed partial class EventLoop : IDisposable {
 			return;
 		}
 		// O(1) lookup через pre-computed Identity — без повторного Encode на каждый trigger.
-		var instance = runtime.FindInstance(evt.Identity);
+		var instance = instances.Find(evt.Identity);
 		if (instance is null) {
 			Reject(evt, IterationRejectReason.NotFound, evt.Identity.FullyQualifiedName);
 			return;
@@ -455,12 +375,12 @@ internal sealed partial class EventLoop : IDisposable {
 		TriggerResult.ConcurrencyDeferred => IterationRejectReason.ConcurrencyDeferred,
 		TriggerResult.Faulted => IterationRejectReason.Faulted,
 		// Manual не должен получать Started здесь (caller обрабатывает Started отдельно) и WaitingRetry
-		// (TriggerAcceptance.TryAccept не возвращает WaitingRetry для Manual). Любое попадание сюда —
+		// (TryAcceptTrigger не возвращает WaitingRetry для Manual). Любое попадание сюда —
 		// нарушение инварианта event-loop'а, fail-fast.
 		TriggerResult.Started => throw new InvalidOperationException(
 			"Invariant violation: TriggerResult.Started не должен маппиться через MapTriggerResultToReason."),
 		TriggerResult.WaitingRetry => throw new InvalidOperationException(
-			"Invariant violation: Manual не должен получать TriggerResult.WaitingRetry от TriggerAcceptance."),
+			"Invariant violation: Manual не должен получать TriggerResult.WaitingRetry от TryAcceptTrigger."),
 		_ => throw new InvalidOperationException($"Unknown TriggerResult: {result}"),
 	};
 
@@ -516,129 +436,11 @@ internal sealed partial class EventLoop : IDisposable {
 		}
 	}
 
-	private async Task RunIterationSafeAsync(Instance instance, TriggerSource trigger, Action releaseConcurrency, CancellationToken ct) {
-		try {
-			await RunIterationAsync(instance, trigger, releaseConcurrency, runtime.WorkersCancellationToken, ct).ConfigureAwait(false);
-		} catch (Exception ex) {
-			Log.UnhandledIterationFault(logger, instance.FullyQualifiedName, ex);
-		}
-	}
-
-	/// <summary>
-	/// Запускает одну итерацию инстанса в свежем DI-scope с watchdog-CTS, формирует <see cref="JobContext"/>,
-	/// разворачивает logger scope со структурными полями и публикует <see cref="StageCompletedEvent"/> или <see cref="StageFailedEvent"/>.
-	/// <para>
-	/// <paramref name="releaseConcurrency"/> вызывается в finally — освобождает per-stage + global семафоры.
-	/// <paramref name="workersToken"/> — токен, cancel-ящийся при crash event loop (через <see cref="JobOrchestratorRuntime.MarkFaulted"/>);
-	/// сшивается с shutdown/watchdog/cascade в linked CTS.
-	/// </para>
-	/// </summary>
-	private async Task RunIterationAsync(Instance instance, TriggerSource trigger, Action releaseConcurrency, CancellationToken workersToken, CancellationToken stoppingToken) {
-		string correlationId = Guid.NewGuid().ToString("N");
-		var logFields = BuildLogScopeFields(instance, correlationId);
-
-		await using var scope = rootProvider.CreateAsyncScope();
-		using var loggerScope = _stageLogger.BeginScope(logFields);
-
-		// Различаем источники cancel через ОТДЕЛЬНЫЕ CTS:
-		// - stoppingToken — shutdown хоста;
-		// - workersToken — crash event loop;
-		// - watchdogCts — ExecutionTimeout превышен;
-		// - cascadeCts (instance.RunCts) — событие-loop отменил из-за cascade-removal.
-		// runCts — linked-источник всех вышеперечисленных, передаётся в IJobService.ExecuteAsync.
-		var watchdogCts = instance.Stage.ExecutionTimeout is { } timeout
-			? new CancellationTokenSource(timeout)
-			: null;
-		var cascadeCts = new CancellationTokenSource();
-		var runCts = watchdogCts is not null
-			? CancellationTokenSource.CreateLinkedTokenSource(stoppingToken, workersToken, watchdogCts.Token, cascadeCts.Token)
-			: CancellationTokenSource.CreateLinkedTokenSource(stoppingToken, workersToken, cascadeCts.Token);
-		// EventLoop вызывает Cancel() на cascadeCts (через instance.RunCts) для cascade-removal.
-		// Не CAS: event-loop single-threaded, между EndRunning предыдущего runner-а и стартом этого
-		// нет concurrent-writer'а к RunCts.
-		instance.RunCts = cascadeCts;
-
-		var completionPublished = false;
-		try {
-			var service = (IJobService)scope.ServiceProvider.GetRequiredService(instance.Stage.ServiceType);
-			var jobState = new DefaultJobState(stateStore, instance.StateScope);
-
-			var jobContext = new JobContext {
-				CorrelationId = correlationId,
-				Trigger = trigger,
-				State = jobState,
-				LastSuccessAt = instance.Metrics.Stats.LastSuccess,
-				StageName = instance.Stage.Name,
-				Keys = instance.Identity.Keys,
-				FullyQualifiedName = instance.FullyQualifiedName,
-				Sink = instance.Sink,
-			};
-
-			Log.IterationStart(_stageLogger, instance.FullyQualifiedName, trigger, null);
-			await service.ExecuteAsync(jobContext, runCts.Token).ConfigureAwait(false);
-			Log.IterationCompleted(_stageLogger, instance.FullyQualifiedName, null);
-			completionPublished = channel.Writer.Publish(new StageCompletedEvent(instance, time.GetUtcNow()));
-			if (!completionPublished) {
-				Log.CompletionNotPublished(_stageLogger, instance.FullyQualifiedName, nameof(StageCompletedEvent), null);
-			}
-		} catch (OperationCanceledException oce) {
-			Exception failure;
-			if (stoppingToken.IsCancellationRequested) {
-				Log.IterationCancelledShutdown(_stageLogger, instance.FullyQualifiedName, null);
-				failure = oce;
-			} else if (watchdogCts?.IsCancellationRequested is true) {
-				Log.IterationCancelledWatchdog(_stageLogger, instance.FullyQualifiedName, null);
-				failure = new TimeoutException(
-					$"Стадия {instance.FullyQualifiedName} превысила ExecutionTimeout ({instance.Stage.ExecutionTimeout}).",
-					oce);
-			} else if (cascadeCts.IsCancellationRequested) {
-				Log.IterationCancelledCascade(_stageLogger, instance.FullyQualifiedName, null);
-				failure = oce;
-			} else {
-				Log.IterationFailed(_stageLogger, instance.FullyQualifiedName, oce);
-				failure = oce;
-			}
-			completionPublished = PublishStageFailed(instance, failure);
-		} catch (Exception ex) {
-			Log.IterationFailed(_stageLogger, instance.FullyQualifiedName, ex);
-			completionPublished = PublishStageFailed(instance, ex);
-		} finally {
-			instance.ClearRunCtsIfEquals(cascadeCts);
-			runCts.Dispose();
-			watchdogCts?.Dispose();
-			cascadeCts.Dispose();
-			releaseConcurrency();
-			if (!completionPublished) {
-				instance.EndRunning();
-			}
-		}
-	}
-
-	private bool PublishStageFailed(Instance instance, Exception failure) {
-		if (channel.Writer.Publish(new StageFailedEvent(instance, failure, time.GetUtcNow()))) {
-			return true;
-		}
-		Log.CompletionNotPublished(_stageLogger, instance.FullyQualifiedName, nameof(StageFailedEvent), null);
-		return false;
-	}
-
-	private static Dictionary<string, object> BuildLogScopeFields(Instance instance, string correlationId) {
-		Dictionary<string, object> fields = new(3 + instance.DependencyKeys.Count, StringComparer.Ordinal) {
-			["CorrelationId"] = correlationId,
-			["FullyQualifiedName"] = instance.FullyQualifiedName,
-			["StageName"] = instance.Stage.Name,
-		};
-		foreach (var kv in instance.DependencyKeys) {
-			fields[$"{kv.Key}Key"] = kv.Value;
-		}
-		return fields;
-	}
-
 	private void DeferIteration(Instance instance, TriggerSource trigger) {
 		Log.ConcurrencyDeferred(logger, instance.FullyQualifiedName, instance.Stage.Name, null);
 		// Manual: caller сразу получает ConcurrencyDeferred и сам решает, когда повторить —
 		// не трогаем NextAutoUtc (existing auto-расписание остаётся), не будим scanner.
-		// Auto-tick: re-schedule через NextAutoUtc + jitter, DueScanner подберёт при освобождении лимита.
+		// Auto-tick: re-schedule через NextAutoUtc + jitter, due-scan-loop подберёт при освобождении лимита.
 		if (trigger != TriggerSource.Auto) return;
 		instance.SetMetrics(instance.Metrics.WithNextAutoUtc(ComputeDeferredNextAutoUtc()));
 		WakeDueScanner();
@@ -676,7 +478,7 @@ internal sealed partial class EventLoop : IDisposable {
 			instance.EndRunning();
 			return;
 		}
-		if (runtime.FindInstance(instance.Identity) != instance) return;
+		if (instances.Find(instance.Identity) != instance) return;
 		if (!instance.IsRunning) return;
 
 		ApplyStageCompletedMetrics(instance, sc.At);
@@ -692,7 +494,7 @@ internal sealed partial class EventLoop : IDisposable {
 			instance.EndRunning();
 			return;
 		}
-		if (runtime.FindInstance(instance.Identity) != instance) return;
+		if (instances.Find(instance.Identity) != instance) return;
 		if (!instance.IsRunning) return;
 
 		ApplyStageFailedMetrics(instance, sf.Exception, sf.At);
@@ -785,7 +587,7 @@ internal sealed partial class EventLoop : IDisposable {
 			var seed = queue.Dequeue();
 			var affected = new List<Instance>();
 			foreach (var s in seed.Emitter.Stage.AffectedByKeyRemoval) {
-				foreach (var inst in runtime.InstancesOf(s)) {
+				foreach (var inst in instances.InstancesOf(s)) {
 					if (inst.IsTerminating) continue;
 					var depKeys = inst.DependencyKeys;
 					if (!depKeys.TryGetValue(seed.Emitter.Stage.Name, out var v) || !string.Equals(v, seed.Key, StringComparison.Ordinal)) continue;
@@ -839,7 +641,7 @@ internal sealed partial class EventLoop : IDisposable {
 		}
 		// Late event: runner отстрелил StageCompleted уже после того, как instance был удалён из
 		// InstanceManager (теоретически возможно при race shutdown vs runner-finally). Лог + ignore.
-		if (runtime.FindInstance(instance.Identity) != instance) {
+		if (instances.Find(instance.Identity) != instance) {
 			Log.LateStageEventForRemovedInstance(logger, nameof(StageCompletedEvent), instance.FullyQualifiedName, null);
 			return;
 		}
@@ -864,7 +666,7 @@ internal sealed partial class EventLoop : IDisposable {
 			}
 		} finally {
 			// Guarantee: выход из Running при ЛЮБОМ исходе обработки. EndRunning одновременно
-			// чистит pendingTick — гарантирует, что DueScanner может опубликовать следующий тик.
+			// чистит pendingTick — гарантирует, что due-scan-loop может опубликовать следующий тик.
 			instance.EndRunning();
 			WakeDueScanner();
 		}
@@ -877,7 +679,7 @@ internal sealed partial class EventLoop : IDisposable {
 			await FinalizeTerminatingAsync(instance, ct).ConfigureAwait(false);
 			return;
 		}
-		if (runtime.FindInstance(instance.Identity) != instance) {
+		if (instances.Find(instance.Identity) != instance) {
 			Log.LateStageEventForRemovedInstance(logger, nameof(StageFailedEvent), instance.FullyQualifiedName, null);
 			return;
 		}
@@ -904,7 +706,7 @@ internal sealed partial class EventLoop : IDisposable {
 		// синхронно) и StageCompleted/Failed-handler-ом (тот же инстанс уже отстрелил completion-event)
 		// один вызывающий получит true, второй — false и просто выйдет. Это страхует от повторной
 		// сигнализации waiters и повторного RemoveScopeAsync.
-		if (!runtime.RemoveInstance(instance)) return;
+		if (!instances.Remove(instance)) return;
 		// Notify ПЕРЕД RemoveScopeAsync: iteration-broadcaster инстанса complete'ится сразу,
 		// и waiter-ы выходят из await foreach без ожидания I/O state-store.
 		runtime.NotifyInstanceRemoved(instance);
@@ -924,7 +726,7 @@ internal sealed partial class EventLoop : IDisposable {
 	}
 
 	private void CreateAndStart(StageDescriptor stage) {
-		var created = EvaluateAndCreate(stage, runtime, channel, time);
+		var created = EvaluateAndCreate(stage, instances, channel, time);
 		foreach (var instance in created) {
 			runtime.NotifyInstanceAdded(instance);
 			Log.InstanceCreated(logger, instance.FullyQualifiedName, null);

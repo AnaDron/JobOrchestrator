@@ -6,7 +6,7 @@ namespace JobOrchestrator.Abstractions;
 /// <remarks>
 /// <para>
 /// Все обязательные поля помечены <c>required init</c>: SDK конструирует <see cref="JobContext"/>
-/// через object-initializer в <c>StageRunner</c>; пользовательский unit-тест сервиса может построить
+/// через object-initializer в <c>EventLoop.RunIterationAsync</c>; пользовательский unit-тест сервиса может построить
 /// собственный <see cref="JobContext"/> с тестовым <see cref="IJobContextSink"/> для проверки,
 /// что сервис корректно вызывает <see cref="AddKey"/>/<see cref="RemoveKey"/>.
 /// </para>

@@ -1,7 +1,7 @@
 namespace JobOrchestrator.Internal;
 
 /// <summary>
-/// Внутренний результат <c>BeginIteration</c> / <c>TriggerAcceptance</c>. Public API
+/// Внутренний результат <c>EventLoop.BeginIteration</c> / <c>EventLoop.TryAcceptTrigger</c>. Public API
 /// (<see cref="IInstanceHandle.RunAsync"/>) экспонирует это через <see cref="IIterationHandle"/>
 /// (на Started) либо <see cref="IterationRejectedException"/> (на reject).
 /// </summary>

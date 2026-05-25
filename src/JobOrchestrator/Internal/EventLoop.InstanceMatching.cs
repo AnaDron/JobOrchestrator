@@ -4,7 +4,7 @@ namespace JobOrchestrator.Internal;
 
 /// <summary>
 /// Backtracking-merge матчер для создания инстансов стадий по мере разрешения зависимостей.
-/// Stateless: вся «память» — параметры (<see cref="JobOrchestratorRuntime"/>, channel, time) — поэтому
+/// Stateless: вся «память» — параметры (<see cref="InstanceManager"/>, channel, time) — поэтому
 /// реализация живёт в <c>static</c>-методах partial-секции <see cref="EventLoop"/>.
 /// <para>
 /// Алгоритм — backtracking с partial-merge:
@@ -34,20 +34,20 @@ internal sealed partial class EventLoop {
 	/// </summary>
 	internal static List<Instance> EvaluateAndCreate(
 		StageDescriptor stage,
-		JobOrchestratorRuntime runtime,
+		InstanceManager instances,
 		Channel<OrchestratorEvent> channel,
 		TimeProvider time
 	) {
 		if (stage.Dependencies.Count == 0) {
 			// Безключевая стадия → один инстанс с пустыми DependencyKeys.
 			var emptyId = new InstanceIdentity(stage);
-			return runtime.ExistsInstance(emptyId) ? [] : [MaterializeInstance(emptyId, runtime, channel, time)];
+			return instances.Exists(emptyId) ? [] : [MaterializeInstance(emptyId, instances, channel, time)];
 		}
 
 		// Собираем измерения candidate-ключей.
 		var dimensions = new List<List<IReadOnlyDictionary<string, string>>>(stage.Dependencies.Count);
 		foreach (var dep in stage.Dependencies) {
-			var dim = ComputeDimension(dep, runtime);
+			var dim = ComputeDimension(dep, instances);
 			if (dim.Count == 0) {
 				// Пустое измерение → невозможно разрешить хоть какую-то комбинацию.
 				return [];
@@ -58,7 +58,7 @@ internal sealed partial class EventLoop {
 
 		var created = new List<Instance>();
 		var workingMerged = new Dictionary<string, string>(StringComparer.Ordinal);
-		Recurse(stage, dimensions, 0, workingMerged, created, runtime, channel, time);
+		Recurse(stage, dimensions, 0, workingMerged, created, instances, channel, time);
 		return created;
 	}
 
@@ -68,16 +68,16 @@ internal sealed partial class EventLoop {
 		int dimIdx,
 		Dictionary<string, string> current,
 		List<Instance> output,
-		JobOrchestratorRuntime runtime,
+		InstanceManager instances,
 		Channel<OrchestratorEvent> channel,
 		TimeProvider time
 	) {
 		if (dimIdx == dimensions.Count) {
 			// Все измерения совмещены — проверяем существование и зависимости.
 			var identity = new InstanceIdentity(stage, current);
-			if (runtime.ExistsInstance(identity)) return;
-			if (!AllDependenciesResolved(stage, current, runtime)) return;
-			output.Add(MaterializeInstance(identity, runtime, channel, time));
+			if (instances.Exists(identity)) return;
+			if (!AllDependenciesResolved(stage, current, instances)) return;
+			output.Add(MaterializeInstance(identity, instances, channel, time));
 			return;
 		}
 
@@ -99,7 +99,7 @@ internal sealed partial class EventLoop {
 			}
 
 			if (!incompatible) {
-				Recurse(stage, dimensions, dimIdx + 1, current, output, runtime, channel, time);
+				Recurse(stage, dimensions, dimIdx + 1, current, output, instances, channel, time);
 			}
 
 			// Откат всего, что добавили этим candidate-ом.
@@ -133,13 +133,13 @@ internal sealed partial class EventLoop {
 	private static bool AllDependenciesResolved(
 		StageDescriptor stage,
 		IReadOnlyDictionary<string, string> childKeys,
-		JobOrchestratorRuntime runtime
+		InstanceManager instances
 	) {
 		foreach (var dep in stage.Dependencies) {
 			// Парный parent — тот, чьи DependencyKeys ⊆ childKeys. Инвариант backtracking-merge
 			// гарантирует уникальность; первый match — он же единственный.
 			Instance? parent = null;
-			foreach (var candidate in runtime.InstancesOf(dep.Target)) {
+			foreach (var candidate in instances.InstancesOf(dep.Target)) {
 				bool projectionMatches = true;
 				foreach (var kv in candidate.DependencyKeys) {
 					if (!childKeys.TryGetValue(kv.Key, out var v) || !string.Equals(v, kv.Value, StringComparison.Ordinal)) {
@@ -166,7 +166,7 @@ internal sealed partial class EventLoop {
 
 	private static List<IReadOnlyDictionary<string, string>> ComputeDimension(
 		StageDependency dep,
-		JobOrchestratorRuntime runtime
+		InstanceManager instances
 	) {
 		var result = new List<IReadOnlyDictionary<string, string>>();
 
@@ -176,7 +176,7 @@ internal sealed partial class EventLoop {
 			// Candidate = emitter's DependencyKeys ∪ { Target.Name: k } per каждый k в emittedKeys.
 			// Это корректно поддерживает multi-instance-эмитеров, поскольку каждый эмитер вносит ТОЛЬКО
 			// свои ключи (а не глобальный пул всех ключей стадии).
-			foreach (var emitter in runtime.InstancesOf(dep.Target)) {
+			foreach (var emitter in instances.InstancesOf(dep.Target)) {
 				if (emitter.EmittedKeys.Count == 0) continue;
 				var emitterKeys = emitter.DependencyKeys;
 				foreach (var key in emitter.EmittedKeys) {
@@ -189,7 +189,7 @@ internal sealed partial class EventLoop {
 
 			break;
 		case DependencyMode.Whole:
-			foreach (var inst in runtime.InstancesOf(dep.Target)) {
+			foreach (var inst in instances.InstancesOf(dep.Target)) {
 				if (inst.Metrics.Stats.LastSuccess.HasValue) result.Add(inst.DependencyKeys);
 			}
 
@@ -203,17 +203,17 @@ internal sealed partial class EventLoop {
 
 	private static Instance MaterializeInstance(
 		InstanceIdentity identity,
-		JobOrchestratorRuntime runtime,
+		InstanceManager instances,
 		Channel<OrchestratorEvent> channel,
 		TimeProvider time
 	) {
 		var instance = new Instance { Identity = identity };
 		// Pre-allocated Sink: один объект на lifetime инстанса (Source/Writer постоянны), переиспользуется
-		// всеми итерациями StageRunner-а — экономим аллокацию per-iteration.
+		// всеми итерациями iteration-runner'а — экономим аллокацию per-iteration.
 		instance.Sink = new ChannelJobContextSink(channel.Writer, instance);
-		// NextAutoUtc = now → DueScanner подберёт инстанс при ближайшем проходе.
+		// NextAutoUtc = now → due-scan-loop подберёт инстанс при ближайшем проходе.
 		instance.SetMetrics(JobMetrics.Empty.WithNextAutoUtc(time.GetUtcNow()));
-		runtime.AddInstance(instance);
+		instances.Add(instance);
 		return instance;
 	}
 }

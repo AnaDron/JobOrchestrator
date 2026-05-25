@@ -98,7 +98,7 @@ internal sealed class Instance {
 	/// <summary>
 	/// Снимает Running-флаг + pendingTick + RunningIteration. Вызывается из <see cref="EventLoop"/>
 	/// (<c>HandleStageCompletedAsync</c>/<c>HandleStageFailedAsync</c>, <c>DrainPendingRequests</c>)
-	/// или из <see cref="EventLoop"/> в <c>finally</c>, если completion не опубликован в channel.
+	/// или из <c>EventLoop.RunIterationAsync</c>'s <c>finally</c>, если completion не опубликован в channel.
 	/// </summary>
 	public void EndRunning() {
 		Volatile.Write(ref _pendingTick, 0);
@@ -135,7 +135,7 @@ internal sealed class Instance {
 
 	/// <summary>
 	/// Атомарно сбрасывает <see cref="RunCts"/> в null ТОЛЬКО если текущее значение совпадает с
-	/// <paramref name="expected"/>. Используется в <c>StageRunner</c> finally — защищает от случая,
+	/// <paramref name="expected"/>. Используется в <c>EventLoop.RunIterationAsync</c> finally — защищает от случая,
 	/// когда после <c>EndRunning</c> уже стартовал следующий runner и установил свой CTS:
 	/// «свой» runner не должен затирать чужую запись.
 	/// </summary>
