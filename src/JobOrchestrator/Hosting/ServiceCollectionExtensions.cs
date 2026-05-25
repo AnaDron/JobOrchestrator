@@ -135,7 +135,6 @@ public static class ServiceCollectionExtensions {
 		// RegisterKey) подождут места; event loop как consumer обычно их быстро разгружает.
 		services.AddSingleton(_ => CreateEventChannel());
 
-		services.AddSingleton<OrchestratorLifecycle>();
 		services.TryAddSingleton<JobOrchestratorHostOptions>();
 		// JobOrchestratorRuntime регистрируется concrete'но, потому что EventLoop принимает его типом
 		// (для конструирования IterationHandle с reverse-link на Instance). Interface IJobOrchestrator —
@@ -190,7 +189,6 @@ public static class ServiceCollectionExtensions {
 		services.TryAddKeyedSingleton<JobOrchestratorHostOptions>(tenantKey, (_, _) => new JobOrchestratorHostOptions());
 
 		// Keyed-сервисы с keyed-зависимостями — авто-пропагация ключа через wrapper.
-		services.AddKeyedSingletonWithPropagation<OrchestratorLifecycle>(tenantKey);
 		services.AddKeyedSingletonWithPropagation<StageRunner>(tenantKey);
 		services.AddKeyedSingletonWithPropagation<DueScanner>(tenantKey);
 		services.AddKeyedSingletonWithPropagation<EventLoop>(tenantKey);

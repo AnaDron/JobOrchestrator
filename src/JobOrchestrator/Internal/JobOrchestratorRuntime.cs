@@ -1,6 +1,8 @@
 using System.Collections;
 using System.Collections.Immutable;
+using System.Diagnostics.CodeAnalysis;
 using System.Threading.Channels;
+using JobOrchestrator.Configuration;
 using Microsoft.Extensions.Logging;
 
 namespace JobOrchestrator.Internal;
@@ -24,26 +26,32 @@ namespace JobOrchestrator.Internal;
 /// — источник <see cref="IStageHandle.Changes"/>.
 /// </para>
 /// </summary>
-internal sealed class JobOrchestratorRuntime : IJobOrchestrator {
+[SuppressMessage("Usage", "CA1816:Dispose methods should call SuppressFinalize",
+	Justification = "Sealed class без финализатора — GC.SuppressFinalize был бы no-op и misleading.")]
+internal sealed class JobOrchestratorRuntime : IJobOrchestrator, IDisposable {
 	private readonly Channel<OrchestratorEvent> _channel;
 	private readonly InstanceManager _instances;
-	private readonly OrchestratorLifecycle _lifecycle;
 	private readonly ILogger<JobOrchestratorRuntime> _logger;
 	private readonly Dictionary<string, StageHandle> _stageHandles;
 	private readonly Dictionary<string, DomainHandle> _domainsByName;
 	private readonly ImmutableArray<DomainHandle> _domainsOrdered;
 	private readonly DomainHandle _rootDomain;
 
+	// Lifecycle state (бывший OrchestratorLifecycle): faulted-флаг + worker-CTS, координируют
+	// fault-состояние между EventLoop (выставляет при handler-crash), HostedService (выставляет при
+	// crash event loop) и публичным IJobOrchestrator-фасадом (читает для fail-fast в RunAsync/RegisterKey).
+	private readonly CancellationTokenSource _workersCts = new();
+	private volatile bool _faulted;
+	private bool _disposed;
+
 	public JobOrchestratorRuntime(
 		Channel<OrchestratorEvent> channel,
 		StageRegistry registry,
 		InstanceManager instances,
-		OrchestratorLifecycle lifecycle,
 		ILogger<JobOrchestratorRuntime> logger
 	) {
 		_channel = channel;
 		_instances = instances;
-		_lifecycle = lifecycle;
 		_logger = logger;
 
 		var entriesByDomain = registry.AllStages
@@ -74,7 +82,38 @@ internal sealed class JobOrchestratorRuntime : IJobOrchestrator {
 			.ToDictionary(s => s.Name, StringComparer.Ordinal);
 	}
 
-	public bool IsFaulted => _lifecycle.IsFaulted;
+	public bool IsFaulted => _faulted;
+
+	/// <summary>Cancel-ится при <see cref="MarkFaulted"/>. Не cancel-ится при graceful <see cref="CloseChannel"/>.</summary>
+	internal CancellationToken WorkersCancellationToken => _workersCts.Token;
+
+	/// <summary>
+	/// Выставляет fault-флаг, отменяет running workers и закрывает Channel — внешние вызовы получают fail-fast.
+	/// </summary>
+	internal void MarkFaulted() {
+		_faulted = true;
+		try { _workersCts.Cancel(); } catch (ObjectDisposedException) { }
+		_channel.Writer.TryComplete();
+	}
+
+	/// <summary>Закрывает Channel без выставления Faulted и без cancel running workers (graceful shutdown).</summary>
+	internal void CloseChannel() {
+		_channel.Writer.TryComplete();
+	}
+
+	/// <summary>
+	/// Отменяет running-итерации без fault-флага (graceful shutdown после
+	/// <see cref="JobOrchestratorHostOptions.ShutdownIterationTimeout"/>).
+	/// </summary>
+	internal void CancelRunningWorkers() {
+		try { _workersCts.Cancel(); } catch (ObjectDisposedException) { }
+	}
+
+	public void Dispose() {
+		if (_disposed) return;
+		_disposed = true;
+		_workersCts.Dispose();
+	}
 
 	public IDomainHandle Root => _rootDomain;
 
@@ -145,7 +184,7 @@ internal sealed class JobOrchestratorRuntime : IJobOrchestrator {
 	/// против ExpectedKeyNames), поэтому валидация ключей здесь не повторяется.
 	/// </summary>
 	internal async Task<IIterationHandle> RunAsync(InstanceIdentity identity, CancellationToken ct = default) {
-		if (_lifecycle.IsFaulted) {
+		if (_faulted) {
 			Log.TriggerFaulted(_logger, identity.Stage.Name, null);
 			throw new IterationRejectedException(IterationRejectReason.Faulted, identity.FullyQualifiedName,
 				$"Запуск инстанса {identity.FullyQualifiedName} невозможен: оркестратор в Faulted-состоянии.");
@@ -203,7 +242,7 @@ internal sealed class JobOrchestratorRuntime : IJobOrchestrator {
 	}
 
 	private void ThrowIfFaulted() {
-		if (_lifecycle.IsFaulted) {
+		if (_faulted) {
 			throw new InvalidOperationException("Оркестратор находится в Faulted-состоянии — операции недоступны до рестарта.");
 		}
 	}

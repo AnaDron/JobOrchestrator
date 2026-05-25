@@ -28,8 +28,8 @@ public sealed class JobOrchestratorHostOptions {
 	public int ConcurrencyDeferJitterMaxMilliseconds { get; set; } = 500;
 
 	/// <summary>
-	/// После <see cref="Internal.OrchestratorLifecycle.CloseChannel"/> при graceful shutdown: максимальное
-	/// ожидание завершения running-итераций до <see cref="Internal.OrchestratorLifecycle.CancelRunningWorkers"/>.
+	/// После <see cref="Internal.JobOrchestratorRuntime.CloseChannel"/> при graceful shutdown: максимальное
+	/// ожидание завершения running-итераций до <see cref="Internal.JobOrchestratorRuntime.CancelRunningWorkers"/>.
 	/// <c>null</c> — не форсировать cancel (только <c>stoppingToken</c> хоста).
 	/// </summary>
 	public TimeSpan? ShutdownIterationTimeout { get; set; }

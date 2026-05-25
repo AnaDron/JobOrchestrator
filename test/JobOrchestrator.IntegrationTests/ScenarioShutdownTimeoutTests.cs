@@ -4,7 +4,7 @@ namespace JobOrchestrator.IntegrationTests;
 
 /// <summary>
 /// <see cref="JobOrchestratorHostOptions.ShutdownIterationTimeout"/> форсирует cancel running-итераций
-/// после <see cref="Internal.OrchestratorLifecycle.CloseChannel"/>.
+/// после <see cref="Internal.JobOrchestratorRuntime.CloseChannel"/>.
 /// </summary>
 public sealed class ScenarioShutdownTimeoutTests {
 	private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(10);

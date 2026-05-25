@@ -42,7 +42,6 @@ internal sealed partial class EventLoop : IDisposable {
 	private readonly DueScanner scanner;
 	private readonly Channel<OrchestratorEvent> channel;
 	private readonly IJobStateStore stateStore;
-	private readonly OrchestratorLifecycle lifecycle;
 	private readonly JobOrchestratorHostOptions hostOptions;
 	private readonly JobOrchestratorRuntime runtime;
 	private readonly ILogger<EventLoop> logger;
@@ -58,7 +57,6 @@ internal sealed partial class EventLoop : IDisposable {
 		DueScanner scanner,
 		Channel<OrchestratorEvent> channel,
 		IJobStateStore stateStore,
-		OrchestratorLifecycle lifecycle,
 		JobOrchestratorHostOptions hostOptions,
 		JobOrchestratorRuntime runtime,
 		ILogger<EventLoop> logger,
@@ -70,7 +68,6 @@ internal sealed partial class EventLoop : IDisposable {
 		this.scanner = scanner;
 		this.channel = channel;
 		this.stateStore = stateStore;
-		this.lifecycle = lifecycle;
 		this.hostOptions = hostOptions;
 		this.runtime = runtime;
 		this.logger = logger;
@@ -159,7 +156,7 @@ internal sealed partial class EventLoop : IDisposable {
 						if (!stateMutatingCrash) {
 							Log.RepeatedHandlerCrashes(logger, _handlerCrashCount, null);
 						}
-						lifecycle.MarkFaulted();
+						runtime.MarkFaulted();
 						break;
 					}
 				}
@@ -173,7 +170,7 @@ internal sealed partial class EventLoop : IDisposable {
 			// HostedService.ExecuteAsync ещё не успел вызвать свой CloseChannel — race-окно, в которое
 			// внешние Runtime.RunAsync/RegisterKey могут проскочить WriteAsync (channel ещё open) и
 			// зависнуть на await tcs.Task, потому что consumer уже ушёл. TryComplete идемпотентен.
-			lifecycle.CloseChannel();
+			runtime.CloseChannel();
 			DrainPendingRequests();
 			// Финализируем все Terminating-инстансы (их finalize-events не прилетят при закрытом Channel).
 			await FinalizeAllTerminatingAsync().ConfigureAwait(false);
@@ -389,7 +386,7 @@ internal sealed partial class EventLoop : IDisposable {
 
 	private async Task RunIterationSafeAsync(Instance instance, TriggerSource trigger, Action releaseConcurrency, CancellationToken ct) {
 		try {
-			await runner.RunIterationAsync(instance, trigger, releaseConcurrency, ct).ConfigureAwait(false);
+			await runner.RunIterationAsync(instance, trigger, releaseConcurrency, runtime.WorkersCancellationToken, ct).ConfigureAwait(false);
 		} catch (Exception ex) {
 			Log.UnhandledIterationFault(logger, instance.FullyQualifiedName, ex);
 		}

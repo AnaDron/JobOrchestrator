@@ -12,7 +12,6 @@ internal sealed class StageRunner(
 	IServiceProvider rootProvider,
 	IJobStateStore stateStore,
 	Channel<OrchestratorEvent> channel,
-	OrchestratorLifecycle lifecycle,
 	TimeProvider time,
 	ILoggerFactory loggerFactory
 ) {
@@ -20,10 +19,11 @@ internal sealed class StageRunner(
 
 	/// <summary>
 	/// Запускает одну итерацию. <paramref name="releaseConcurrency"/> вызывается в finally — это callback
-	/// от <see cref="EventLoop"/>, освобождающий per-stage + global семафоры. Runner не знает о структуре
-	/// лимитов, ему нужен только action-hook.
+	/// от <see cref="EventLoop"/>, освобождающий per-stage + global семафоры. <paramref name="workersToken"/> —
+	/// токен, cancel-ящийся при crash event loop (через <see cref="JobOrchestratorRuntime.MarkFaulted"/>);
+	/// сшивается с shutdown/watchdog/cascade в linked CTS.
 	/// </summary>
-	public async Task RunIterationAsync(Instance instance, TriggerSource trigger, Action releaseConcurrency, CancellationToken stoppingToken) {
+	public async Task RunIterationAsync(Instance instance, TriggerSource trigger, Action releaseConcurrency, CancellationToken workersToken, CancellationToken stoppingToken) {
 		string correlationId = Guid.NewGuid().ToString("N");
 		var logFields = BuildLogScopeFields(instance, correlationId);
 
@@ -32,7 +32,7 @@ internal sealed class StageRunner(
 
 		// Различаем источники cancel через ОТДЕЛЬНЫЕ CTS:
 		// - stoppingToken — shutdown хоста;
-		// - lifecycle.WorkersCancellationToken — crash event loop;
+		// - workersToken — crash event loop;
 		// - watchdogCts — ExecutionTimeout превышен;
 		// - cascadeCts (instance.RunCts) — событие-loop отменил из-за cascade-removal.
 		// runCts — linked-источник всех вышеперечисленных, передаётся в IJobService.ExecuteAsync.
@@ -41,8 +41,8 @@ internal sealed class StageRunner(
 			: null;
 		var cascadeCts = new CancellationTokenSource();
 		var runCts = watchdogCts is not null
-			? CancellationTokenSource.CreateLinkedTokenSource(stoppingToken, lifecycle.WorkersCancellationToken, watchdogCts.Token, cascadeCts.Token)
-			: CancellationTokenSource.CreateLinkedTokenSource(stoppingToken, lifecycle.WorkersCancellationToken, cascadeCts.Token);
+			? CancellationTokenSource.CreateLinkedTokenSource(stoppingToken, workersToken, watchdogCts.Token, cascadeCts.Token)
+			: CancellationTokenSource.CreateLinkedTokenSource(stoppingToken, workersToken, cascadeCts.Token);
 		// EventLoop вызывает Cancel() на cascadeCts (через instance.RunCts) для cascade-removal.
 		// Не CAS: event-loop single-threaded, между EndRunning предыдущего runner-а и стартом этого
 		// нет concurrent-writer'а к RunCts. Race в обратную сторону (cascade vs наш ClearRunCtsIfEquals

@@ -419,7 +419,7 @@ public sealed class ScenarioWaitForStageTests {
 	public async Task RunAsync_AfterFaulted_ThrowsIterationRejectedFaulted() {
 		// Контракт: при Faulted-оркестраторе RunAsync синхронно бросает IterationRejectedException(Faulted),
 		// а не InvalidOperationException и не висит в ожидании tcs.Task.
-		// Используем lifecycle.MarkFaulted() напрямую вместо host.StopAsync(): MarkFaulted синхронно
+		// Используем runtime.MarkFaulted() напрямую вместо host.StopAsync(): MarkFaulted синхронно
 		// ставит IsFaulted=true И закрывает channel, что гарантирует fail-fast путь в Runtime.RunAsync
 		// без race-окна между EventLoop exit и Channel.TryComplete (которое возникало при host.StopAsync
 		// под нагрузкой parallel-test-run'а и проявлялось как hang всего test-host'а).
@@ -428,10 +428,10 @@ public sealed class ScenarioWaitForStageTests {
 			registerFakes: s => s.AddSingleton<FakeServiceA>());
 
 		var orchestrator = host.Services.GetRequiredService<IJobOrchestrator>();
-		var lifecycle = host.Services.GetRequiredService<OrchestratorLifecycle>();
+		var runtime = host.Services.GetRequiredService<JobOrchestratorRuntime>();
 		await host.StartAsync().ConfigureAwait(false);
 		try {
-			lifecycle.MarkFaulted();
+			runtime.MarkFaulted();
 
 			Func<Task> act = () => orchestrator.Root["a"][InstanceKeys.Empty].RunAsync();
 			var ex = (await act.Should().ThrowAsync<IterationRejectedException>().ConfigureAwait(false)).Which;

@@ -36,13 +36,11 @@ public sealed class StageRunnerCompletionPublishTests {
 
 	private static StageRunner CreateRunner(
 		Channel<OrchestratorEvent> channel,
-		OrchestratorLifecycle lifecycle,
 		IServiceProvider root
 	) => new(
 		root,
 		root.GetRequiredService<IJobStateStore>(),
 		channel,
-		lifecycle,
 		TimeProvider.System,
 		NullLoggerFactory.Instance);
 
@@ -50,7 +48,6 @@ public sealed class StageRunnerCompletionPublishTests {
 	public async Task RunIterationAsync_WhenChannelClosedAfterSuccess_EndRunningClearsRunningFlag() {
 		var stage = TestStages.Make("x", new() { ServiceType = typeof(NoOpJobService) });
 		var channel = Channel.CreateUnbounded<OrchestratorEvent>();
-		var lifecycle = new OrchestratorLifecycle(channel);
 
 		var services = new ServiceCollection();
 		services.AddSingleton<IJobStateStore, NullJobStateStore>();
@@ -61,10 +58,10 @@ public sealed class StageRunnerCompletionPublishTests {
 		instance.Sink = new ChannelJobContextSink(channel.Writer, instance);
 		instance.TryBeginRunning().Should().BeTrue();
 
-		lifecycle.CloseChannel();
+		channel.Writer.TryComplete();
 
-		var runner = CreateRunner(channel, lifecycle, root);
-		await runner.RunIterationAsync(instance, TriggerSource.Auto, NoopRelease, CancellationToken.None).ConfigureAwait(false);
+		var runner = CreateRunner(channel, root);
+		await runner.RunIterationAsync(instance, TriggerSource.Auto, NoopRelease, CancellationToken.None, CancellationToken.None).ConfigureAwait(false);
 
 		instance.IsRunning.Should().BeFalse("completion не опубликован — runner обязан снять Running");
 		channel.Reader.TryRead(out _).Should().BeFalse("закрытый channel не принимает StageCompleted");
@@ -74,7 +71,6 @@ public sealed class StageRunnerCompletionPublishTests {
 	public async Task RunIterationAsync_WhenChannelClosedAfterFailure_EndRunningClearsRunningFlag() {
 		var stage = TestStages.Make("x", new() { ServiceType = typeof(FailingJobService) });
 		var channel = Channel.CreateUnbounded<OrchestratorEvent>();
-		var lifecycle = new OrchestratorLifecycle(channel);
 
 		var services = new ServiceCollection();
 		services.AddSingleton<IJobStateStore, NullJobStateStore>();
@@ -85,10 +81,10 @@ public sealed class StageRunnerCompletionPublishTests {
 		instance.Sink = new ChannelJobContextSink(channel.Writer, instance);
 		instance.TryBeginRunning().Should().BeTrue();
 
-		lifecycle.CloseChannel();
+		channel.Writer.TryComplete();
 
-		var runner = CreateRunner(channel, lifecycle, root);
-		await runner.RunIterationAsync(instance, TriggerSource.Auto, NoopRelease, CancellationToken.None).ConfigureAwait(false);
+		var runner = CreateRunner(channel, root);
+		await runner.RunIterationAsync(instance, TriggerSource.Auto, NoopRelease, CancellationToken.None, CancellationToken.None).ConfigureAwait(false);
 
 		instance.IsRunning.Should().BeFalse("StageFailed не опубликован — runner обязан снять Running");
 		channel.Reader.TryRead(out _).Should().BeFalse();
@@ -98,7 +94,6 @@ public sealed class StageRunnerCompletionPublishTests {
 	public async Task RunIterationAsync_WhenCompletionPublished_LeavesRunningForEventLoop() {
 		var stage = TestStages.Make("x", new() { ServiceType = typeof(NoOpJobService) });
 		var channel = Channel.CreateUnbounded<OrchestratorEvent>();
-		var lifecycle = new OrchestratorLifecycle(channel);
 
 		var services = new ServiceCollection();
 		services.AddSingleton<IJobStateStore, NullJobStateStore>();
@@ -109,8 +104,8 @@ public sealed class StageRunnerCompletionPublishTests {
 		instance.Sink = new ChannelJobContextSink(channel.Writer, instance);
 		instance.TryBeginRunning().Should().BeTrue();
 
-		var runner = CreateRunner(channel, lifecycle, root);
-		await runner.RunIterationAsync(instance, TriggerSource.Auto, NoopRelease, CancellationToken.None).ConfigureAwait(false);
+		var runner = CreateRunner(channel, root);
+		await runner.RunIterationAsync(instance, TriggerSource.Auto, NoopRelease, CancellationToken.None, CancellationToken.None).ConfigureAwait(false);
 
 		instance.IsRunning.Should().BeTrue("при успешной публикации EndRunning делает только event loop");
 		channel.Reader.TryRead(out var evt).Should().BeTrue();

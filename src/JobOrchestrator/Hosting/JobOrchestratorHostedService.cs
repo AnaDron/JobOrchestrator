@@ -8,9 +8,9 @@ namespace JobOrchestrator.Hosting;
 
 /// <summary>
 /// Стартует <see cref="EventLoop"/> и <see cref="DueScanner"/> как concurrent-tasks BackgroundService.
-/// Перехватывает крах любого из них в <c>LogCritical</c> и выставляет <see cref="OrchestratorLifecycle.MarkFaulted"/> —
+/// Перехватывает крах любого из них в <c>LogCritical</c> и выставляет <see cref="JobOrchestratorRuntime.MarkFaulted"/> —
 /// <see cref="IJobOrchestrator"/>-фасад начинает fail-fast для всех внешних вызовов.
-/// При штатном shutdown закрывает channel через <see cref="OrchestratorLifecycle.CloseChannel"/>.
+/// При штатном shutdown закрывает channel через <see cref="JobOrchestratorRuntime.CloseChannel"/>.
 /// <para>
 /// <see cref="StopAsync"/> идемпотентен через <c>Interlocked _stopGate</c>: повторный вызов — no-op,
 /// чтобы не дублировать shutdown-log.
@@ -21,7 +21,6 @@ internal sealed class JobOrchestratorHostedService(
 	DueScanner scanner,
 	StageRegistry registry,
 	IServiceProvider services,
-	OrchestratorLifecycle lifecycle,
 	JobOrchestratorHostOptions hostOptions,
 	JobOrchestratorRuntime runtime,
 	ILogger<JobOrchestratorHostedService> logger
@@ -58,14 +57,14 @@ internal sealed class JobOrchestratorHostedService(
 		try {
 			await eventLoop.RunAsync(stoppingToken).ConfigureAwait(false);
 			// Штатный shutdown — закрываем channel, чтобы внешние вызовы получили fail-fast вместо подвисания.
-			lifecycle.CloseChannel();
+			runtime.CloseChannel();
 			await ApplyShutdownIterationTimeoutAsync(stoppingToken).ConfigureAwait(false);
 		} catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) {
-			lifecycle.CloseChannel();
+			runtime.CloseChannel();
 			await ApplyShutdownIterationTimeoutAsync(stoppingToken).ConfigureAwait(false);
 		} catch (Exception ex) {
 			Log.EventLoopCrashed(logger, ex);
-			lifecycle.MarkFaulted();
+			runtime.MarkFaulted();
 			// НЕ throw — иначе BackgroundService.StopHost остановит весь хост.
 		} finally {
 			// Ждём, пока DueScanner завершится (stoppingToken его уже остановит).
@@ -84,7 +83,7 @@ internal sealed class JobOrchestratorHostedService(
 		} catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) {
 			// Host уже отменяет stoppingToken — всё равно форсируем cancel workers ниже.
 		}
-		lifecycle.CancelRunningWorkers();
+		runtime.CancelRunningWorkers();
 		Log.ShutdownWorkersCancelled(logger, timeout, null);
 	}
 

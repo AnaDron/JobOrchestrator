@@ -20,8 +20,7 @@ public sealed class ScenarioCrashIsolationTests {
 			orchestrator.IsFaulted.Should().BeFalse();
 
 			// Симулируем крах event loop через прямой MarkFaulted (internal API через InternalsVisibleTo).
-			var lifecycle = host.Services.GetRequiredService<OrchestratorLifecycle>();
-			lifecycle.MarkFaulted();
+			host.Services.GetRequiredService<JobOrchestratorRuntime>().MarkFaulted();
 			orchestrator.IsFaulted.Should().BeTrue();
 
 			Func<Task> act = () => orchestrator.Root["a"][InstanceKeys.Empty].RunAsync();
@@ -41,7 +40,7 @@ public sealed class ScenarioCrashIsolationTests {
 		var orchestrator = host.Services.GetRequiredService<IJobOrchestrator>();
 		await host.StartAsync().ConfigureAwait(false);
 		try {
-			host.Services.GetRequiredService<OrchestratorLifecycle>().MarkFaulted();
+			host.Services.GetRequiredService<JobOrchestratorRuntime>().MarkFaulted();
 
 			Action register = () => orchestrator.Root["a"].RegisterKey("k1");
 			register.Should().Throw<InvalidOperationException>();
@@ -65,7 +64,7 @@ public sealed class ScenarioCrashIsolationTests {
 		var orchestrator = host.Services.GetRequiredService<IJobOrchestrator>();
 		await host.StartAsync().ConfigureAwait(false);
 		try {
-			host.Services.GetRequiredService<OrchestratorLifecycle>().MarkFaulted();
+			host.Services.GetRequiredService<JobOrchestratorRuntime>().MarkFaulted();
 
 			// GetOverview не throws — даёт snapshot для диагностики.
 			var act = () => orchestrator.GetOverview();
