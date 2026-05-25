@@ -2,6 +2,7 @@ using System.Collections.Frozen;
 using System.Diagnostics.CodeAnalysis;
 using System.Threading.Channels;
 using JobOrchestrator.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
 namespace JobOrchestrator.Internal;
@@ -38,13 +39,14 @@ namespace JobOrchestrator.Internal;
 internal sealed partial class EventLoop : IDisposable {
 	private readonly StageRegistry registry;
 	private readonly InstanceManager instances;
-	private readonly StageRunner runner;
 	private readonly DueScanner scanner;
 	private readonly Channel<OrchestratorEvent> channel;
 	private readonly IJobStateStore stateStore;
+	private readonly IServiceProvider rootProvider;
 	private readonly JobOrchestratorHostOptions hostOptions;
 	private readonly JobOrchestratorRuntime runtime;
 	private readonly ILogger<EventLoop> logger;
+	private readonly ILogger _stageLogger;
 	private readonly TimeProvider time;
 	private readonly FrozenDictionary<StageDescriptor, SemaphoreSlim> _stageSemaphores;
 	private readonly SemaphoreSlim? _globalSem;
@@ -53,24 +55,26 @@ internal sealed partial class EventLoop : IDisposable {
 	public EventLoop(
 		StageRegistry registry,
 		InstanceManager instances,
-		StageRunner runner,
 		DueScanner scanner,
 		Channel<OrchestratorEvent> channel,
 		IJobStateStore stateStore,
+		IServiceProvider rootProvider,
 		JobOrchestratorHostOptions hostOptions,
 		JobOrchestratorRuntime runtime,
 		ILogger<EventLoop> logger,
+		ILoggerFactory loggerFactory,
 		TimeProvider time
 	) {
 		this.registry = registry;
 		this.instances = instances;
-		this.runner = runner;
 		this.scanner = scanner;
 		this.channel = channel;
 		this.stateStore = stateStore;
+		this.rootProvider = rootProvider;
 		this.hostOptions = hostOptions;
 		this.runtime = runtime;
 		this.logger = logger;
+		_stageLogger = loggerFactory.CreateLogger("JobOrchestrator.StageRunner");
 		this.time = time;
 
 		// Per-stage семафоры: стадии без ConcurrencyLimit отсутствуют в словаре (TryAcquire = true бесплатно).
@@ -418,10 +422,120 @@ internal sealed partial class EventLoop : IDisposable {
 
 	private async Task RunIterationSafeAsync(Instance instance, TriggerSource trigger, Action releaseConcurrency, CancellationToken ct) {
 		try {
-			await runner.RunIterationAsync(instance, trigger, releaseConcurrency, runtime.WorkersCancellationToken, ct).ConfigureAwait(false);
+			await RunIterationAsync(instance, trigger, releaseConcurrency, runtime.WorkersCancellationToken, ct).ConfigureAwait(false);
 		} catch (Exception ex) {
 			Log.UnhandledIterationFault(logger, instance.FullyQualifiedName, ex);
 		}
+	}
+
+	/// <summary>
+	/// Запускает одну итерацию инстанса в свежем DI-scope с watchdog-CTS, формирует <see cref="JobContext"/>,
+	/// разворачивает logger scope со структурными полями и публикует <see cref="StageCompletedEvent"/> или <see cref="StageFailedEvent"/>.
+	/// <para>
+	/// <paramref name="releaseConcurrency"/> вызывается в finally — освобождает per-stage + global семафоры.
+	/// <paramref name="workersToken"/> — токен, cancel-ящийся при crash event loop (через <see cref="JobOrchestratorRuntime.MarkFaulted"/>);
+	/// сшивается с shutdown/watchdog/cascade в linked CTS.
+	/// </para>
+	/// </summary>
+	private async Task RunIterationAsync(Instance instance, TriggerSource trigger, Action releaseConcurrency, CancellationToken workersToken, CancellationToken stoppingToken) {
+		string correlationId = Guid.NewGuid().ToString("N");
+		var logFields = BuildLogScopeFields(instance, correlationId);
+
+		await using var scope = rootProvider.CreateAsyncScope();
+		using var loggerScope = _stageLogger.BeginScope(logFields);
+
+		// Различаем источники cancel через ОТДЕЛЬНЫЕ CTS:
+		// - stoppingToken — shutdown хоста;
+		// - workersToken — crash event loop;
+		// - watchdogCts — ExecutionTimeout превышен;
+		// - cascadeCts (instance.RunCts) — событие-loop отменил из-за cascade-removal.
+		// runCts — linked-источник всех вышеперечисленных, передаётся в IJobService.ExecuteAsync.
+		var watchdogCts = instance.Stage.ExecutionTimeout is { } timeout
+			? new CancellationTokenSource(timeout)
+			: null;
+		var cascadeCts = new CancellationTokenSource();
+		var runCts = watchdogCts is not null
+			? CancellationTokenSource.CreateLinkedTokenSource(stoppingToken, workersToken, watchdogCts.Token, cascadeCts.Token)
+			: CancellationTokenSource.CreateLinkedTokenSource(stoppingToken, workersToken, cascadeCts.Token);
+		// EventLoop вызывает Cancel() на cascadeCts (через instance.RunCts) для cascade-removal.
+		// Не CAS: event-loop single-threaded, между EndRunning предыдущего runner-а и стартом этого
+		// нет concurrent-writer'а к RunCts.
+		instance.RunCts = cascadeCts;
+
+		var completionPublished = false;
+		try {
+			var service = (IJobService)scope.ServiceProvider.GetRequiredService(instance.Stage.ServiceType);
+			var jobState = new DefaultJobState(stateStore, instance.StateScope);
+
+			var jobContext = new JobContext {
+				CorrelationId = correlationId,
+				Trigger = trigger,
+				State = jobState,
+				LastSuccessAt = instance.Metrics.Stats.LastSuccess,
+				StageName = instance.Stage.Name,
+				Keys = instance.Identity.Keys,
+				FullyQualifiedName = instance.FullyQualifiedName,
+				Sink = instance.Sink,
+			};
+
+			Log.IterationStart(_stageLogger, instance.FullyQualifiedName, trigger, null);
+			await service.ExecuteAsync(jobContext, runCts.Token).ConfigureAwait(false);
+			Log.IterationCompleted(_stageLogger, instance.FullyQualifiedName, null);
+			completionPublished = channel.Writer.Publish(new StageCompletedEvent(instance, time.GetUtcNow()));
+			if (!completionPublished) {
+				Log.CompletionNotPublished(_stageLogger, instance.FullyQualifiedName, nameof(StageCompletedEvent), null);
+			}
+		} catch (OperationCanceledException oce) {
+			Exception failure;
+			if (stoppingToken.IsCancellationRequested) {
+				Log.IterationCancelledShutdown(_stageLogger, instance.FullyQualifiedName, null);
+				failure = oce;
+			} else if (watchdogCts?.IsCancellationRequested is true) {
+				Log.IterationCancelledWatchdog(_stageLogger, instance.FullyQualifiedName, null);
+				failure = new TimeoutException(
+					$"Стадия {instance.FullyQualifiedName} превысила ExecutionTimeout ({instance.Stage.ExecutionTimeout}).",
+					oce);
+			} else if (cascadeCts.IsCancellationRequested) {
+				Log.IterationCancelledCascade(_stageLogger, instance.FullyQualifiedName, null);
+				failure = oce;
+			} else {
+				Log.IterationFailed(_stageLogger, instance.FullyQualifiedName, oce);
+				failure = oce;
+			}
+			completionPublished = PublishStageFailed(instance, failure);
+		} catch (Exception ex) {
+			Log.IterationFailed(_stageLogger, instance.FullyQualifiedName, ex);
+			completionPublished = PublishStageFailed(instance, ex);
+		} finally {
+			instance.ClearRunCtsIfEquals(cascadeCts);
+			runCts.Dispose();
+			watchdogCts?.Dispose();
+			cascadeCts.Dispose();
+			releaseConcurrency();
+			if (!completionPublished) {
+				instance.EndRunning();
+			}
+		}
+	}
+
+	private bool PublishStageFailed(Instance instance, Exception failure) {
+		if (channel.Writer.Publish(new StageFailedEvent(instance, failure, time.GetUtcNow()))) {
+			return true;
+		}
+		Log.CompletionNotPublished(_stageLogger, instance.FullyQualifiedName, nameof(StageFailedEvent), null);
+		return false;
+	}
+
+	private static Dictionary<string, object> BuildLogScopeFields(Instance instance, string correlationId) {
+		Dictionary<string, object> fields = new(3 + instance.DependencyKeys.Count, StringComparer.Ordinal) {
+			["CorrelationId"] = correlationId,
+			["FullyQualifiedName"] = instance.FullyQualifiedName,
+			["StageName"] = instance.Stage.Name,
+		};
+		foreach (var kv in instance.DependencyKeys) {
+			fields[$"{kv.Key}Key"] = kv.Value;
+		}
+		return fields;
 	}
 
 	private void DeferIteration(Instance instance, TriggerSource trigger) {
@@ -833,5 +947,34 @@ internal sealed partial class EventLoop : IDisposable {
 		public static readonly Action<ILogger, string, Exception?> ManualTriggerCallerCancelled =
 			LoggerMessage.Define<string>(LogLevel.Debug, new EventId(3031, nameof(ManualTriggerCallerCancelled)),
 				"Manual-запуск {Instance} пропущен — caller отменил cancellation token до обработки события");
+
+		// EventId-ы 4xxx — диапазон stage-iteration logs (бывший StageRunner).
+		public static readonly Action<ILogger, string, TriggerSource, Exception?> IterationStart =
+			LoggerMessage.Define<string, TriggerSource>(LogLevel.Debug, new EventId(4001, nameof(IterationStart)),
+				"Старт итерации {Instance} (trigger={Trigger}).");
+
+		public static readonly Action<ILogger, string, Exception?> IterationCompleted =
+			LoggerMessage.Define<string>(LogLevel.Debug, new EventId(4002, nameof(IterationCompleted)),
+				"Итерация {Instance} успешно завершена.");
+
+		public static readonly Action<ILogger, string, Exception?> IterationCancelledShutdown =
+			LoggerMessage.Define<string>(LogLevel.Information, new EventId(4003, nameof(IterationCancelledShutdown)),
+				"Итерация {Instance} отменена при shutdown.");
+
+		public static readonly Action<ILogger, string, Exception?> IterationCancelledWatchdog =
+			LoggerMessage.Define<string>(LogLevel.Warning, new EventId(4004, nameof(IterationCancelledWatchdog)),
+				"Итерация {Instance} превысила ExecutionTimeout (watchdog).");
+
+		public static readonly Action<ILogger, string, Exception?> IterationFailed =
+			LoggerMessage.Define<string>(LogLevel.Warning, new EventId(4005, nameof(IterationFailed)),
+				"Итерация {Instance} завершилась с ошибкой.");
+
+		public static readonly Action<ILogger, string, Exception?> IterationCancelledCascade =
+			LoggerMessage.Define<string>(LogLevel.Information, new EventId(4006, nameof(IterationCancelledCascade)),
+				"Итерация {Instance} отменена при cascade-removal.");
+
+		public static readonly Action<ILogger, string, string, Exception?> CompletionNotPublished =
+			LoggerMessage.Define<string, string>(LogLevel.Debug, new EventId(4007, nameof(CompletionNotPublished)),
+				"Итерация {Instance}: {EventType} не опубликован (channel закрыт); Running сброшен в finally.");
 	}
 }

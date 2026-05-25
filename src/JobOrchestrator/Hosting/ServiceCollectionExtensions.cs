@@ -127,7 +127,6 @@ public static class ServiceCollectionExtensions {
 		});
 
 		services.AddSingleton<InstanceManager>();
-		services.AddSingleton<StageRunner>();
 		services.AddSingleton<DueScanner>();
 		services.AddSingleton<EventLoop>();
 
@@ -189,7 +188,6 @@ public static class ServiceCollectionExtensions {
 		services.TryAddKeyedSingleton<JobOrchestratorHostOptions>(tenantKey, (_, _) => new JobOrchestratorHostOptions());
 
 		// Keyed-сервисы с keyed-зависимостями — авто-пропагация ключа через wrapper.
-		services.AddKeyedSingletonWithPropagation<StageRunner>(tenantKey);
 		services.AddKeyedSingletonWithPropagation<DueScanner>(tenantKey);
 		services.AddKeyedSingletonWithPropagation<EventLoop>(tenantKey);
 		services.AddKeyedSingletonWithPropagation<JobOrchestratorRuntime>(tenantKey);
