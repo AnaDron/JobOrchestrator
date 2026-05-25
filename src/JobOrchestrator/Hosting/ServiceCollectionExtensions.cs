@@ -126,7 +126,6 @@ public static class ServiceCollectionExtensions {
 			return registry;
 		});
 
-		services.AddSingleton<InstanceManager>();
 		services.AddSingleton<EventLoop>();
 
 		// Bounded channel: backpressure через Wait. При заполнении внешние писатели (Manual triggers,
@@ -176,9 +175,6 @@ public static class ServiceCollectionExtensions {
 
 		// Per-tenant bounded channel — фабрика обязательна (у Channel нет конструктора).
 		services.AddKeyedSingleton(tenantKey, (_, _) => CreateEventChannel());
-
-		// Простые keyed-singleton'ы без keyed-зависимостей — дефолтный ActivatorUtilities-резолв.
-		services.AddKeyedSingleton<InstanceManager>(tenantKey);
 
 		// Per-tenant дефолтный HostOptions: keyed-singleton под tenantKey. Пользовательский override
 		// через jobs.ConfigureJobOrchestratorHost(...) уже зарегистрирован на probe-pass ДО этой

@@ -53,8 +53,8 @@ public sealed class ScenarioKeyedMultiTenancyTests {
 		// Internal state — раздельный.
 		host.Services.GetRequiredKeyedService<StageRegistry>("evotor")
 			.Should().NotBeSameAs(host.Services.GetRequiredKeyedService<StageRegistry>("ozon"));
-		host.Services.GetRequiredKeyedService<InstanceManager>("evotor")
-			.Should().NotBeSameAs(host.Services.GetRequiredKeyedService<InstanceManager>("ozon"));
+		host.Services.GetRequiredKeyedService<JobOrchestratorRuntime>("evotor")
+			.Should().NotBeSameAs(host.Services.GetRequiredKeyedService<JobOrchestratorRuntime>("ozon"));
 	}
 
 	[Fact]

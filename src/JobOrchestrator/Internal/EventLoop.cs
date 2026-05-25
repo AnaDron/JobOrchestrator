@@ -47,7 +47,6 @@ internal sealed partial class EventLoop : IDisposable {
 	private static readonly TimeSpan BacklogWarningInterval = TimeSpan.FromSeconds(30);
 
 	private readonly StageRegistry registry;
-	private readonly InstanceManager instances;
 	private readonly Channel<OrchestratorEvent> channel;
 	private readonly IJobStateStore stateStore;
 	private readonly IServiceProvider rootProvider;
@@ -64,7 +63,6 @@ internal sealed partial class EventLoop : IDisposable {
 
 	public EventLoop(
 		StageRegistry registry,
-		InstanceManager instances,
 		Channel<OrchestratorEvent> channel,
 		IJobStateStore stateStore,
 		IServiceProvider rootProvider,
@@ -75,7 +73,6 @@ internal sealed partial class EventLoop : IDisposable {
 		TimeProvider time
 	) {
 		this.registry = registry;
-		this.instances = instances;
 		this.channel = channel;
 		this.stateStore = stateStore;
 		this.rootProvider = rootProvider;
@@ -230,7 +227,7 @@ internal sealed partial class EventLoop : IDisposable {
 			// runtime'ом HostedService после нашего exit. Поэтому здесь — только iteration-outcome TCS:
 			// runner мог не успеть опубликовать completion-event перед закрытием channel.
 			var stopReason = new InvalidOperationException("Оркестратор остановлен; ожидания не могут быть резолвлены.");
-			foreach (var inst in instances.All) {
+			foreach (var inst in runtime.AllInstances) {
 				inst.TakeIterationOutcomeTcs()?.TrySetException(
 					IterationFailures.OrchestratorShutdown(inst, stopReason));
 			}
@@ -303,7 +300,7 @@ internal sealed partial class EventLoop : IDisposable {
 	/// </summary>
 	private DateTimeOffset? ScanAndPublishDue(DateTimeOffset now) {
 		DateTimeOffset? nextDue = null;
-		foreach (var instance in instances.All) {
+		foreach (var instance in runtime.AllInstances) {
 			if (instance.State != InstanceLifecycleState.Idle) continue;
 			var next = instance.Metrics.Schedule.NextAutoUtc;
 			if (next is null) continue;
@@ -369,7 +366,7 @@ internal sealed partial class EventLoop : IDisposable {
 
 	private async Task FinalizeAllTerminatingAsync() {
 		// Снимок терминирующих инстансов через State-чтение; их StageCompleted/Failed уже не придут.
-		var terminating = instances.All
+		var terminating = runtime.AllInstances
 			.Where(inst => inst.State == InstanceLifecycleState.Terminating)
 			.ToList();
 		foreach (var instance in terminating) {
@@ -378,7 +375,7 @@ internal sealed partial class EventLoop : IDisposable {
 			} catch (Exception ex) {
 				Log.FinalizeShutdownFailed(logger, instance.FullyQualifiedName, ex);
 			}
-			if (instances.Remove(instance)) runtime.NotifyInstanceRemoved(instance);
+			if (runtime.RemoveInstance(instance)) runtime.NotifyInstanceRemoved(instance);
 		}
 	}
 
@@ -405,7 +402,7 @@ internal sealed partial class EventLoop : IDisposable {
 		// pendingTick освобождается ВСЕГДА при обработке tick-события.
 		instance.ReleasePendingTick();
 		// Идемпотентность: инстанс мог быть уже Terminated/удалён.
-		if (instances.Find(instance.Identity) != instance) return;
+		if (runtime.FindInstance(instance.Identity) != instance) return;
 		if (instance.IsTerminating || instance.IsRunning) return;
 		var now = time.GetUtcNow();
 		var decision = TryAcceptTrigger(instance, TriggerSource.Auto, now);
@@ -423,7 +420,7 @@ internal sealed partial class EventLoop : IDisposable {
 			return;
 		}
 		// O(1) lookup через pre-computed Identity — без повторного Encode на каждый trigger.
-		var instance = instances.Find(evt.Identity);
+		var instance = runtime.FindInstance(evt.Identity);
 		if (instance is null) {
 			Reject(evt, IterationRejectReason.NotFound, evt.Identity.FullyQualifiedName);
 			return;
@@ -679,7 +676,7 @@ internal sealed partial class EventLoop : IDisposable {
 			instance.EndRunning();
 			return;
 		}
-		if (instances.Find(instance.Identity) != instance) return;
+		if (runtime.FindInstance(instance.Identity) != instance) return;
 		if (!instance.IsRunning) return;
 
 		ApplyStageCompletedMetrics(instance, sc.At);
@@ -695,7 +692,7 @@ internal sealed partial class EventLoop : IDisposable {
 			instance.EndRunning();
 			return;
 		}
-		if (instances.Find(instance.Identity) != instance) return;
+		if (runtime.FindInstance(instance.Identity) != instance) return;
 		if (!instance.IsRunning) return;
 
 		ApplyStageFailedMetrics(instance, sf.Exception, sf.At);
@@ -788,7 +785,7 @@ internal sealed partial class EventLoop : IDisposable {
 			var seed = queue.Dequeue();
 			var affected = new List<Instance>();
 			foreach (var s in seed.Emitter.Stage.AffectedByKeyRemoval) {
-				foreach (var inst in instances.InstancesOf(s)) {
+				foreach (var inst in runtime.InstancesOf(s)) {
 					if (inst.IsTerminating) continue;
 					var depKeys = inst.DependencyKeys;
 					if (!depKeys.TryGetValue(seed.Emitter.Stage.Name, out var v) || !string.Equals(v, seed.Key, StringComparison.Ordinal)) continue;
@@ -842,7 +839,7 @@ internal sealed partial class EventLoop : IDisposable {
 		}
 		// Late event: runner отстрелил StageCompleted уже после того, как instance был удалён из
 		// InstanceManager (теоретически возможно при race shutdown vs runner-finally). Лог + ignore.
-		if (instances.Find(instance.Identity) != instance) {
+		if (runtime.FindInstance(instance.Identity) != instance) {
 			Log.LateStageEventForRemovedInstance(logger, nameof(StageCompletedEvent), instance.FullyQualifiedName, null);
 			return;
 		}
@@ -880,7 +877,7 @@ internal sealed partial class EventLoop : IDisposable {
 			await FinalizeTerminatingAsync(instance, ct).ConfigureAwait(false);
 			return;
 		}
-		if (instances.Find(instance.Identity) != instance) {
+		if (runtime.FindInstance(instance.Identity) != instance) {
 			Log.LateStageEventForRemovedInstance(logger, nameof(StageFailedEvent), instance.FullyQualifiedName, null);
 			return;
 		}
@@ -907,7 +904,7 @@ internal sealed partial class EventLoop : IDisposable {
 		// синхронно) и StageCompleted/Failed-handler-ом (тот же инстанс уже отстрелил completion-event)
 		// один вызывающий получит true, второй — false и просто выйдет. Это страхует от повторной
 		// сигнализации waiters и повторного RemoveScopeAsync.
-		if (!instances.Remove(instance)) return;
+		if (!runtime.RemoveInstance(instance)) return;
 		// Notify ПЕРЕД RemoveScopeAsync: iteration-broadcaster инстанса complete'ится сразу,
 		// и waiter-ы выходят из await foreach без ожидания I/O state-store.
 		runtime.NotifyInstanceRemoved(instance);
@@ -927,7 +924,7 @@ internal sealed partial class EventLoop : IDisposable {
 	}
 
 	private void CreateAndStart(StageDescriptor stage) {
-		var created = EvaluateAndCreate(stage, instances, channel, time);
+		var created = EvaluateAndCreate(stage, runtime, channel, time);
 		foreach (var instance in created) {
 			runtime.NotifyInstanceAdded(instance);
 			Log.InstanceCreated(logger, instance.FullyQualifiedName, null);

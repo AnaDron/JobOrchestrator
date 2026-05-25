@@ -47,7 +47,6 @@ public sealed class ScenarioDiGraphResolutionTests {
 		var checks = new (string Name, Action Resolve)[] {
 			(nameof(JobOrchestratorBuilder), () => _ = host.Services.GetRequiredService<JobOrchestratorBuilder>()),
 			(nameof(StageRegistry),          () => _ = host.Services.GetRequiredService<StageRegistry>()),
-			(nameof(InstanceManager),        () => _ = host.Services.GetRequiredService<InstanceManager>()),
 			(nameof(EventLoop),              () => _ = host.Services.GetRequiredService<EventLoop>()),
 			(nameof(IJobOrchestrator),       () => _ = host.Services.GetRequiredService<IJobOrchestrator>()),
 			("Channel<OrchestratorEvent>",   () => _ = host.Services.GetRequiredService<Channel<OrchestratorEvent>>()),
@@ -78,7 +77,6 @@ public sealed class ScenarioDiGraphResolutionTests {
 		var checks = new (string Name, Action Resolve)[] {
 			(nameof(JobOrchestratorBuilder), () => _ = host.Services.GetRequiredKeyedService<JobOrchestratorBuilder>(tenant)),
 			(nameof(StageRegistry),          () => _ = host.Services.GetRequiredKeyedService<StageRegistry>(tenant)),
-			(nameof(InstanceManager),        () => _ = host.Services.GetRequiredKeyedService<InstanceManager>(tenant)),
 			(nameof(EventLoop),              () => _ = host.Services.GetRequiredKeyedService<EventLoop>(tenant)),
 			(nameof(IJobOrchestrator),       () => _ = host.Services.GetRequiredKeyedService<IJobOrchestrator>(tenant)),
 			("Channel<OrchestratorEvent>",   () => _ = host.Services.GetRequiredKeyedService<Channel<OrchestratorEvent>>(tenant)),
