@@ -37,9 +37,17 @@ namespace JobOrchestrator.Internal;
 [SuppressMessage("Usage", "CA1816:Dispose methods should call SuppressFinalize",
 	Justification = "Sealed class без финализатора — GC.SuppressFinalize был бы no-op и misleading.")]
 internal sealed partial class EventLoop : IDisposable {
+	// Min/Max интервалы сна для due-scan-loop. Min — anti busy-loop при NextAutoUtc=now на куче инстансов.
+	// Max — периодическая wake-up на случай пропущенного Wake-сигнала (race).
+	private static readonly TimeSpan DueScanMinSleep = TimeSpan.FromMilliseconds(1);
+	private static readonly TimeSpan DueScanMaxSleep = TimeSpan.FromSeconds(30);
+	// Channel-capacity = 10_000; warning при backlog >= 70%, чтобы успеть среагировать ДО backpressure.
+	private const int ChannelBacklogThreshold = 7_000;
+	// Anti-spam: не чаще одного warning'а в 30 секунд.
+	private static readonly TimeSpan BacklogWarningInterval = TimeSpan.FromSeconds(30);
+
 	private readonly StageRegistry registry;
 	private readonly InstanceManager instances;
-	private readonly DueScanner scanner;
 	private readonly Channel<OrchestratorEvent> channel;
 	private readonly IJobStateStore stateStore;
 	private readonly IServiceProvider rootProvider;
@@ -50,12 +58,13 @@ internal sealed partial class EventLoop : IDisposable {
 	private readonly TimeProvider time;
 	private readonly FrozenDictionary<StageDescriptor, SemaphoreSlim> _stageSemaphores;
 	private readonly SemaphoreSlim? _globalSem;
+	private readonly AsyncManualResetEvent _dueScanWake = new();
+	private DateTimeOffset _lastBacklogWarning = DateTimeOffset.MinValue;
 	private int _handlerCrashCount;
 
 	public EventLoop(
 		StageRegistry registry,
 		InstanceManager instances,
-		DueScanner scanner,
 		Channel<OrchestratorEvent> channel,
 		IJobStateStore stateStore,
 		IServiceProvider rootProvider,
@@ -67,7 +76,6 @@ internal sealed partial class EventLoop : IDisposable {
 	) {
 		this.registry = registry;
 		this.instances = instances;
-		this.scanner = scanner;
 		this.channel = channel;
 		this.stateStore = stateStore;
 		this.rootProvider = rootProvider;
@@ -160,11 +168,18 @@ internal sealed partial class EventLoop : IDisposable {
 		foreach (var sem in _stageSemaphores.Values) sem.Dispose();
 	}
 
+	/// <summary>
+	/// Будит due-scan loop: следующая итерация loop'а посмотрит на актуальный <c>NextAutoUtc</c>.
+	/// Безопасно вызывать из любого потока (event-loop-consumer или ThreadPool runner-finally).
+	/// </summary>
+	private void WakeDueScanner() => _dueScanWake.Set();
+
 	public async Task RunAsync(CancellationToken stoppingToken) {
 		Log.Starting(logger, registry.AllStages.Count, null);
+		var dueScanTask = Task.Run(() => RunDueScannerAsync(stoppingToken), stoppingToken);
 		BootstrapInitialInstances();
-		// После bootstrap-а у DueScanner появляется работа — будим его.
-		scanner.Wake();
+		// После bootstrap-а у due-scan-loop'а появляется работа — будим его.
+		WakeDueScanner();
 		try {
 			await foreach (var evt in channel.Reader.ReadAllAsync(stoppingToken).ConfigureAwait(false)) {
 				try {
@@ -220,7 +235,91 @@ internal sealed partial class EventLoop : IDisposable {
 					IterationFailures.OrchestratorShutdown(inst, stopReason));
 			}
 		}
+		try {
+			await dueScanTask.ConfigureAwait(false);
+		} catch (Exception ex) when (ex is not OperationCanceledException) {
+			Log.DueScannerFaulted(logger, ex);
+		}
 		Log.Stopped(logger, null);
+	}
+
+	/// <summary>
+	/// Pull-based scheduler loop: вычисляет ближайший due-инстанс, спит до его <c>NextAutoUtc</c>
+	/// (либо <see cref="DueScanMaxSleep"/> при отсутствии расписания), либо просыпается через
+	/// <see cref="WakeDueScanner"/>. Запускается параллельно с event-loop'ом из <see cref="RunAsync"/>.
+	/// <para>
+	/// Profile-decision: linear scan на N=10k = ~1.66 мс (~165 нс/инстанс). Sorted-by-deadline даёт
+	/// O(log N) find-min, но ухудшает hot-path перепланирования; пересмотреть при N &gt; 50k.
+	/// </para>
+	/// </summary>
+	private async Task RunDueScannerAsync(CancellationToken stoppingToken) {
+		Log.DueScannerStarted(logger, null);
+		while (!stoppingToken.IsCancellationRequested) {
+			// Reset ДО scan: если WakeDueScanner придёт во время ScanAndPublishDue, флаг взведётся
+			// и следующий WaitAsync завершится мгновенно — wake-up не теряется.
+			_dueScanWake.Reset();
+
+			var now = time.GetUtcNow();
+			WarnOnChannelBacklog(now);
+			var nextDue = ScanAndPublishDue(now);
+
+			TimeSpan sleep;
+			if (nextDue is null) {
+				sleep = DueScanMaxSleep;
+			} else {
+				var delta = nextDue.Value - now;
+				sleep = delta < DueScanMinSleep ? DueScanMinSleep : delta > DueScanMaxSleep ? DueScanMaxSleep : delta;
+			}
+
+			try {
+				await _dueScanWake.WaitAsync().WaitAsync(sleep, time, stoppingToken).ConfigureAwait(false);
+			} catch (TimeoutException) {
+				// Sleep истёк — нормальное продолжение loop'а.
+			} catch (OperationCanceledException) {
+				// Shutdown — внешний while проверит stoppingToken и завершится.
+			}
+		}
+		Log.DueScannerStopped(logger, null);
+	}
+
+	/// <summary>
+	/// Operational visibility: если очередь оркестратор-событий превысила <see cref="ChannelBacklogThreshold"/>,
+	/// логирует warning с anti-spam suppression (<see cref="BacklogWarningInterval"/>).
+	/// </summary>
+	private void WarnOnChannelBacklog(DateTimeOffset now) {
+		var reader = channel.Reader;
+		if (!reader.CanCount) return;
+		int count = reader.Count;
+		if (count < ChannelBacklogThreshold) return;
+		if (now - _lastBacklogWarning < BacklogWarningInterval) return;
+		_lastBacklogWarning = now;
+		Log.ChannelBacklog(logger, count, null);
+	}
+
+	/// <summary>
+	/// Сканирует все инстансы, публикует <see cref="TimerTickedEvent"/> для due-инстансов,
+	/// возвращает ближайший <c>NextAutoUtc</c> в будущем (или <c>null</c>, если расписаний нет).
+	/// Идемпотентность через <see cref="Instance.TryAcquirePendingTick"/>.
+	/// </summary>
+	private DateTimeOffset? ScanAndPublishDue(DateTimeOffset now) {
+		DateTimeOffset? nextDue = null;
+		foreach (var instance in instances.All) {
+			if (instance.State != InstanceLifecycleState.Idle) continue;
+			var next = instance.Metrics.Schedule.NextAutoUtc;
+			if (next is null) continue;
+			if (next.Value <= now) {
+				if (!instance.TryAcquirePendingTick()) continue;
+				try {
+					channel.Writer.Publish(new TimerTickedEvent(instance));
+				} catch {
+					instance.ReleasePendingTick();
+					throw;
+				}
+				continue;
+			}
+			if (nextDue is null || next.Value < nextDue.Value) nextDue = next;
+		}
+		return nextDue;
 	}
 
 	/// <summary>
@@ -545,7 +644,7 @@ internal sealed partial class EventLoop : IDisposable {
 		// Auto-tick: re-schedule через NextAutoUtc + jitter, DueScanner подберёт при освобождении лимита.
 		if (trigger != TriggerSource.Auto) return;
 		instance.SetMetrics(instance.Metrics.WithNextAutoUtc(ComputeDeferredNextAutoUtc()));
-		scanner.Wake();
+		WakeDueScanner();
 	}
 
 	private DateTimeOffset ComputeDeferredNextAutoUtc() {
@@ -646,7 +745,7 @@ internal sealed partial class EventLoop : IDisposable {
 		foreach (var dependent in source.Stage.DependentsInstance) {
 			CreateAndStart(dependent);
 		}
-		scanner.Wake();
+		WakeDueScanner();
 	}
 
 	private async Task HandleKeyRemovedAsync(Instance source, string key, CancellationToken ct) {
@@ -659,7 +758,7 @@ internal sealed partial class EventLoop : IDisposable {
 			return;
 		}
 		await CascadeKeyRemovalAsync(source.Identity, key, ct).ConfigureAwait(false);
-		scanner.Wake();
+		WakeDueScanner();
 	}
 
 	/// <summary>
@@ -770,7 +869,7 @@ internal sealed partial class EventLoop : IDisposable {
 			// Guarantee: выход из Running при ЛЮБОМ исходе обработки. EndRunning одновременно
 			// чистит pendingTick — гарантирует, что DueScanner может опубликовать следующий тик.
 			instance.EndRunning();
-			scanner.Wake();
+			WakeDueScanner();
 		}
 	}
 
@@ -798,7 +897,7 @@ internal sealed partial class EventLoop : IDisposable {
 				IterationFailures.StageHandlerFailed(instance, ex));
 		} finally {
 			instance.EndRunning();
-			scanner.Wake();
+			WakeDueScanner();
 		}
 	}
 
@@ -976,5 +1075,22 @@ internal sealed partial class EventLoop : IDisposable {
 		public static readonly Action<ILogger, string, string, Exception?> CompletionNotPublished =
 			LoggerMessage.Define<string, string>(LogLevel.Debug, new EventId(4007, nameof(CompletionNotPublished)),
 				"Итерация {Instance}: {EventType} не опубликован (channel закрыт); Running сброшен в finally.");
+
+		// EventId-ы 5xxx — диапазон due-scan-loop (бывший DueScanner).
+		public static readonly Action<ILogger, Exception?> DueScannerStarted =
+			LoggerMessage.Define(LogLevel.Debug, new EventId(5001, nameof(DueScannerStarted)),
+				"DueScanner started.");
+
+		public static readonly Action<ILogger, Exception?> DueScannerStopped =
+			LoggerMessage.Define(LogLevel.Debug, new EventId(5002, nameof(DueScannerStopped)),
+				"DueScanner stopped.");
+
+		public static readonly Action<ILogger, int, Exception?> ChannelBacklog =
+			LoggerMessage.Define<int>(LogLevel.Warning, new EventId(5003, nameof(ChannelBacklog)),
+				"JobOrchestrator: очередь событий выросла до {EventCount} — consumer event-loop не успевает за producer-ами (медленный IJobStateStore или крупный cascade).");
+
+		public static readonly Action<ILogger, Exception?> DueScannerFaulted =
+			LoggerMessage.Define(LogLevel.Warning, new EventId(5004, nameof(DueScannerFaulted)),
+				"DueScanner завершился с ошибкой.");
 	}
 }

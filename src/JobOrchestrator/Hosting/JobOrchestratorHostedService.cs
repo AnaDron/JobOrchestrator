@@ -7,10 +7,11 @@ using Microsoft.Extensions.Logging;
 namespace JobOrchestrator.Hosting;
 
 /// <summary>
-/// Стартует <see cref="EventLoop"/> и <see cref="DueScanner"/> как concurrent-tasks BackgroundService.
-/// Перехватывает крах любого из них в <c>LogCritical</c> и выставляет <see cref="JobOrchestratorRuntime.MarkFaulted"/> —
-/// <see cref="IJobOrchestrator"/>-фасад начинает fail-fast для всех внешних вызовов.
-/// При штатном shutdown закрывает channel через <see cref="JobOrchestratorRuntime.CloseChannel"/>.
+/// Стартует <see cref="EventLoop"/> как BackgroundService (event-loop + due-scan-loop крутятся
+/// внутри одного RunAsync через Task.WhenAll). Перехватывает крах в <c>LogCritical</c> и выставляет
+/// <see cref="JobOrchestratorRuntime.MarkFaulted"/> — <see cref="IJobOrchestrator"/>-фасад начинает
+/// fail-fast для всех внешних вызовов. При штатном shutdown закрывает channel через
+/// <see cref="JobOrchestratorRuntime.CloseChannel"/>.
 /// <para>
 /// <see cref="StopAsync"/> идемпотентен через <c>Interlocked _stopGate</c>: повторный вызов — no-op,
 /// чтобы не дублировать shutdown-log.
@@ -18,7 +19,6 @@ namespace JobOrchestrator.Hosting;
 /// </summary>
 internal sealed class JobOrchestratorHostedService(
 	EventLoop eventLoop,
-	DueScanner scanner,
 	StageRegistry registry,
 	IServiceProvider services,
 	JobOrchestratorHostOptions hostOptions,
@@ -26,37 +26,28 @@ internal sealed class JobOrchestratorHostedService(
 	ILogger<JobOrchestratorHostedService> logger
 ) : BackgroundService {
 	private readonly Guid _instanceId = Guid.NewGuid();
-	private int _startGate;   // 0 = не стартован; 1 = StartAsync уже выполнен.
-	private int _stopGate;    // 0 = не остановлен; 1 = StopAsync уже выполняется/выполнен.
+	private int _startGate;
+	private int _stopGate;
 
 	public override async Task StartAsync(CancellationToken cancellationToken) {
 		if (Interlocked.Exchange(ref _startGate, 1) != 0) return;
-		// Stop до Start (или повторный lifecycle): не поднимаем event loop / scanner.
 		if (Volatile.Read(ref _stopGate) != 0) return;
 
-		// Fail-fast: ловим misconfiguration на старте, а не на первой итерации стадии.
 		ConfigurationValidator.ValidateServiceRegistrations(registry.AllStages, services);
 		Log.Starting(logger, _instanceId, null);
 		await base.StartAsync(cancellationToken).ConfigureAwait(false);
 	}
 
 	public override async Task StopAsync(CancellationToken cancellationToken) {
-		// Идемпотентный StopAsync: первый вызов проходит весь shutdown, повторные — no-op.
-		// Без этого: BackgroundService.StopHost + manual.StopAsync дали бы 2 вызова → дублирующая
-		// строка в логе stopped.
 		if (Interlocked.Exchange(ref _stopGate, 1) != 0) return;
 		await base.StopAsync(cancellationToken).ConfigureAwait(false);
-		// Event-loop остановлен — complete все висящие broadcaster-каналы (Changes / iteration stream),
-		// чтобы consumer'ы без явно переданного ct вышли из await foreach естественно.
 		runtime.OnShutdown();
 		Log.Stopped(logger, _instanceId, null);
 	}
 
 	protected override async Task ExecuteAsync(CancellationToken stoppingToken) {
-		var scannerTask = scanner.RunAsync(stoppingToken);
 		try {
 			await eventLoop.RunAsync(stoppingToken).ConfigureAwait(false);
-			// Штатный shutdown — закрываем channel, чтобы внешние вызовы получили fail-fast вместо подвисания.
 			runtime.CloseChannel();
 			await ApplyShutdownIterationTimeoutAsync(stoppingToken).ConfigureAwait(false);
 		} catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) {
@@ -66,13 +57,6 @@ internal sealed class JobOrchestratorHostedService(
 			Log.EventLoopCrashed(logger, ex);
 			runtime.MarkFaulted();
 			// НЕ throw — иначе BackgroundService.StopHost остановит весь хост.
-		} finally {
-			// Ждём, пока DueScanner завершится (stoppingToken его уже остановит).
-			try {
-				await scannerTask.ConfigureAwait(false);
-			} catch (Exception ex) when (ex is not OperationCanceledException) {
-				Log.DueScannerFaulted(logger, ex);
-			}
 		}
 	}
 
@@ -81,7 +65,6 @@ internal sealed class JobOrchestratorHostedService(
 		try {
 			await Task.Delay(timeout, stoppingToken).ConfigureAwait(false);
 		} catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) {
-			// Host уже отменяет stoppingToken — всё равно форсируем cancel workers ниже.
 		}
 		runtime.CancelRunningWorkers();
 		Log.ShutdownWorkersCancelled(logger, timeout, null);
@@ -104,9 +87,5 @@ internal sealed class JobOrchestratorHostedService(
 		public static readonly Action<ILogger, Exception?> EventLoopCrashed =
 			LoggerMessage.Define(LogLevel.Critical, new EventId(7004, nameof(EventLoopCrashed)),
 				"JobOrchestrator event loop crashed; оркестрация отключена до рестарта приложения.");
-
-		public static readonly Action<ILogger, Exception?> DueScannerFaulted =
-			LoggerMessage.Define(LogLevel.Warning, new EventId(7005, nameof(DueScannerFaulted)),
-				"DueScanner завершился с ошибкой.");
 	}
 }
