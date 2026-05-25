@@ -3,7 +3,7 @@ namespace JobOrchestrator.Internal;
 /// <summary>Внутренние события event loop'а оркестратора.</summary>
 internal abstract record OrchestratorEvent;
 
-/// <summary>Auto-тик для конкретного инстанса. Публикуется <see cref="DueScanner"/> при наступлении <c>NextAutoUtc</c>.</summary>
+/// <summary>Auto-тик для конкретного инстанса. Публикуется <see cref="EventLoop"/> при наступлении <c>NextAutoUtc</c>.</summary>
 internal sealed record TimerTickedEvent(Instance Instance) : OrchestratorEvent;
 
 /// <summary>

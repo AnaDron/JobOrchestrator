@@ -11,7 +11,7 @@ namespace JobOrchestrator.Internal;
 /// Используется как «ключ-идентификатор» инстанса по всему SDK:
 /// </para>
 /// <list type="bullet">
-/// <item><see cref="InstanceManager"/> хранит инстансы по <c>Identity</c>;</item>
+/// <item><see cref="JobOrchestratorRuntime"/> хранит инстансы по <c>Identity</c>;</item>
 /// <item>Channel-события (<c>TimerTickedEvent</c>, <c>StageCompletedEvent</c>, …) несут ссылку на <see cref="Instance"/>, у которого есть <c>Identity</c>;</item>
 /// <item><see cref="JobContext.FullyQualifiedName"/>/<c>DependencyKeys</c> — фасады поверх Identity.</item>
 /// </list>
@@ -33,7 +33,7 @@ internal sealed class InstanceIdentity : IEquatable<InstanceIdentity> {
 
 	/// <summary>
 	/// Канонический encoding ключа (порядок задаётся <see cref="StageDescriptor.ExpectedKeyNames"/>, escaped) —
-	/// используется как hash-key в <see cref="InstanceManager"/> и <see cref="KeyspaceRegistry"/>.
+	/// используется как hash-key в <see cref="JobOrchestratorRuntime"/> и <see cref="KeyspaceRegistry"/>.
 	/// </summary>
 	public string EncodedKey { get; }
 

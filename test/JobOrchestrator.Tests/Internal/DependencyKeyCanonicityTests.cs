@@ -4,7 +4,7 @@ namespace JobOrchestrator.Tests.Internal;
 /// Encoder canonicity через <see cref="InstanceIdentity"/>: для одинаковых key-value-пар в пределах
 /// одной стадии (= одинаковый <see cref="StageDescriptor.ExpectedKeyNames"/>) <c>EncodedKey</c>
 /// одинаков независимо от insertion-order словаря. Это критический инвариант для hash-equality в
-/// <see cref="InstanceManager"/>, <see cref="KeyspaceRegistry"/> и waiters.
+/// <see cref="JobOrchestratorRuntime"/>, <see cref="KeyspaceRegistry"/> и waiters.
 /// </summary>
 public sealed class DependencyKeyCanonicityTests {
 	private static StageDescriptor StageWithKeys(params string[] expectedKeyNames) =>

@@ -98,7 +98,7 @@ internal sealed class Instance {
 	/// <summary>
 	/// Снимает Running-флаг + pendingTick + RunningIteration. Вызывается из <see cref="EventLoop"/>
 	/// (<c>HandleStageCompletedAsync</c>/<c>HandleStageFailedAsync</c>, <c>DrainPendingRequests</c>)
-	/// или из <see cref="StageRunner"/> в <c>finally</c>, если completion не опубликован в channel.
+	/// или из <see cref="EventLoop"/> в <c>finally</c>, если completion не опубликован в channel.
 	/// </summary>
 	public void EndRunning() {
 		Volatile.Write(ref _pendingTick, 0);
@@ -114,7 +114,7 @@ internal sealed class Instance {
 	public bool MarkTerminating() => Interlocked.CompareExchange(ref _terminating, 1, 0) == 0;
 
 	/// <summary>
-	/// Idempotency-CAS для <see cref="DueScanner"/>: <c>true</c> возвращается ровно один раз,
+	/// Idempotency-CAS для <see cref="EventLoop"/>: <c>true</c> возвращается ровно один раз,
 	/// пока <see cref="ReleasePendingTick"/> не сбросит флаг.
 	/// </summary>
 	public bool TryAcquirePendingTick() =>
@@ -227,7 +227,7 @@ internal sealed class Instance {
 		return orphans;
 	}
 
-	/// <summary>Проецирует текущее состояние инстанса в публичный snapshot. Вызывается из <see cref="InstanceManager"/> и InstanceHandle.</summary>
+	/// <summary>Проецирует текущее состояние инстанса в публичный snapshot. Вызывается из <see cref="JobOrchestratorRuntime"/> и InstanceHandle.</summary>
 	public InstanceInfo ToInstanceInfo() {
 		var stats = Metrics.Stats;
 		return new InstanceInfo {

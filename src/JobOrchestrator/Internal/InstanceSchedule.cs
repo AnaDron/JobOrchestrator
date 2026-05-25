@@ -1,7 +1,7 @@
 namespace JobOrchestrator.Internal;
 
 /// <summary>
-/// Расписание auto-тиков инстанса для <see cref="DueScanner"/>.
+/// Расписание auto-тиков инстанса для <see cref="EventLoop"/>.
 /// Часть атомарного <see cref="JobMetrics"/>-снимка.
 /// </summary>
 /// <param name="NextAutoUtc">

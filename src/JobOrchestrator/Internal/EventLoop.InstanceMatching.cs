@@ -4,7 +4,7 @@ namespace JobOrchestrator.Internal;
 
 /// <summary>
 /// Backtracking-merge матчер для создания инстансов стадий по мере разрешения зависимостей.
-/// Stateless: вся «память» — параметры (<see cref="InstanceManager"/>, channel, time) — поэтому
+/// Stateless: вся «память» — параметры (<see cref="JobOrchestratorRuntime"/>, channel, time) — поэтому
 /// реализация живёт в <c>static</c>-методах partial-секции <see cref="EventLoop"/>.
 /// <para>
 /// Алгоритм — backtracking с partial-merge:

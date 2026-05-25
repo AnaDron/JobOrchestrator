@@ -23,7 +23,7 @@ namespace JobOrchestrator.Internal;
 /// </para>
 /// <para>
 /// <see cref="EventLoop"/> явно дёргает <see cref="NotifyInstanceAdded"/>/<see cref="NotifyInstanceRemoved"/>
-/// сразу после <see cref="InstanceManager.Add"/>/<see cref="InstanceManager.Remove"/>; здесь мы
+/// сразу после <see cref="JobOrchestratorRuntime.AddInstance"/>/<see cref="JobOrchestratorRuntime.RemoveInstance"/>; здесь мы
 /// dispatch'им в соответствующий <see cref="StageHandle.NotifyAdded"/>/<see cref="StageHandle.NotifyRemoved"/>
 /// — источник <see cref="IStageHandle.Changes"/>.
 /// </para>
@@ -176,7 +176,7 @@ internal sealed class JobOrchestratorRuntime : IJobOrchestrator, IDisposable {
 
 	/// <summary>
 	/// Уведомляет stage-handle о добавлении инстанса. Вызывается <see cref="EventLoop"/>
-	/// явно после <see cref="InstanceManager.Add"/> — на event-loop-consumer-потоке.
+	/// явно после <see cref="JobOrchestratorRuntime.AddInstance"/> — на event-loop-consumer-потоке.
 	/// </summary>
 	internal void NotifyInstanceAdded(Instance instance) {
 		if (_stageHandles.TryGetValue(instance.Stage.Name, out var handle)) {
@@ -187,7 +187,7 @@ internal sealed class JobOrchestratorRuntime : IJobOrchestrator, IDisposable {
 	/// <summary>
 	/// Уведомляет stage-handle об удалении инстанса и завершает iteration-broadcaster
 	/// (consumer'ы инстанса получат естественный exit). Вызывается <see cref="EventLoop"/>
-	/// явно после <see cref="InstanceManager.Remove"/> — на event-loop-consumer-потоке.
+	/// явно после <see cref="JobOrchestratorRuntime.RemoveInstance"/> — на event-loop-consumer-потоке.
 	/// </summary>
 	internal void NotifyInstanceRemoved(Instance instance) {
 		if (_stageHandles.TryGetValue(instance.Stage.Name, out var handle)) {

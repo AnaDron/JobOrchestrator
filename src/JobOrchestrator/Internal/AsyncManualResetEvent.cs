@@ -4,7 +4,7 @@ namespace JobOrchestrator.Internal;
 /// Lock-free async-аналог <see cref="System.Threading.ManualResetEventSlim"/>: <see cref="Set"/>
 /// резолвит ожидающий <see cref="Task"/>, <see cref="Reset"/> CAS-заменяет его на свежий pending.
 /// <para>
-/// Реализована для <see cref="DueScanner"/> в качестве wake-up-сигнала: producer-ов (event loop,
+/// Реализована для <see cref="EventLoop"/> в качестве wake-up-сигнала: producer-ов (event loop,
 /// StageRunner finally, RegisterKey API) — много; consumer (scanner loop) — один. Альтернатива
 /// «новый CTS + Cancel» дешевле по моральной нагрузке, но требует lock на смену ссылки и страдает
 /// от <c>ObjectDisposedException</c> при race на Dispose. Этот паттерн обходит обе проблемы:

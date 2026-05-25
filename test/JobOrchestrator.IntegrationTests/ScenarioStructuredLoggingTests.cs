@@ -4,7 +4,7 @@ using Microsoft.Extensions.Logging;
 namespace JobOrchestrator.IntegrationTests;
 
 /// <summary>
-/// Проверяет, что <see cref="StageRunner"/> разворачивает <see cref="ILogger.BeginScope"/>
+/// Проверяет, что <see cref="EventLoop"/> разворачивает <see cref="ILogger.BeginScope"/>
 /// со структурными полями <c>FullyQualifiedName</c>, <c>StageName</c>, <c>CorrelationId</c>
 /// и <c>{depStageName}Key</c> per компонент композитного ключа.
 /// </summary>

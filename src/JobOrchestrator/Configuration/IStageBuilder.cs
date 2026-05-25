@@ -26,7 +26,7 @@ public interface IStageBuilder {
 	/// внешний API rate-limit). По умолчанию лимита нет (все инстансы могут выполняться параллельно).
 	/// <para>
 	/// Реализация — <c>SemaphoreSlim</c> per stage: <c>BeginIteration</c> ждёт acquire-токена,
-	/// release происходит в <c>finally</c> блока <see cref="StageRunner.RunIterationAsync"/> —
+	/// release происходит в <c>finally</c> блока <see cref="EventLoop.RunIterationAsync"/> —
 	/// гарантирует release при любом исходе (success/failure/cancel).
 	/// </para>
 	/// </summary>

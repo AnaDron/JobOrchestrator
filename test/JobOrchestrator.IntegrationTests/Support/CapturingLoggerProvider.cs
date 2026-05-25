@@ -5,7 +5,7 @@ namespace JobOrchestrator.IntegrationTests.Support;
 
 /// <summary>
 /// Тестовый <see cref="ILoggerProvider"/>, перехватывающий объекты, переданные в <see cref="ILogger.BeginScope"/>.
-/// Позволяет проверять структурные поля scope-словарей, развёрнутых <see cref="StageRunner"/>.
+/// Позволяет проверять структурные поля scope-словарей, развёрнутых <see cref="EventLoop"/>.
 /// </summary>
 internal sealed class CapturingLoggerProvider : ILoggerProvider {
 	public ConcurrentBag<IReadOnlyDictionary<string, object?>> Scopes { get; } = new();

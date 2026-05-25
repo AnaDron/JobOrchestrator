@@ -9,13 +9,13 @@ namespace JobOrchestrator.Internal;
 
 /// <summary>
 /// Single-threaded consumer событий оркестратора. Все state-transitions инстансов происходят здесь;
-/// итерации запускаются на ThreadPool через <see cref="StageRunner"/>.
+/// итерации запускаются на ThreadPool через <see cref="EventLoop"/>.
 /// </summary>
 /// <remarks>
 /// <para>
 /// <b>Terminating state.</b> При <see cref="KeyRemovedEvent"/> аффектированные инстансы получают
-/// <see cref="InstanceLifecycleState.Terminating"/>. Они остаются в <see cref="InstanceManager"/>
-/// до фактического finalize'а, но новые триггеры (<see cref="TriggerAcceptance"/>) и DueScanner
+/// <see cref="InstanceLifecycleState.Terminating"/>. Они остаются в <see cref="JobOrchestratorRuntime"/>
+/// до фактического finalize'а, но новые триггеры (<see cref="EventLoop.TryAcceptTrigger"/>) и DueScanner
 /// игнорируют их (state != Idle). Cleanup для Running-инстансов откладывается до их
 /// <see cref="StageCompletedEvent"/>/<see cref="StageFailedEvent"/>; для Idle-инстансов — синхронно
 /// в момент cascade.
@@ -120,7 +120,7 @@ internal sealed partial class EventLoop : IDisposable {
 
 	/// <summary>
 	/// Освобождает оба лимита (per-stage + global). Используется как callback для
-	/// <see cref="StageRunner.RunIterationAsync"/>, чтобы runner мог отпустить ресурсы в finally без
+	/// <see cref="EventLoop.RunIterationAsync"/>, чтобы runner мог отпустить ресурсы в finally без
 	/// собственной ссылки на EventLoop-инфраструктуру.
 	/// </summary>
 	internal void ReleaseConcurrencyFor(StageDescriptor stage) {
@@ -761,7 +761,7 @@ internal sealed partial class EventLoop : IDisposable {
 	/// <summary>
 	/// Сид BFS-обхода каскада (см. <see cref="CascadeKeyRemovalAsync"/>): какой эмитер и какой его ключ
 	/// инициировали удаление. <see cref="InstanceIdentity"/> иммутабельна — seed валиден даже после
-	/// удаления инстанса из <see cref="InstanceManager"/>.
+	/// удаления инстанса из <see cref="JobOrchestratorRuntime"/>.
 	/// </summary>
 	private readonly record struct CascadeSeed(InstanceIdentity Emitter, string Key);
 
