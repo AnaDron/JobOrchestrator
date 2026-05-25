@@ -1,0 +1,15 @@
+# .NET build artefacts
+bin/
+obj/
+*.user
+*.suo
+**/TestResults/
+
+# IDE
+.idea/
+.vscode/
+.vs/
+
+# OS
+.DS_Store
+Thumbs.db
